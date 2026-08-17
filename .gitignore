@@ -1,0 +1,30 @@
+# Build output
+/bin/
+/build/
+/dist/
+/tmp/
+/.cache/
+
+# Test and coverage output
+*.test
+coverage.out
+coverage-*.out
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and crash output
+*.log
+*.pid
+core
+core.*
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
