@@ -1,0 +1,45 @@
+# Keepalived template for two ZenTao Runtime nodes with a floating VIP.
+# Replace node addresses, interface, priority and password. Unicast VRRP is
+# required when multicast is not available (most cloud networks).
+#
+# Node A: state BACKUP, priority 100, peer 192.168.1.102
+# Node B: state BACKUP, priority 90,  peer 192.168.1.101
+# Non-preempt is recommended so a recovered node does not steal the VIP.
+
+global_defs {
+    router_id zentao-node
+    vrrp_skip_check_adv_addr
+    vrrp_strict
+    script_user root
+}
+
+vrrp_script check_gateway {
+    script "/opt/zentao/packaging/linux/keepalived/check_gateway.sh"
+    interval 3
+    timeout 4
+    fall 3
+    rise 2
+}
+
+vrrp_instance VI_ZENTAO {
+    state BACKUP
+    interface eth0
+    virtual_router_id 51
+    priority 100
+    nopreempt
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass CHANGE_ME
+    }
+    unicast_src_ip 192.168.1.101
+    unicast_peer {
+        192.168.1.102
+    }
+    virtual_ipaddress {
+        192.168.1.100/24 dev eth0
+    }
+    track_script {
+        check_gateway
+    }
+}

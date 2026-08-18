@@ -1,0 +1,32 @@
+/opt/zentao/logs/runtime.log {
+    weekly
+    rotate 5
+    maxsize 16M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+
+/opt/zentao/logs/access.log {
+    weekly
+    rotate 5
+    maxsize 64M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+
+/opt/zentao/logs/mysql.log {
+    weekly
+    rotate 4
+    maxsize 64M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}

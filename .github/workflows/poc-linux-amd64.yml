@@ -1,0 +1,58 @@
+name: Linux amd64 PoC
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/poc-linux-amd64.yml'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'packaging/poc/**'
+      - 'patches/php/8.4/**'
+      - 'scripts/poc/**'
+      - 'tests/fixtures/php/**'
+      - 'tests/fixtures/runtime/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'versions.lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Build Linux amd64 PoC
+        env:
+          GOPROXY: https://proxy.golang.org,direct
+          DEBIAN_MIRROR: http://deb.debian.org/debian
+          DEBIAN_SECURITY_MIRROR: http://deb.debian.org/debian-security
+        run: scripts/poc/build-linux-amd64.sh
+
+      - name: Verify no database drivers embedded
+        run: scripts/package/verify-no-db-driver.sh dist/poc-linux-amd64/bin/zentao-runtime
+
+      - name: Test Classic mode and ionCube
+        run: scripts/poc/test-linux-amd64.sh
+
+      - name: Install dry run
+        run: tests/install/install-dry-run.sh
+
+      - name: Rolling upgrade
+        run: tests/e2e/rolling-upgrade.sh
+
+      - name: Docker Compose smoke
+        run: tests/docker/compose-smoke.sh
+
+      - name: Upload PoC artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-runtime-poc-linux-amd64
+          path: dist/poc-linux-amd64
+          if-no-files-found: error
+          retention-days: 7

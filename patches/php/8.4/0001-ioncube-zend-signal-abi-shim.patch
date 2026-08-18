@@ -1,0 +1,33 @@
+From: ZenTao Runtime <runtime@zentao.net>
+Subject: [PATCH] Zend: export disabled signal ABI required by ionCube
+
+FrankenPHP disables Zend signal handling to avoid conflicting with the Go
+runtime. ionCube Loader 15.5 for PHP 8.4 TS still resolves three signal ABI
+symbols. Export inert values without enabling Zend signal handling.
+
+The globals remain zero-initialized. ionCube checks zend_signal_globals_id
+before using the TSRM offset, so its signal interruption path stays disabled.
+---
+ Zend/zend_signal.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/Zend/zend_signal.c b/Zend/zend_signal.c
+index 8b4b8b0..cd04b79 100644
+--- a/Zend/zend_signal.c
++++ b/Zend/zend_signal.c
+@@ -446,3 +446,13 @@ ZEND_API void zend_signal_check(void)
+ 
+ 
+ #endif /* ZEND_SIGNALS */
++
++#if !defined(ZEND_SIGNALS) && defined(ZTS)
++/*
++ * ionCube Loader 15.5 resolves these symbols even when Zend Signals are
++ * disabled. Keep the globals zero so the loader never enters that path.
++ */
++ZEND_API int zend_signal_globals_id;
++ZEND_API size_t zend_signal_globals_offset;
++ZEND_API void zend_signal_handler_unblock(void) {}
++#endif
+-- 
+2.43.0

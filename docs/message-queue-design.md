@@ -941,6 +941,8 @@ duration_ms
 
 只记录 lease token 的摘要。Payload、Cookie、授权头和内部凭据默认不记录。
 
+队列聚合指标和结构化日志进入 Runtime 可观测性管线，由 DuckDB 批量写入本地或共享 NFS Parquet 数据集。队列状态、租约和 Job Payload 仍以业务数据库为事实来源，不能依赖 Parquet 恢复队列。详细协议参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+
 ### 17.3 健康状态
 
 Queue 健康状态至少区分：

@@ -1,0 +1,147 @@
+{
+  "schema": 1,
+  "go": {
+    "version": "1.26.5",
+    "license": "BSD-3-Clause"
+  },
+  "images": {
+    "builder": "mcr.microsoft.com/devcontainers/go:2.1.6-1.26-bookworm@sha256:1a3df7e2f24378acfb7c1048b7b018813112f280f011bad4aa9b02fff600481e",
+    "runtime": "mcr.microsoft.com/mirror/docker/library/debian:bookworm-slim@sha256:b4aa902587c2e61ce789849cb54c332b0400fe27b1ee33af4669e1f7e7c3e22f"
+  },
+  "php": {
+    "version": "8.4.24",
+    "url": "https://www.php.net/distributions/php-8.4.24.tar.xz",
+    "sha256": "e127be09a8506f4327c5cfa78a614b00d210714484ec215ce0011b4a03c00731",
+    "license": "PHP License 3.01",
+    "windows": {
+      "runtime": {
+        "url": "https://downloads.php.net/~windows/releases/archives/php-8.4.24-Win32-vs17-x64.zip",
+        "sha256": "7b57fc9840273ab153834d0e2bd06e0bcf4fead36e381182b4b8fe9cedff3174"
+      },
+      "development": {
+        "url": "https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.4.24-Win32-vs17-x64.zip",
+        "sha256": "893f5b8ffe515eb07c080e1bdba8cbb0ddf935c76fc1088ddbe46d46f528236c"
+      }
+    },
+    "configure": [
+      "--prefix=/opt/zentao/php",
+      "--with-config-file-path=/opt/zentao/config",
+      "--with-config-file-scan-dir=/opt/zentao/config/conf.d",
+      "--enable-embed=shared",
+      "--enable-zts",
+      "--disable-zend-signals",
+      "--disable-cgi",
+      "--enable-bcmath",
+      "--enable-exif",
+      "--enable-gd",
+      "--enable-intl",
+      "--enable-mbstring",
+      "--enable-opcache",
+      "--enable-sockets",
+      "--with-curl",
+      "--with-freetype",
+      "--with-jpeg",
+      "--with-ldap",
+      "--with-mysqli=mysqlnd",
+      "--with-openssl",
+      "--with-pdo-mysql=mysqlnd",
+      "--with-pdo-pgsql",
+      "--with-pgsql",
+      "--with-zip",
+      "--with-zlib"
+    ],
+    "extensions": [
+      "ioncube",
+      "opcache",
+      "pdo_mysql",
+      "mysqli",
+      "pdo_pgsql",
+      "pgsql",
+      "curl",
+      "gd",
+      "mbstring",
+      "openssl",
+      "zip",
+      "intl",
+      "iconv",
+      "filter",
+      "fileinfo",
+      "ldap",
+      "bcmath",
+      "sockets",
+      "redis"
+    ]
+  },
+  "frankenphp": {
+    "version": "v1.12.7",
+    "commit": "a765b086f5cc56f6b7753117367d56e1b0da948d",
+    "repository": "https://github.com/php/frankenphp.git",
+    "license": "MIT"
+  },
+  "caddy": {
+    "version": "v2.11.4",
+    "repository": "https://github.com/caddyserver/caddy.git",
+    "license": "Apache-2.0"
+  },
+  "duckdb": {
+    "version": "1.5.5",
+    "repository": "https://github.com/duckdb/duckdb.git",
+    "commit": "d8cdaa33fda8df955cc76ef58a280f68f4cd43fa",
+    "go_binding": {
+      "module": "github.com/duckdb/duckdb-go/v2",
+      "version": "v2.10505.0"
+    },
+    "license": "MIT",
+    "extension_policy": "no_runtime_downloads",
+    "locked": true
+  },
+  "phpredis": {
+    "version": "6.3.0",
+    "repository": "https://github.com/phpredis/phpredis.git",
+    "commit": "df4fab2de7fc327c54c94a13af2b9542e4fbd720",
+    "license": "PHP License 3.01",
+    "locked": true
+  },
+  "mysql": {
+    "version": "8.4.11",
+    "repository": "https://github.com/mysql/mysql-server.git",
+    "license": "GPL-2.0-with-linking-exception",
+    "redistribution": "approval_required",
+    "linux_amd64": {
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-linux-glibc2.28-x86_64.tar.xz",
+      "archive_sha256": "94e204cc94dede3746d2773fa5818f28f555cd8368c75ca0612eac124e6f3e58"
+    },
+    "linux_arm64": {
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-linux-glibc2.28-aarch64.tar.xz",
+      "archive_sha256": "04b2f9791d314167a9eb83abcb476f45a7cd9e4aa88fa7a638cba40d1bc2a109"
+    },
+    "windows_x64": {
+      "url": "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-winx64.zip",
+      "archive_sha256": "a492371d687d2bab088b0062581144a0044b8964baefdf4faa579292b423d25c"
+    },
+    "locked": true
+  },
+  "ioncube": {
+    "version": "15.5",
+    "php": "8.4",
+    "license": "proprietary-redistribution-approval-required",
+    "linux_amd64": {
+      "url": "https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz",
+      "archive_sha256": "e2193a63a87e2388a71854b0114de4fc71e2e40bcf0794faf74bb562691e5b62",
+      "loader": "ioncube_loader_lin_8.4_ts.so",
+      "loader_sha256": "ca9c88b2c07068564df88d24800eb04a8304b75f008c420c946e3fb72a041e32"
+    },
+    "linux_arm64": {
+      "url": "https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_aarch64.tar.gz",
+      "archive_sha256": "4cdc3dcbc75aa6335d34a756d05a58ea91c1aeaee8a922b5028e68aa1cb776fb",
+      "loader": "ioncube_loader_lin_8.4_ts.so",
+      "loader_sha256": "82db73f1a7d48e924050d7fd406775e9554e2cdd5581d93b93cd720d4b17b7e7"
+    },
+    "windows_x64": {
+      "url": "https://downloads.ioncube.com/loader_downloads/ioncube_loaders_win_vc17_x86-64.zip",
+      "archive_sha256": "2899bdfaf9d3201ff5dee04dc2dae505938ce9316b3d1b2d13f8aadd4dd0881e",
+      "loader": "ioncube_loader_win_8.4.dll",
+      "loader_sha256": "560f80d7daf554dea88fd0042ae634014b487b9a2d9f0c9bfab7e2fdbf947abd"
+    }
+  }
+}

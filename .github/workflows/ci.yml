@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.4.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Verify Go formatting
+        run: test -z "$(gofmt -l cmd internal)"
+
+      - name: Verify version lock
+        run: |
+          jq -e '.schema == 1 and (.php.windows.runtime.sha256 | test("^[0-9a-f]{64}$"))' versions.lock.json >/dev/null
+
+      - name: Shell syntax check
+        run: |
+          find scripts packaging -name '*.sh' -print0 | xargs -0 -n1 bash -n
+
+      - name: Unit tests (non-CGO packages)
+        run: go test -count=1 ./internal/config ./internal/lifecycle ./internal/health ./internal/control ./internal/logging ./internal/upgrade ./internal/queue/... ./internal/scheduler ./internal/observability/... ./internal/gateway ./internal/mysql
+
+      - name: Vet (non-CGO packages)
+        run: go vet ./internal/config ./internal/lifecycle ./internal/health ./internal/control ./internal/logging ./internal/upgrade ./internal/queue/... ./internal/scheduler ./internal/observability/... ./internal/gateway ./internal/mysql
+
+      - name: Documentation link check
+        run: |
+          set -euo pipefail
+          for doc in docs/*.md README.md; do
+            doc_dir="$(dirname "$doc")"
+            while read -r target; do
+              case "$target" in
+                http*|mailto:*|'') continue ;;
+              esac
+              case "$target" in
+                ../*) continue ;; # cross-repository references
+              esac
+              resolved="$target"
+              [[ "$resolved" = /* ]] || resolved="${doc_dir}/${resolved}"
+              if [[ ! -e "$resolved" ]]; then
+                echo "broken link in $doc: $target" >&2
+                exit 1
+              fi
+            done < <(grep -oE '\]\(\.?/?[^)#]+' "$doc" | sed -E 's/^\]\(//' | sort -u)
+          done
+
+      - name: Application composition test
+        run: tests/ci/compose-app-test.sh

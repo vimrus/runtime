@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "controlSocket": "/run/zentao/runtime.sock",
+    "pidFile": "/run/zentao/runtime.pid",
+    "drainTimeout": "30s",
+    "auditLog": "/opt/zentao/logs/audit.log",
+    "logPath": "/opt/zentao/logs/runtime.log",
+    "logMaxBytes": 16777216,
+    "logMaxBackups": 5,
+    "nodeID": "node-a",
+    "clusterID": "cluster-prod-1"
+  },
+  "web": {
+    "root": "/opt/zentao/app/current/www",
+    "listen": "0.0.0.0:8080",
+    "threads": 4,
+    "readHeaderTimeout": "10s",
+    "idleTimeout": "30s",
+    "maxHeaderBytes": 16384,
+    "accessLog": "/opt/zentao/logs/access.log"
+  },
+  "queue": {
+    "enabled": false,
+    "bridgeBaseURL": "http://127.0.0.1:8081/internal/runtime/queue/v1",
+    "requestTimeout": "5s",
+    "claimBatch": 8,
+    "leaseSeconds": 60,
+    "heartbeatInterval": "20s",
+    "reapInterval": "10s",
+    "reapBatch": 100,
+    "drainTimeout": "30s",
+    "workers": [
+      {"name": "default", "concurrency": 4, "minPoll": "50ms", "maxPoll": "5s"},
+      {"name": "mail", "concurrency": 4, "minPoll": "50ms", "maxPoll": "5s"},
+      {"name": "slow", "concurrency": 1, "minPoll": "50ms", "maxPoll": "5s"}
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "datasetRoot": "/opt/zentao/observability",
+    "spoolPath": "/opt/zentao/spool/observability",
+    "maxSpoolBytes": 1073741824,
+    "maxBatchRows": 10000,
+    "maxBatchBytes": 16777216,
+    "flushInterval": "60s",
+    "metricsDays": 30,
+    "logDays": 7
+  }
+}

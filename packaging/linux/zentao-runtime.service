@@ -1,0 +1,25 @@
+[Unit]
+Description=ZenTao Runtime (Caddy + FrankenPHP + PHP 8.4 ZTS)
+Documentation=https://www.zentao.net/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zentao
+Group=zentao
+ExecStart=/opt/zentao/bin/zentao-runtime serve --config /opt/zentao/config/runtime.json
+ExecReload=/opt/zentao/bin/zentao-runtime reload --control-socket /run/zentao/runtime.sock
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=45
+KillMode=control-group
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/zentao/data /opt/zentao/config /opt/zentao/logs /opt/zentao/spool /opt/zentao/observability /run/zentao
+
+[Install]
+WantedBy=multi-user.target

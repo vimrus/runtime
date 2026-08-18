@@ -5,16 +5,16 @@
 | 项目 | 内容 |
 |---|---|
 | 状态 | 详细设计讨论稿 |
-| 日期 | 2026-08-17 |
+| 日期 | 2026-08-18 |
 | 缓存后端 | 禅道业务数据库中的独立缓存表 |
-| 访问方式 | PHP 业务代码显式 `get/set/delete` |
+| 访问方式 | PHP 请求内 Array L0 + 独立 Cache Client 显式 `get/set/delete` |
 | Go 数据库访问 | 不允许，全部由 PHP DAO 执行 |
 | 支持数据库 | MySQL、PostgreSQL、达梦 DM8，以及禅道现有 DAO 适配的数据库 |
 | 关联文档 | [集成环境技术方案](./frankenphp-integration-technical-plan.md)、[Runtime Host 详细设计](./runtime-host-library-design.md) |
 
 ## 2. 核心结论
 
-第一版不引入 Redis、Sentinel、Ristretto 或 bbolt 作为缓存后端，也不建设独立的缓存主节点。缓存内容直接保存在禅道数据库的独立表中，由 PHP 代码通过统一 Cache Client 显式访问。
+第一版不引入 Redis、Sentinel、Ristretto、bbolt 或 APCu 作为共享缓存后端，也不建设独立的缓存主节点。缓存内容直接保存在禅道数据库的独立表中，由 PHP 代码通过统一 Cache Client 显式访问；同一 PHP 请求内使用 Array L0 消除重复查询。
 
 正式边界如下：
 
@@ -26,6 +26,8 @@
 6. 缓存是可丢弃数据。数据库故障转移、缓存表清空或缓存内容损坏都只能影响性能，不能影响业务正确性。
 7. 默认物理实现为：MySQL InnoDB、PostgreSQL UNLOGGED 普通表、达梦普通行存储表加聚集主键。
 8. 不缓存权限、锁、许可证、工作流状态和其他必须强一致的数据。
+9. Cache Client 使用独立、懒加载的 PDO 连接和独立缓存账号，不复用业务 DAO 当前连接，不加入业务事务。
+10. 缓存连接使用 autocommit、短连接/查询超时和数据库侧连接配额；超时或配额耗尽时快速按未命中降级。
 
 该方案的目标是减少高成本计算，而不是减少数据库连接次数。一次缓存读取仍然需要一次数据库主键点查，因此不能将它当作 Redis 的等价替代品。
 
@@ -60,7 +62,7 @@
 namespace + "\0" + cacheKey
 ```
 
-经过 SHA-256 计算得到 32 字节 `keyHash`。数据库主键使用 `(namespace, keyHash)`，原始 `cacheKey` 仍保存在表中，用于哈希冲突校验、诊断和运维排查。
+经过 SHA-256 计算得到 32 字节 `keyHash`。`namespace` 已包含在摘要输入中，数据库只使用 `keyHash` 作为主键，不保存原始 `namespace` 或 `cacheKey`。SHA-256 碰撞风险在本场景中可以忽略；减少字段和主键宽度比在每次读取时做原始键校验更重要。
 
 约束建议：
 
@@ -69,7 +71,7 @@ namespace + "\0" + cacheKey
 - 单个缓存值默认不超过 256 KB，硬上限为 1 MB。
 - 不允许把用户可控的任意长字符串直接作为键或值写入缓存表。
 
-`namespace` 是业务模块之间的隔离边界，不承担批量删除语义。首期批量清理只由维护任务执行，业务代码仍然显式删除具体键。
+`namespace` 是业务模块之间的逻辑隔离边界，不承担数据库侧批量删除语义。业务代码仍然显式删除具体键；模块级整体失效通过改变命名空间版本并让旧数据自然过期，不扫描原始键。
 
 ### 4.2 值格式
 
@@ -88,17 +90,12 @@ namespace + "\0" + cacheKey
 
 | 字段 | 说明 |
 |---|---|
-| `namespace` | 模块命名空间 |
-| `keyHash` | SHA-256 二进制摘要 |
-| `cacheKey` | 原始键，做冲突校验和诊断 |
+| `keyHash` | SHA-256(`namespace + "\0" + cacheKey`) 的 32 字节摘要，主键 |
 | `value` | 编码后的缓存内容 |
 | `valueType` | `string` 或 `json` |
 | `expiresAt` | Unix 时间戳，秒 |
-| `sizeBytes` | 编码后的值大小，用于配额和监控 |
-| `createdAt` | 首次写入时间，Unix 时间戳 |
-| `updatedAt` | 最近写入时间，Unix 时间戳 |
 
-不保存 `lastAccessAt`、访问计数或命中计数。读取路径不能产生额外写入。
+表只保留以上四个字段。不保存原始键、创建/更新时间、值大小、访问时间或命中计数；这些信息由 Client 校验或聚合指标承担，读取路径不能产生额外写入。
 
 ## 5. PHP Cache Client 契约
 
@@ -129,21 +126,20 @@ if(!$result->hit) {
 
 ### 5.2 `get`
 
-执行一次带参数的主键等值查询：
+Cache Client 先按 `keyHash` 查询本请求的 PHP Array L0。L0 未命中时，使用独立缓存连接执行一次带参数的主键等值查询：
 
 ```sql
-SELECT cacheKey, value, valueType, expiresAt
+SELECT value, valueType, expiresAt
   FROM zt_cache
- WHERE namespace = :namespace
-   AND keyHash = :keyHash
+ WHERE keyHash = :keyHash
  LIMIT 1;
 ```
 
 PHP 在读取后执行以下检查：
 
-1. 原始 `cacheKey` 与请求键一致；不一致视为未命中并记录冲突告警。
-2. `expiresAt <= 当前时间` 视为未命中。
-3. 按 `valueType` 解码；解码失败视为未命中并异步删除该键。
+1. `expiresAt <= 当前时间` 视为未命中。
+2. 按 `valueType` 解码；解码失败视为未命中，并由后续维护任务清理坏值。
+3. 命中、未命中和空值结果均可在本请求 L0 中短暂保存，避免同一请求重复访问数据库；L0 不跨请求保留。
 
 过期判断不在 `get` 中执行删除，避免一次读取变成读写事务。数据库时间和 PHP 时间存在偏差时，允许产生短暂的提前或延后过期；严格时间语义不是缓存的目标。
 
@@ -156,14 +152,15 @@ PHP 在读取后执行以下检查：
 - 序列化、大小检查和哈希计算在执行数据库写入之前完成。
 - 写入使用预编译语句和数据库方言适配的 UPSERT。
 - 缓存写入失败只记录指标和日志，不回滚已经完成的业务计算。
+- 写入成功后同步更新本请求 L0；写入失败时接口返回 `false`，调用方仍然使用已计算的业务结果。
 
 不使用滑动过期。`get` 不延长 TTL，否则高命中键将永不释放并增加写入压力。
 
 ### 5.4 `delete`
 
-`delete` 使用 `(namespace, keyHash)` 主键删除，操作是幂等的。业务数据更新后应显式删除相关缓存键；推荐在业务事务提交成功后执行，删除失败时依赖 TTL 兜底。
+`delete` 先移除本请求 L0，再使用 `keyHash` 主键执行一条删除 SQL，操作是幂等的。业务数据更新后应显式删除相关缓存键；推荐在业务事务提交成功后执行，删除失败时依赖 TTL 兜底。
 
-不允许通过 `LIKE`、前缀扫描或无条件清空完成业务请求中的失效操作。管理员维护任务可以单独执行命名空间或版本级清理。
+不允许通过 `LIKE`、前缀扫描或无条件清空完成业务请求中的失效操作。模块级整体失效使用新的命名空间版本；管理员维护命令可以清空整张缓存表，因为缓存数据都可重建。
 
 ### 5.5 错误降级
 
@@ -171,12 +168,25 @@ PHP 在读取后执行以下检查：
 |---|---|
 | 连接失败 | 按未命中处理，业务回源 |
 | 查询超时 | 按未命中处理，记录超时指标 |
-| 解码失败 | 删除坏值，按未命中处理 |
+| 解码失败 | 按未命中处理并记录指标，由维护任务清理 |
 | `set` 失败 | 保留业务结果，不影响响应 |
 | `delete` 失败 | 依赖 TTL，记录失效失败 |
 | 数据库连接池耗尽 | 直接跳过缓存，不能继续等待 |
 
-缓存操作应设置独立的短超时；缓存延迟不能拖慢正常业务请求。
+缓存操作应设置独立的短超时；缓存延迟不能拖慢正常业务请求。失败后不能借用业务 DAO 连接再次尝试，也不能在同一请求内无界重试。
+
+### 5.6 连接与事务隔离
+
+Cache Client 通过专用 `CacheConnectionFactory` 懒加载 PDO：
+
+- 使用独立缓存账号和连接配置，不复用业务 DAO 当前连接。
+- 使用 autocommit，每个 `get/set/delete` 只执行一条 SQL，不开启显式事务。
+- 不继承业务事务的隔离级别、锁等待或未提交数据，也不把缓存连接交给业务 DAO。
+- 在已完成兼容验证的 PHP 8.4 ZTS/Driver 组合上允许 PDO Persistent Connection；其他组合使用非持久连接。Persistent Connection 的数量按 FrankenPHP PHP 线程上限计入预算，不能理解为无上限连接池。
+- 连接建立和语句执行分别配置 Driver 能支持的最短合理超时。数据库或代理无法提供亚秒级超时时，通过专项测试确定可接受下限，并保证失败后立即回源。
+- 只连接可写主库或当前主节点，不读取异步只读副本，避免刚写入的缓存不可见。
+
+独立连接和账号能够隔离业务事务、权限、锁等待参数及连接配额，但不能隔离同一数据库实例的 CPU、Buffer Pool、磁盘、WAL/redo 和检查点压力。因此它是干扰控制，不是资源物理隔离。
 
 ## 6. 三种数据库的物理实现
 
@@ -196,16 +206,11 @@ MEMORY 在极小的固定长度、低并发只读场景可能有优势，但不�
 
 ```sql
 CREATE TABLE zt_cache (
-    namespace  VARCHAR(64)  NOT NULL,
-    keyHash    BINARY(32)   NOT NULL,
-    cacheKey   VARBINARY(512) NOT NULL,
-    value      MEDIUMBLOB   NOT NULL,
+    keyHash    BINARY(32)       NOT NULL,
+    value      MEDIUMBLOB       NOT NULL,
     valueType  TINYINT UNSIGNED NOT NULL,
-    expiresAt  BIGINT UNSIGNED NOT NULL,
-    sizeBytes  INT UNSIGNED NOT NULL,
-    createdAt  BIGINT UNSIGNED NOT NULL,
-    updatedAt  BIGINT UNSIGNED NOT NULL,
-    PRIMARY KEY (namespace, keyHash),
+    expiresAt  BIGINT UNSIGNED  NOT NULL,
+    PRIMARY KEY (keyHash),
     KEY idx_cache_expires (expiresAt)
 ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC;
 ```
@@ -220,22 +225,17 @@ CREATE TABLE zt_cache (
 
 ```sql
 CREATE UNLOGGED TABLE zt_cache (
-    namespace  VARCHAR(64)  NOT NULL,
-    "keyHash"  BYTEA       NOT NULL,
-    "cacheKey" BYTEA       NOT NULL,
-    value      BYTEA       NOT NULL,
-    "valueType" SMALLINT   NOT NULL,
-    "expiresAt" BIGINT     NOT NULL,
-    "sizeBytes" INTEGER    NOT NULL,
-    "createdAt" BIGINT     NOT NULL,
-    "updatedAt" BIGINT     NOT NULL,
-    PRIMARY KEY (namespace, "keyHash")
+    "keyHash"   BYTEA    NOT NULL CHECK (octet_length("keyHash") = 32),
+    value       BYTEA    NOT NULL,
+    "valueType" SMALLINT NOT NULL,
+    "expiresAt" BIGINT   NOT NULL,
+    PRIMARY KEY ("keyHash")
 ) WITH (fillfactor = 80);
 
 CREATE INDEX idx_cache_expires ON zt_cache ("expiresAt");
 ```
 
-`set` 使用 `INSERT ... ON CONFLICT (namespace, "keyHash") DO UPDATE`。
+`set` 使用 `INSERT ... ON CONFLICT ("keyHash") DO UPDATE`。缓存专用连接可以设置 `synchronous_commit=off`；该设置只允许作用于缓存连接，不能污染业务连接。
 
 注意事项：
 
@@ -252,16 +252,11 @@ PostgreSQL 默认堆表和 B-tree 主键已经适合点查；不额外建立 HAS
 
 ```sql
 CREATE TABLE zt_cache (
-    namespace  VARCHAR(64)   NOT NULL,
-    keyHash    BINARY(32)    NOT NULL,
-    cacheKey   VARBINARY(512) NOT NULL,
-    value      BLOB          NOT NULL,
-    valueType  SMALLINT      NOT NULL,
-    expiresAt  BIGINT        NOT NULL,
-    sizeBytes  INTEGER       NOT NULL,
-    createdAt  BIGINT        NOT NULL,
-    updatedAt  BIGINT        NOT NULL,
-    CONSTRAINT pk_zt_cache PRIMARY KEY (namespace, keyHash)
+    keyHash    BINARY(32) NOT NULL,
+    value      BLOB       NOT NULL,
+    valueType  SMALLINT   NOT NULL,
+    expiresAt  BIGINT     NOT NULL,
+    CONSTRAINT pk_zt_cache PRIMARY KEY (keyHash)
 );
 
 CREATE INDEX idx_cache_expires ON zt_cache(expiresAt);
@@ -284,9 +279,9 @@ CREATE INDEX idx_cache_expires ON zt_cache(expiresAt);
 ### 7.1 统一操作
 
 ```text
-get:    SELECT by (namespace, keyHash)
+get:    SELECT by keyHash
 set:    database-specific UPSERT
-delete: DELETE by (namespace, keyHash)
+delete: DELETE by keyHash
 gc:     select expired primary keys, then delete exact keys in small batches
 ```
 
@@ -375,7 +370,10 @@ Redis：约 0.1～0.5 ms
 
 ### 9.2 保护数据库
 
-- Cache Client 使用独立短超时，连接失败立即回源。
+- 同一请求内先查 PHP Array L0，避免重复数据库点查；L0 在请求结束时释放，不产生跨请求一致性问题。
+- Cache Client 使用独立懒加载连接、独立短超时，连接失败立即回源。
+- 缓存账号只允许访问 `zt_cache`，并在数据库侧设置独立连接上限；初始连接预算建议占数据库总连接容量的 10%～20%，最终值由压测确定。
+- PDO Persistent Connection 总量按应用节点数和每节点 PHP 最大线程数计算，并为升级期间的新旧进程短暂并存预留余量。
 - 只使用主键点查，不在请求中扫描过期数据。
 - 不更新访问时间，不记录逐次命中日志。
 - 对缓存值和命名空间设置硬上限。
@@ -390,11 +388,12 @@ Redis：约 0.1～0.5 ms
 
 - `get` p95 小于 5 ms。
 - `set` 和 `delete` p95 小于 10 ms。
+- 启用缓存后，同一基线业务场景的请求 p95 增幅不超过 5%。
 - 缓存操作不使业务数据库 CPU 长期超过 70%～80%。
 - 过期清理不能产生长事务或明显锁等待。
 - 数据库缓存停止或超时后，业务仍能成功回源。
 
-若数据库缓存达不到门槛，优先在 Cache Client 内增加可选的本地 L1，而不是修改业务调用接口。
+若数据库缓存达不到门槛，先关闭不合适的业务缓存点并检查连接/SQL 隔离。是否增加跨请求本地 L1 属于后续版本决策，不改变当前 `get/set/delete` 接口。
 
 ## 10. 可观测性
 
@@ -412,14 +411,18 @@ Cache Client 记录聚合指标，不记录完整缓存值：
 
 日志只包含命名空间、键摘要、错误类别和耗时，不写入原始缓存键对应的敏感内容。
 
+这些聚合指标和结构化日志进入 Runtime 可观测性管线，由 DuckDB 批量写入本地或共享 NFS Parquet 数据集；Parquet 写入失败不能影响缓存降级和业务回源。详细协议参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+
 ## 11. 安全设计
 
 - Cache Client 不接受任意 SQL、表名或列名。
 - 所有值使用参数绑定，禁止字符串拼接。
-- 原始键只用于内部校验和诊断，日志默认只记录摘要。
+- 原始键只在 PHP 内用于计算摘要，数据库和日志默认只记录摘要。
 - 禁止缓存密码、Token、完整会话凭据和许可证密钥。
-- JSON 解码失败和哈希冲突必须告警，但不能让请求失败。
-- 缓存表使用禅道数据库账号的最小权限；不需要 DDL 权限的运行账号与安装升级账号分离。
+- JSON 解码失败必须告警，但不能让请求失败。
+- 安装/升级账号负责 DDL；运行期缓存账号只授予 `zt_cache` 的 `SELECT`、`INSERT`、`UPDATE`、`DELETE` 权限。
+- MySQL 使用账号级连接限制；PostgreSQL 使用 Role `CONNECTION LIMIT` 或外部连接池独立池；达梦使用用户/资源管理能力限制缓存账号连接数。具体语法由对应数据库部署适配提供。
+- 缓存凭据与业务凭据分开保护和轮换，不能出现在日志、指标或 Runtime 健康响应中。
 
 ## 12. 测试计划
 
@@ -433,10 +436,12 @@ Cache Client 记录聚合指标，不记录完整缓存值：
 4. 不同命名空间相同键互不影响。
 5. 过期读取返回未命中但不阻塞请求。
 6. `delete` 幂等。
-7. 哈希冲突校验。
+7. `namespace + "\0" + cacheKey` 的摘要格式稳定且始终生成 32 字节主键。
 8. 并发 `set` 不产生重复主键或损坏值。
 9. 大小上限和非法 TTL。
 10. 数据库连接失败时正确降级。
+11. 同一请求重复 `get` 命中 L0，只执行一次数据库查询。
+12. `set/delete` 正确同步失效本请求 L0。
 
 ### 12.2 数据库专项测试
 
@@ -446,6 +451,10 @@ Cache Client 记录聚合指标，不记录完整缓存值：
 - 达梦聚集主键点查、`MERGE` 并发及 BLOB 读写。
 - 达梦堆表候选方案与普通表的读写比例对照压测。
 - MySQL、PostgreSQL、达梦的 Unicode 键、二进制值和最大值大小。
+- 业务连接处于长事务、锁等待或回滚状态时，缓存连接不加入或继承该事务。
+- 缓存账号连接配额耗尽时快速按未命中降级，业务 DAO 仍可建立连接。
+- Persistent PDO 在 PHP 8.4 ZTS/FrankenPHP Classic mode 下的复用、断线重连和线程隔离。
+- 按应用节点数、PHP 最大线程数和滚动升级重叠进程验证连接预算。
 
 ### 12.3 性能测试矩阵
 
@@ -461,15 +470,18 @@ Cache Client 记录聚合指标，不记录完整缓存值：
 
 每组记录吞吐、p50/p95/p99、数据库 CPU、连接数、锁等待、磁盘 I/O、WAL/redo 和清理耗时。
 
+每组同时运行无缓存的业务基线和开启缓存后的业务负载，确认缓存专用账号、连接配额和短超时不会把业务请求 p95 推高超过 5%。
+
 ## 13. 迁移和上线顺序
 
-1. 在安装和升级流程中创建 `zt_cache` 及数据库专用索引。
-2. 上线 Cache Client，但默认关闭业务模块接入。
-3. 选择一个高计算成本、低一致性风险的模块进行灰度。
-4. 观察命中率、缓存表增长、数据库负载和回源延迟。
-5. 通过配置逐模块启用，不允许一次性替换所有已有缓存逻辑。
-6. 发现数据库压力异常时，关闭模块缓存即可恢复原行为。
-7. 保留一键清空缓存表的维护命令；清空不影响业务数据。
+1. 使用安装/升级账号创建 `zt_cache` 及数据库专用索引。
+2. 为 Cache Client 配置独立缓存账号、最小 DML 权限、连接配额和 Secret；外部数据库由部署方提供等价配置。
+3. 上线 Cache Client，但默认关闭业务模块接入。
+4. 选择一个高计算成本、低一致性风险的模块进行灰度。
+5. 观察命中率、缓存表增长、数据库负载和回源延迟。
+6. 通过配置逐模块启用，不允许一次性替换所有已有缓存逻辑。
+7. 发现数据库压力异常时，关闭模块缓存即可恢复原行为。
+8. 保留一键清空缓存表的维护命令；清空不影响业务数据。
 
 ## 14. 后续演进
 
@@ -483,4 +495,3 @@ Cache Client 记录聚合指标，不记录完整缓存值：
 ```
 
 本地 L1 可以使用 Ristretto，但不改变数据库缓存表的契约，也不把 Go Runtime 变成数据库客户端。bbolt 暂不纳入第一版；它只能帮助单节点重启后的本地恢复，不能解决多节点共享和故障转移后的冷缓存问题。
-

@@ -5,13 +5,14 @@
 | 项目 | 内容 |
 |---|---|
 | 状态 | 详细设计讨论稿 |
-| 日期 | 2026-08-17 |
+| 日期 | 2026-08-18 |
 | Runtime Host | 自研 Go 程序 `zentao-runtime` |
 | HTTP Server | Caddy Go Library |
 | PHP Runtime | FrankenPHP Go Library / Caddy Module |
 | PHP 模式 | Classic mode |
 | 关联文档 | [集成环境技术方案](./frankenphp-integration-technical-plan.md) |
 | 构建设计 | [GitHub Actions 构建与打包详细设计](./github-actions-build-design.md) |
+| 可观测性设计 | [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md) |
 
 ## 2. 架构决策
 
@@ -30,6 +31,10 @@ zentao-runtime
   |     +-- PHP 8.4 ZTS Embed SAPI
   |     +-- Classic request execution
   |     +-- ionCube Loader
+  |
+  +-- DuckDB Library
+  |     +-- metrics/logs aggregation and Parquet publishing
+  |     +-- resource-limited Parquet query
   |
   +-- ZenTao Runtime Host
         +-- configuration and validation
@@ -125,6 +130,7 @@ php_request_startup
 | Scheduler | Host 管理的子进程或独立服务 | Host 管理的子进程或独立服务 | 独立 Scheduler 容器 |
 | MySQL | Host 管理的子进程或独立服务 | 无 | 独立 MySQL 容器 |
 | Control plane | Host 本地 IPC | Host 本地 IPC | 容器命令/本地 IPC |
+| DuckDB Observability | Host 内嵌 Library | Host 内嵌 Library | Web 容器内嵌 Library |
 
 Host 对子进程提供统一管理接口，但 Scheduler 和 MySQL 不进入 Caddy/FrankenPHP 线程池。
 
@@ -140,6 +146,7 @@ Host 对子进程提供统一管理接口，但 Scheduler 和 MySQL 不进入 Ca
 - 管理可选 MySQL 和 Scheduler 生命周期。
 - 提供本地管理 API。
 - 输出结构化日志、健康状态和诊断信息。
+- 使用 DuckDB 批量生成和查询本地或共享 NFS 上的指标/日志 Parquet 数据集。
 - 生成首次安装凭据和配置。
 - 协调备份、恢复和升级流程。
 - 暴露构建版本与组件 manifest。
@@ -170,6 +177,7 @@ runtime-host/
     control/        local IPC and administrative commands
     health/         liveness, readiness and dependency state
     logging/        structured logs, rotation and redaction
+    observability/  metrics aggregation, spool, DuckDB and Parquet publishing/query
     install/        first-run initialization
     backup/         backup and restore orchestration
     upgrade/        staged upgrade and rollback coordination
@@ -334,7 +342,8 @@ Host 在 readiness 阶段验证：
 - Zend Max Execution Timers enabled。
 - ionCube Loader loaded。
 - 必需 PHP extensions loaded。
-- 应用 `tmp`、Session 和附件目录可写。
+- 应用 `tmp` 和附件目录可写；文件 Session 模式下实际 `session.save_path` 可写，多节点时共享挂载检查通过。
+- Redis Session 模式下 PHP Redis 扩展已加载，连接参数可解析；共享后端读写由受限 PHP Deep health 探针验证。
 
 验证失败时 Caddy 不进入 Ready。
 
@@ -467,6 +476,8 @@ zentao-runtime reload
 zentao-runtime backup
 zentao-runtime restore
 zentao-runtime diagnose
+zentao-runtime logs --since <duration>
+zentao-runtime metrics --since <duration> --name <metric>
 zentao-runtime version
 zentao-runtime php-cli -- <args>
 ```
@@ -491,6 +502,7 @@ zentao-runtime php-cli -- <args>
 - 应用根目录有效。
 - Full 版本地 MySQL 已 ready，或外部数据库连接策略允许启动。
 - 关键可写目录有效。
+- 启用可观测性时，DuckDB 已初始化，本地 spool 可写；共享 Parquet NFS 异常只标记 degraded，不阻止 Web Ready。
 
 ### 15.3 Deep health
 
@@ -498,9 +510,10 @@ zentao-runtime php-cli -- <args>
 
 - 内部 PHP 请求。
 - 数据库查询。
-- Session 写入读取。
+- 按实际 PHP Handler 执行 Session 临时写入、读取和删除；文件模式同时检查共享挂载，Redis 模式不由 Go 直接连接。
 - Scheduler heartbeat。
 - 磁盘空间和备份目录检查。
+- DuckDB 最小内存查询、Parquet 临时文件发布能力、本地 spool 配额和共享数据集挂载身份。
 
 Deep health 不能由高频公共探针触发，避免对数据库和磁盘造成压力。
 
@@ -520,7 +533,7 @@ upgrade
 audit
 ```
 
-Host 使用 Go `slog` 或兼容接口输出结构化日志。Caddy 和 FrankenPHP logger 接入同一日志管线，但保持 source 字段区分。
+Host 使用 Go `slog` 或兼容接口输出结构化日志。Caddy 和 FrankenPHP logger 接入同一日志管线，但保持 source 字段区分。日志经过脱敏和有界缓冲后，由 DuckDB 批量生成 Parquet；Audit、安装、升级和安全日志仍保留追加式轮转文件，Parquet 不是唯一合规副本。
 
 ### 16.2 脱敏
 
@@ -546,6 +559,10 @@ Host 使用 Go `slog` 或兼容接口输出结构化日志。Caddy 和 FrankenPH
 
 指标端点默认只绑定本地或管理网络。
 
+指标在写入 Parquet 前按时间窗口聚合。多节点不共享 `.duckdb` 文件，而是在 NFS 上共享 Hive 分区 Parquet 数据集；每个节点只发布自己的不可变 part 文件。查询使用服务端固定数据根目录和字段 allowlist，不接受公共任意 SQL。
+
+详细设计参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+
 ## 17. 安全边界
 
 1. Caddy public listener 只处理用户 Web 流量。
@@ -558,6 +575,7 @@ Host 使用 Go `slog` 或兼容接口输出结构化日志。Caddy 和 FrankenPH
 8. 高级 Caddy module 使用 allowlist。
 9. 配置、插件和 Runtime 更新都进行签名校验。
 10. 公共请求中带下划线的非白名单 Header 应移除，避免 CGI Header 混淆。
+11. DuckDB 禁止网络安装/自动加载未审核 Extension，禁止读取配置根目录之外的任意文件或 URL。
 
 ## 18. Runtime 更新
 
@@ -626,6 +644,7 @@ BuildTime
 PHPVersion
 FrankenPHPVersion
 CaddyVersion
+DuckDBVersion
 RuntimeRevision
 ```
 
@@ -642,6 +661,7 @@ RuntimeRevision
 - 子进程退出和重启策略。
 - Control plane 鉴权。
 - 日志脱敏。
+- 度量聚合、Batch ID、Parquet 路径、spool 恢复和节点目录所有权。
 
 ### 21.2 Library 集成测试
 
@@ -651,12 +671,14 @@ RuntimeRevision
 - PATH_INFO 和静态文件。
 - Caddy graceful reload 不破坏 PHP 请求。
 - Host shutdown 触发 FrankenPHP 正常关闭。
+- DuckDB 与 PHP Embed/FrankenPHP 同进程加载，Parquet 批次可以在优雅停止时有界 flush。
 
 ### 21.3 平台测试
 
 - Linux systemd 和 Unix socket。
 - Windows Service、Named Pipe 和 Job Object。
 - Docker PID 1、signals 和只读文件系统。
+- 三平台 DuckDB/Parquet 读写和 Windows 非 ASCII 路径。
 
 ### 21.4 失败注入
 
@@ -666,6 +688,7 @@ RuntimeRevision
 - Scheduler 崩溃。
 - 配置 reload 失败。
 - 磁盘空间不足。
+- NFS 中断、Parquet 发布崩溃、本地 spool 满和 DuckDB 查询超限。
 - 升级后 health check 失败。
 
 ## 22. 关键约束
@@ -677,6 +700,8 @@ RuntimeRevision
 5. Classic mode 仍使用常驻 ZTS thread pool，但不复用禅道请求状态。
 6. Web、CLI 和 Scheduler 必须使用同一 PHP 版本与 ionCube Loader。
 7. Linux ionCube ABI shim 仍是 PHP 构建的一部分，与 Host Library 架构无冲突。
+8. 不共享 `.duckdb` 文件，不允许两个节点修改同一个 Parquet 文件。
+9. 可观测性故障只能降级指标/日志能力，不能阻止 Web、Scheduler 和队列继续运行。
 
 ## 23. 实施阶段
 
@@ -705,6 +730,7 @@ RuntimeRevision
 - 备份、恢复和升级事务。
 - 受控 Caddy module 扩展。
 - 指标、诊断包和安全加固。
+- DuckDB 指标/日志 Parquet、共享数据集、spool 和资源受限查询。
 
 ## 24. 验收标准
 
@@ -718,6 +744,7 @@ RuntimeRevision
 8. 管理接口不暴露到公共网络。
 9. Full 版可以统一管理 Web、Scheduler 和 MySQL 状态。
 10. GitHub-hosted Runner 能在三个目标平台构建并测试 Host。
+11. 双节点无需选主或全局锁即可向共享 Parquet 数据集发布，并能查询所有已发布节点分区。
 
 ## 25. 待讨论事项
 
@@ -728,4 +755,3 @@ RuntimeRevision
 5. Control plane 是否需要提供本地 Web UI，或首期只提供 CLI。
 6. 是否对外提供 Prometheus metrics，以及默认监听策略。
 7. Caddy JSON 高级配置的开放范围和兼容承诺。
-

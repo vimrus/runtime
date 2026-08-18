@@ -1,0 +1,78 @@
+# ZenTao Runtime Compose template.
+#
+# Web container: zentao-runtime with embedded Caddy + FrankenPHP Classic.
+# Scheduler (optional profile): same image, scheduler command.
+# MySQL (optional profile): separate pinned MySQL 8.4 container.
+#
+# For external PostgreSQL or MySQL, do not start the mysql service and
+# configure the application database through ZenTao environment variables.
+services:
+  web:
+    image: ghcr.io/vimrus/zentao:dev
+    build:
+      context: ../..
+      dockerfile: packaging/poc/Dockerfile
+      target: runtime
+    command: ["serve", "--config", "/opt/zentao/config/runtime.json"]
+    environment:
+      ZENTAO_RUNTIME_ROOT: /opt/zentao/app/current/www
+      ZENTAO_RUNTIME_LISTEN: "0.0.0.0:8080"
+      ZENTAO_RUNTIME_CONTROL_SOCKET: /run/zentao/runtime.sock
+      ZENTAO_RUNTIME_PID_FILE: /run/zentao/runtime.pid
+    ports:
+      - "8080:8080"
+    volumes:
+      - zentao-app:/opt/zentao/app
+      - zentao-data:/opt/zentao/data
+      - zentao-config:/opt/zentao/config
+      - zentao-observability:/opt/zentao/observability
+      - zentao-spool:/opt/zentao/spool/observability
+      - zentao-logs:/opt/zentao/logs
+    healthcheck:
+      test: ["CMD", "sh", "/opt/zentao/packaging/docker/healthcheck.sh"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+  scheduler:
+    image: ghcr.io/vimrus/zentao:dev
+    profiles: ["scheduler"]
+    command: ["scheduler", "--config", "/opt/zentao/config/runtime.json"]
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - zentao-app:/opt/zentao/app
+      - zentao-config:/opt/zentao/config
+      - zentao-data:/opt/zentao/data
+      - zentao-spool:/opt/zentao/spool/observability
+    restart: unless-stopped
+
+  mysql:
+    # Pin to an immutable MySQL 8.4 LTS digest before production use.
+    image: mysql:8.4@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    profiles: ["full"]
+    environment:
+      MYSQL_DATABASE: zentao
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  zentao-app:
+  zentao-data:
+  zentao-config:
+  zentao-observability:
+  zentao-spool:
+  zentao-logs:
+  mysql-data:

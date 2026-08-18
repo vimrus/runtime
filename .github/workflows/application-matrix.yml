@@ -1,0 +1,33 @@
+name: Application composition matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      editions_dir:
+        description: "Local path (on the runner) containing opensource/biz/bizext/max/ipd sources"
+        required: true
+
+permissions:
+  contents: read
+
+# This workflow runs only on private/self-hosted runners with access to the
+# paid edition sources. It never uploads paid code to public artifacts.
+jobs:
+  compose:
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [opensource, biz, max, ipd]
+    runs-on: [self-hosted, linux, x64]
+    steps:
+      - name: Check out Runtime
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Compose ${{ matrix.edition }} application
+        run: scripts/ci/compose-app.sh "${{ github.event.inputs.editions_dir }}" dist/app ${{ matrix.edition }}
+
+      - name: Verify application artifact
+        run: |
+          test -f dist/app/zentao-app-${{ matrix.edition }}/www/index.php
+          test ! -d dist/app/zentao-app-${{ matrix.edition }}/.git
+          echo "edition artifact verified: ${{ matrix.edition }}"

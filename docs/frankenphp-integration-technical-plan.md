@@ -5,7 +5,7 @@
 | 项目 | 内容 |
 |---|---|
 | 状态 | 方案讨论稿 |
-| 日期 | 2026-08-17 |
+| 日期 | 2026-08-18 |
 | PHP 基线 | PHP 8.4 ZTS |
 | Web Runtime | 自研 Go Host + Caddy Library + FrankenPHP Library（Classic mode） |
 | 数据库 | MySQL，兼容外部 PostgreSQL |
@@ -24,6 +24,7 @@
 5. Caddy 和 FrankenPHP 均作为 Go Library 使用；FrankenPHP 使用 Classic mode，不启用 worker mode，PHP 请求状态不跨请求保留。
 6. PHP 版本固定为 8.4，并支持 MySQL 和外部 PostgreSQL。
 7. 运行时具备可重复构建、升级、备份、诊断和供应链追踪能力。
+8. DuckDB 作为 Go Library 生成和查询指标/日志 Parquet，双节点通过 NFS 共享分区式数据集。
 
 ## 3. 核心结论
 
@@ -62,11 +63,11 @@ ionCube Loader 在访问 TSRM offset 前会判断 `zend_signal_globals_id != 0`�
 
 | 交付物 | Runtime | 数据库 | 初始架构 |
 |---|---|---|---|
-| Windows Runtime | `zentao-runtime` + Caddy + FrankenPHP + PHP 8.4 TS | 外部 MySQL/PostgreSQL | x86_64 |
+| Windows Runtime | `zentao-runtime` + Caddy + FrankenPHP + DuckDB + PHP 8.4 TS | 外部 MySQL/PostgreSQL | x86_64 |
 | Windows Full | 同上 | 内置 MySQL 8.4 LTS | x86_64 |
-| Linux Runtime | `zentao-runtime` + Caddy + FrankenPHP + patched PHP 8.4 ZTS | 外部 MySQL/PostgreSQL | amd64、arm64 |
+| Linux Runtime | `zentao-runtime` + Caddy + FrankenPHP + DuckDB + patched PHP 8.4 ZTS | 外部 MySQL/PostgreSQL | amd64、arm64 |
 | Linux Full | 同上 | 内置 MySQL 8.4 LTS | amd64、arm64 |
-| Docker | Debian + `zentao-runtime` + patched PHP 8.4 ZTS | 独立 MySQL 容器或外部数据库 | amd64、arm64 |
+| Docker | Debian + `zentao-runtime` + DuckDB + patched PHP 8.4 ZTS | 独立 MySQL 容器或外部数据库 | amd64、arm64 |
 
 Docker 中 FrankenPHP 与 MySQL 必须使用不同容器。默认 Compose 可以启动 MySQL，也应允许禁用 MySQL 服务并连接外部 MySQL 或 PostgreSQL。
 
@@ -89,6 +90,10 @@ Docker 中 FrankenPHP 与 MySQL 必须使用不同容器。默认 Compose 可以
            |                                     |
       MySQL 8.4 LTS                         外部数据库
    Full 版或 Compose                 MySQL / PostgreSQL
+
+  DuckDB Library
+    -> 指标/日志批处理
+    -> 本地或 NFS 共享 Parquet 数据集
 
 独立后台进程：
   - 禅道计划任务服务
@@ -220,6 +225,7 @@ opcache
 pdo_mysql
 pdo_pgsql
 mysqli
+redis
 curl
 gd
 mbstring
@@ -258,6 +264,7 @@ expose_php=Off
 display_errors=Off
 log_errors=On
 session.use_strict_mode=1
+session.lazy_write=1
 opcache.enable=1
 ```
 
@@ -303,6 +310,8 @@ app/releases/<version>/  各版本禅道应用
 app/current              当前版本链接或版本指针
 config/                  Runtime 配置、Caddy JSON 基线、php.ini
 data/                    附件及其他持久数据
+observability/           本地或 NFS 指标/日志 Parquet 数据集
+spool/observability/     NFS 故障期间的有界本地批次暂存，不能放在共享 NFS
 mysql/                   Full 版 MySQL 程序与数据
 logs/                    Web、PHP、Scheduler、MySQL 日志
 backups/                 数据库、附件和配置备份
@@ -387,6 +396,33 @@ CI 必须分别执行 MySQL 和 PostgreSQL 的以下测试：
 - 数据库函数和 SQL 兼容性测试。
 - 备份与恢复。
 
+### 12.3 多节点部署
+
+标准多节点参考拓扑为两个 Linux 应用节点，共享数据库和附件 NFS：
+
+- Session 遵循 PHP `php.ini`；单机默认使用本地文件，多节点由部署方配置共享 NFS 文件或外部 Redis。
+- Runtime 不保存 Session，只负责配置一致性检查和通过 PHP 探针诊断实际 Handler；NFS/Redis 的高可用由部署方负责。
+- 文件 Session 必须尊重显式 `session.save_path`，API `apisession` 也不能在多节点下回退本地目录。
+- 附件由所有应用节点挂载同一个 NFSv4.1 文件系统。
+- DuckDB 不共享 `.duckdb` 文件；两个节点在 NFS 上共享指标/日志 Parquet 数据集，并只向各自的节点分区发布不可变 part 文件。
+- 节点 Runtime 配置分别维护，通过 Cluster ID、Release ID、Schema 代数和配置指纹发现漂移。
+- 客户已有云、硬件或托管负载均衡时优先接入。
+- 只有两个 Linux 节点且没有外部负载均衡时，使用 Keepalived 浮动 VIP 和内嵌 Caddy Gateway。
+- 使用共享 NFS 或 Redis Session 时，Caddy Gateway 使用 `least_conn`，不依赖 Session Sticky，也不自动重试非幂等请求。
+- 数据库、NFS 和外部 Redis 高可用由客户基础设施负责。
+
+详细设计参见 [zentao 多节点部署与高可用详细设计](./deployment-and-ha-design.md)。
+
+### 12.4 DuckDB 与 Parquet 可观测性
+
+- DuckDB 作为 Library 链接到 `zentao-runtime`，不启动独立数据库服务。
+- 单机使用本地 Parquet 数据集；Linux/Docker 多节点使用 NFSv4.1 共享 Parquet 数据集。
+- 每个节点只写 `node=<nodeID>` 分区，通过临时文件、校验和同文件系统原子 rename 发布。
+- NFS 不可用时写有界本地 spool，可观测性故障不阻断业务请求。
+- 查询必须按时间和节点裁剪，并限制线程、内存、临时空间、返回行数和超时。
+
+详细设计参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+
 ## 13. 安全要求
 
 1. Runtime Host、Web 和数据库服务使用低权限账号运行。
@@ -396,8 +432,9 @@ CI 必须分别执行 MySQL 和 PostgreSQL 的以下测试：
 5. 默认关闭 `phpinfo`、调试模式和 PHP 版本响应头。
 6. 发布包、镜像和升级包提供 SHA256 与数字签名。
 7. 生成 SBOM，记录全部 Runtime 组件及许可证。
-8. 对 Runtime Host、Caddy、FrankenPHP、PHP、ionCube、MySQL 和基础镜像建立漏洞跟踪机制。
-9. Full 版 MySQL 与 ionCube Loader 的再分发条款必须完成法务确认。
+8. 对 Runtime Host、Caddy、FrankenPHP、DuckDB/Go Binding、PHP、ionCube、MySQL 和基础镜像建立漏洞跟踪机制。
+9. Full 版 MySQL、ionCube Loader、DuckDB/Go Binding 和相关 C/C++ Runtime 的许可证及再分发条款必须完成确认。
+10. DuckDB 禁止运行时自动安装或加载未审核 Extension，不向公共 Web 暴露任意 SQL 和文件路径。
 
 ## 14. 升级与回滚
 
@@ -512,6 +549,8 @@ readelf -Ws libphp.so | grep zend_signal
 | Windows Defender 误报 | 安装包被拦截 | 代码签名、稳定下载地址、发布前多引擎扫描 |
 | 内置 MySQL 数据损坏或升级失败 | 用户数据不可用 | 独立数据目录、升级前备份、恢复演练 |
 | 许可证或再分发限制 | 无法合法发布 | 发布前完成 ionCube、MySQL 等组件法务审查 |
+| DuckDB CGO/C++ 链接冲突 | Runtime 无法启动或发生原生崩溃 | 三平台原生 Runner 构建，检查 PHP/FrankenPHP/ionCube/CRT 组合 |
+| Parquet 小文件或日志增长 | NFS 查询变慢或容量耗尽 | 批量发布、节点分区、保留策略、spool 和独立容量配额 |
 
 ## 19. 建议实施阶段
 
@@ -528,6 +567,7 @@ readelf -Ws libphp.so | grep zend_signal
 - 完成 Runtime 配置、Caddy JSON、php.ini 和目录规范。
 - 完成 Linux amd64/arm64 与 Windows x86_64 构建。
 - 建立 Runtime manifest、SBOM 和签名流程。
+- 完成 DuckDB 三平台链接、Parquet 读写和禁用外部 Extension 的 PoC。
 
 ### 阶段三：集成环境
 
@@ -535,6 +575,7 @@ readelf -Ws libphp.so | grep zend_signal
 - 完成 Windows/Linux Full + MySQL 包。
 - 完成 Docker Web、Scheduler、MySQL Compose。
 - 实现服务管理、诊断、备份和恢复。
+- 实现指标/日志批处理、共享 Parquet 发布、本地 spool 和受控查询。
 
 ### 阶段四：升级与发布
 
@@ -560,3 +601,5 @@ readelf -Ws libphp.so | grep zend_signal
 - FrankenPHP ionCube 讨论：<https://github.com/php/frankenphp/issues/901>
 - FrankenPHP ionCube 支持讨论：<https://github.com/php/frankenphp/issues/1775>
 - ionCube Loaders：<https://www.ioncube.com/loaders.php>
+- DuckDB Go API：<https://github.com/duckdb/duckdb-go>
+- DuckDB Parquet 文档：<https://duckdb.org/docs/stable/data/parquet/overview>

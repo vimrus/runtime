@@ -1,0 +1,178 @@
+name: Runtime release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Runtime release version (for example v22.0-r1)"
+        required: true
+  push:
+    tags:
+      - "runtime/v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Verify version lock
+        run: |
+          jq -e '.schema == 1 and (.duckdb.go_binding.version | length > 0) and (.php.windows.runtime.sha256 | test("^[0-9a-f]{64}$"))' versions.lock.json >/dev/null
+
+  build-linux:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      DEBIAN_MIRROR: http://deb.debian.org/debian
+      DEBIAN_SECURITY_MIRROR: http://deb.debian.org/debian-security
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - run: scripts/native/build-linux.sh ${{ matrix.arch }}
+      - run: scripts/native/test-linux.sh ${{ matrix.arch }}
+      - name: Generate manifest and SBOM
+        run: |
+          scripts/package/generate-manifest.sh dist/poc-linux-${{ matrix.arch }}
+          scripts/package/generate-sbom.sh dist/poc-linux-${{ matrix.arch }}
+      - name: Assemble and verify package
+        run: |
+          mkdir -p dist/package
+          scripts/package/assemble-runtime.sh dist/poc-linux-${{ matrix.arch }} zentao-runtime-linux-${{ matrix.arch }} dist/package
+          scripts/package/verify-package.sh dist/package/zentao-runtime-linux-${{ matrix.arch }}.tar.zst
+          scripts/package/size-report.sh dist/package/zentao-runtime-linux-${{ matrix.arch }}.tar.zst dist/package/zentao-runtime-linux-${{ matrix.arch }}.size.json
+      - name: Assemble Full package
+        run: |
+          scripts/package/assemble-full.sh dist/poc-linux-${{ matrix.arch }} linux-${{ matrix.arch }} zentao-full-linux-${{ matrix.arch }} dist/package
+          scripts/package/size-report.sh dist/package/zentao-full-linux-${{ matrix.arch }}.tar.zst dist/package/zentao-full-linux-${{ matrix.arch }}.size.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-runtime-linux-${{ matrix.arch }}
+          path: dist/package/zentao-runtime-linux-${{ matrix.arch }}.*
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-full-linux-${{ matrix.arch }}
+          path: dist/package/zentao-full-linux-${{ matrix.arch }}.*
+          if-no-files-found: error
+          retention-days: 30
+
+  build-windows:
+    needs: prepare
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.4.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Build Windows x86_64 Runtime
+        shell: pwsh
+        run: ./scripts/windows/build.ps1
+      - name: Assemble Full package (Windows)
+        shell: pwsh
+        run: bash scripts/package/assemble-full.sh dist/runtime-windows-x64 windows-x64 zentao-full-windows-x64 dist/package
+      - name: Size report (Windows)
+        shell: pwsh
+        run: bash scripts/package/size-report.sh dist/package/zentao-full-windows-x64.tar.zst dist/package/zentao-full-windows-x64.size.json
+      - name: Generate manifest and SBOM
+        shell: pwsh
+        run: |
+          bash scripts/package/generate-manifest.sh dist/runtime-windows-x64
+          bash scripts/package/generate-sbom.sh dist/runtime-windows-x64
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-runtime-windows-x64
+          path: dist/runtime-windows-x64
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-full-windows-x64
+          path: dist/package/zentao-full-windows-x64.*
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    environment: runtime-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.7.0
+        with:
+          path: artifacts
+      - name: Assemble release directory
+        run: |
+          mkdir -p release
+          while IFS= read -r -d '' package; do
+            name="$(basename "${package}")"
+            base="${name%.tar.zst}"
+            dir="release/${base}"
+            mkdir -p "${dir}"
+            cp "${package}" "${dir}/"
+            cp "${package%.tar.zst}.sha256" "${dir}/" 2>/dev/null || true
+            cp "${package%.tar.zst}.size.json" "${dir}/" 2>/dev/null || true
+            (cd "${dir}" && sha256sum "${name}" > SHA256SUMS)
+          done < <(find artifacts -name '*.tar.zst' -print0)
+          if [[ -d artifacts/zentao-runtime-windows-x64 ]]; then
+            cp -r artifacts/zentao-runtime-windows-x64 release/
+          fi
+          find release -type f | sort > release/FILELIST.txt
+
+      - name: Import signing key
+        env:
+          ZENTAO_GPG_PRIVATE_KEY: ${{ secrets.ZENTAO_GPG_PRIVATE_KEY }}
+        run: |
+          if [[ -n "${ZENTAO_GPG_PRIVATE_KEY}" ]]; then
+            printf '%s\n' "${ZENTAO_GPG_PRIVATE_KEY}" | gpg --batch --import
+          else
+            echo "ZENTAO_GPG_PRIVATE_KEY is not configured; release will fail at signing" >&2
+          fi
+
+      - name: Sign artifacts
+        run: |
+          for dir in release/*; do
+            [[ -d "${dir}" ]] || continue
+            [[ -f "${dir}/SHA256SUMS" ]] || continue
+            scripts/package/sign-artifacts.sh "${dir}"
+          done
+
+      - name: Verify supply chain
+        run: |
+          while IFS= read -r -d '' package; do
+            scripts/package/verify-supply-chain.sh "${package}"
+          done < <(find release -name '*.tar.zst' -print0)
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.3.3
+        with:
+          subject-path: release/**
+      - name: Create release draft
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.2.2
+        with:
+          draft: true
+          files: release/**
+          generate_release_notes: true

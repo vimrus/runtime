@@ -1,0 +1,103 @@
+name: Native platform builds
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "runtime/v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-builds-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      GOPROXY: https://proxy.golang.org,direct
+      DEBIAN_MIRROR: http://deb.debian.org/debian
+      DEBIAN_SECURITY_MIRROR: http://deb.debian.org/debian-security
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Build Linux ${{ matrix.arch }} Runtime
+        run: scripts/native/build-linux.sh ${{ matrix.arch }}
+
+      - name: Smoke test Linux ${{ matrix.arch }}
+        run: scripts/native/test-linux.sh ${{ matrix.arch }}
+
+      - name: Assemble package
+        run: |
+          mkdir -p dist/package
+          scripts/package/assemble-runtime.sh dist/poc-linux-${{ matrix.arch }} zentao-runtime-linux-${{ matrix.arch }} dist/package
+          scripts/package/verify-package.sh dist/package/zentao-runtime-linux-${{ matrix.arch }}.tar.zst
+
+      - name: Assemble Full package
+        run: |
+          scripts/package/assemble-full.sh dist/poc-linux-${{ matrix.arch }} linux-${{ matrix.arch }} zentao-full-linux-${{ matrix.arch }} dist/package
+
+      - name: Upload Linux ${{ matrix.arch }} package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-runtime-linux-${{ matrix.arch }}
+          path: dist/package/zentao-runtime-linux-${{ matrix.arch }}.*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Linux ${{ matrix.arch }} Full package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-full-linux-${{ matrix.arch }}
+          path: dist/package/zentao-full-linux-${{ matrix.arch }}.*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.4.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Build Windows x86_64 Runtime
+        shell: pwsh
+        run: ./scripts/windows/build.ps1
+
+      - name: Assemble Full package (Windows)
+        shell: pwsh
+        run: bash scripts/package/assemble-full.sh dist/runtime-windows-x64 windows-x64 zentao-full-windows-x64 dist/package
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-runtime-windows-x64
+          path: dist/runtime-windows-x64
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Windows Full package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-full-windows-x64
+          path: dist/package/zentao-full-windows-x64.*
+          if-no-files-found: error
+          retention-days: 7
