@@ -1,0 +1,3 @@
+zend_signal_globals_id
+zend_signal_globals_offset
+zend_signal_handler_unblock

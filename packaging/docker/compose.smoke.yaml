@@ -1,0 +1,23 @@
+# Smoke-test Compose file: runs the locally built Runtime image (produced by
+# scripts/poc/build-linux-amd64.sh) with the PHP fixtures and verifies
+# readiness through the public port. Not intended for production.
+services:
+  web:
+    image: zentao-runtime:poc-linux-amd64
+    command: ["serve", "--config", "/opt/zentao/config/runtime.json"]
+    environment:
+      ZENTAO_RUNTIME_ROOT: /opt/zentao/app/current/www
+      ZENTAO_RUNTIME_LISTEN: "0.0.0.0:8080"
+      ZENTAO_RUNTIME_CONTROL_SOCKET: /tmp/zentao-runtime.sock
+      ZENTAO_RUNTIME_PID_FILE: /tmp/zentao-runtime.pid
+    ports:
+      - "18080:8080"
+    volumes:
+      - ../../tests/fixtures/php:/opt/zentao/app/current/www:ro
+      - ../../tests/fixtures/runtime/runtime.json:/opt/zentao/config/runtime.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/_runtime/readiness"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+      start_period: 5s

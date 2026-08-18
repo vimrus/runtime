@@ -5,7 +5,7 @@
 | 项目 | 内容 |
 |---|---|
 | 状态 | 详细设计讨论稿 |
-| 日期 | 2026-08-17 |
+| 日期 | 2026-08-18 |
 | 关联方案 | [禅道 FrankenPHP 集成环境技术方案](./frankenphp-integration-technical-plan.md) |
 | CI 平台 | GitHub Actions |
 | Runner 范围 | GitHub-hosted Runner |
@@ -159,6 +159,14 @@ caddy:
   version: <exact-go-module-version>
   module_sum: <required-go-sum-entry>
 
+duckdb:
+  version: <exact-version>
+  repository: https://github.com/duckdb/duckdb.git
+  commit: <verified-commit-sha>
+  go_binding:
+    module: github.com/duckdb/duckdb-go/v2
+    version: <exact-go-module-version>
+
 runtime_host:
   module: <company-module-path>
   revision: 1
@@ -175,6 +183,14 @@ ioncube:
     url: <fixed-or-controlled-url>
     sha256: <required>
 
+phpredis:
+  version: <exact-version>
+  repository: https://github.com/phpredis/phpredis.git
+  commit: <verified-commit-sha>
+  windows_x64:
+    url: <fixed-source-or-binary-artifact-url>
+    sha256: <required>
+
 mysql:
   version: 8.4.x
   linux_amd64:
@@ -188,7 +204,7 @@ mysql:
     sha256: <required>
 ```
 
-示例中的 PHP SHA256 已按当前公开制品核对。FrankenPHP commit、ionCube 和 MySQL 信息必须在实现时补齐，缺失时 workflow 应在 `prepare` Job 直接失败。
+示例中的 PHP SHA256 已按当前公开制品核对。FrankenPHP commit、DuckDB/Go Binding、ionCube、phpredis 和 MySQL 信息必须在实现时补齐，缺失时 workflow 应在 `prepare` Job 直接失败。phpredis 必须与 PHP 8.4 ZTS 分别在目标平台原生构建或使用已校验的匹配制品，不能混用 NTS、不同 PHP API 或不同 Windows CRT 的扩展。
 
 ### 6.2 ionCube 下载稳定性
 
@@ -211,6 +227,7 @@ PHP version/API/configure flags
 PHP patch SHA256
 FrankenPHP version/commit
 Caddy module version
+DuckDB and Go Binding versions/commits
 Runtime Host version/commit
 ionCube archive and Loader SHA256
 PHP extensions and versions
@@ -467,8 +484,11 @@ Runtime 需要包含：
 - PHP CLI。
 - `libphp.so`。
 - PHP 动态扩展。
+- PHP Redis 扩展 `redis.so`，用于部署方选择 Redis Session 的场景。
 - ionCube TS Loader。
 - 非基础系统提供且允许再分发的共享库。
+
+DuckDB 优先静态链接到 `zentao-runtime`；若目标平台或官方 Binding 必须动态链接，则对应 DuckDB/C++ Runtime 必须进入明确的依赖允许列表和 staging。两种方式都必须在 manifest 中记录，不能在运行时下载 DuckDB 或 Parquet Extension。
 
 使用 `readelf`、`ldd` 或 `lddtree` 枚举依赖，建立明确的允许列表。不能简单复制 Runner 上发现的全部 `.so`。
 
@@ -495,6 +515,8 @@ stage/
     php.ini
     conf.d/00-ioncube.ini
     conf.d/10-opcache.ini
+  observability/         # 安装后创建，staging 中保持为空
+  spool/observability/   # 安装后创建且必须位于本地持久盘
   app/
   licenses/
   manifest.json
@@ -519,6 +541,8 @@ Windows 不需要 Linux ionCube signal ABI patch。直接下载锁定版本的�
 - PHP 8.4 VS17 x64 Thread Safe Runtime ZIP。
 - PHP 8.4 VS17 x64 Development Package。
 - ionCube Windows VC17 x86-64 Loader。
+- 与 PHP 8.4 VS17 x64 Thread Safe ABI 匹配的 `php_redis.dll` 及必要依赖。
+- DuckDB Go Binding 所需的静态对象，或经锁定和签名的 DuckDB/C++ Runtime DLL。
 
 所有 ZIP 在解压前校验 SHA256。
 
@@ -826,6 +850,8 @@ PR workflow 只能读取主分支产生的安全依赖缓存，不应让不可�
 - `zentao-runtime php-cli -- -v`。
 - PHP API、ZTS 和扩展列表。
 - ionCube Loader 加载。
+- PHP Redis 扩展加载及版本检查。
+- DuckDB/Go Binding 版本、内存数据库启动和禁用外部 Extension 检查。
 - `libphp` 动态依赖检查。
 - 配置文件路径和扫描目录检查。
 
@@ -836,8 +862,10 @@ PR workflow 只能读取主分支产生的安全依赖缓存，不应让不可�
 - PHP 普通脚本。
 - PATH_INFO。
 - 上传和下载。
-- Session 跨请求持久化。
+- 本地文件 Session 跨请求持久化。
+- Linux/Docker 使用临时 Redis 服务验证 Redis Session Handler 的写入、读取、锁和删除；Windows 至少验证扩展加载，正式兼容矩阵还需要在可访问 Redis 的 Windows 集成环境执行相同契约测试。
 - 连续请求不复用请求级全局状态。
+- DuckDB 生成 ZSTD Parquet、关闭校验、重新读取和临时文件原子发布。
 - 优雅停止。
 
 ### 18.4 L3：禅道安装测试
@@ -873,6 +901,7 @@ PR workflow 只能读取主分支产生的安全依赖缓存，不应让不可�
 - 大附件上传下载。
 - Scheduler 长时间运行。
 - `SIGTERM`、异常退出和自动重启。
+- 双节点 NFS Parquet 并发发布、NFS 中断 spool、崩溃恢复和查询资源限制。
 
 L5、L6 可以放在 scheduled workflow 或 release candidate 环境，不应阻塞每个普通 PR。
 
@@ -952,12 +981,14 @@ Runtime revision 用于 PHP、FrankenPHP、ionCube 或打包脚本升级，但�
 
 - 三个平台 Runtime 构建成功。
 - ionCube 静态和运行验证成功。
+- PHP Redis 扩展在所有目标平台加载成功，Redis Session 契约在正式支持平台验证成功。
+- DuckDB 在三个目标平台加载并完成 Parquet 读写；Linux 双节点共享数据集协议验证成功。
 - 开源版 MySQL/PostgreSQL 安装测试成功。
 - 付费版解密测试成功。
 - Runtime/Full 包安装测试成功。
 - Docker 两个架构原生启动成功。
 - SBOM、SHA256 和签名生成成功。
-- 法务允许再分发 ionCube、MySQL 和其他共享库。
+- 法务允许再分发 ionCube、MySQL、DuckDB/Binding 和其他共享库。
 
 ### 20.3 发布顺序
 

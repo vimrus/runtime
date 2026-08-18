@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "controlSocket": "/tmp/zentao-runtime.sock",
+    "pidFile": "/tmp/zentao-runtime.pid",
+    "drainTimeout": "10s"
+  },
+  "web": {
+    "root": "/app",
+    "listen": "127.0.0.1:8080",
+    "threads": 4,
+    "readHeaderTimeout": "10s",
+    "idleTimeout": "30s",
+    "maxHeaderBytes": 16384
+  },
+  "observability": {
+    "enabled": true,
+    "datasetRoot": "/tmp/zentao-observability",
+    "spoolPath": "/tmp/zentao-spool",
+    "maxSpoolBytes": 67108864,
+    "maxBatchRows": 1000,
+    "maxBatchBytes": 1048576,
+    "flushInterval": "60s",
+    "metricsDays": 7,
+    "logDays": 7
+  }
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=ZenTao Runtime Scheduler
+Documentation=https://www.zentao.net/
+After=zentao-runtime.service
+Requires=zentao-runtime.service
+
+[Service]
+Type=simple
+User=zentao
+Group=zentao
+ExecStart=/opt/zentao/bin/zentao-runtime scheduler --config /opt/zentao/config/runtime.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/zentao/data /opt/zentao/config /opt/zentao/logs /opt/zentao/spool
+
+[Install]
+WantedBy=multi-user.target
