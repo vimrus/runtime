@@ -9,6 +9,7 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         curl \
+        file \
         libcurl4-openssl-dev \
         libfreetype6-dev \
         libicu-dev \

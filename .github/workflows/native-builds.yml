@@ -33,6 +33,12 @@ jobs:
       - name: Check out source
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.4.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
       - name: Build Linux ${{ matrix.arch }} Runtime
         run: scripts/native/build-linux.sh ${{ matrix.arch }}
 
@@ -42,6 +48,8 @@ jobs:
       - name: Assemble package
         run: |
           mkdir -p dist/package
+          scripts/package/generate-manifest.sh dist/poc-linux-${{ matrix.arch }}
+          scripts/package/generate-sbom.sh dist/poc-linux-${{ matrix.arch }}
           scripts/package/assemble-runtime.sh dist/poc-linux-${{ matrix.arch }} zentao-runtime-linux-${{ matrix.arch }} dist/package
           scripts/package/verify-package.sh dist/package/zentao-runtime-linux-${{ matrix.arch }}.tar.zst
 

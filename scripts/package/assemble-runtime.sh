@@ -17,8 +17,8 @@ readonly name="$2"
 readonly output_dir="$3"
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-if [[ ! -d "${staging}" ]] || [[ ! -f "${staging}/manifest.json" ]]; then
-    echo "staging directory with manifest.json is required" >&2
+if [[ ! -d "${staging}" ]]; then
+    echo "staging directory is required" >&2
     exit 1
 fi
 
