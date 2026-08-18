@@ -32,7 +32,7 @@ function Get-VerifiedFile {
     }
     $actual = (Get-FileHash -Algorithm SHA256 $Destination).Hash.ToLowerInvariant()
     if ($actual -ne $Sha256.ToLowerInvariant()) {
-        throw "SHA256 mismatch for $Url: expected $Sha256 got $actual"
+        throw "SHA256 mismatch for ${Url}: expected $Sha256 got $actual"
     }
 }
 
@@ -58,7 +58,11 @@ $env:CGO_ENABLED = "1"
 $env:CC = "clang"
 $env:CXX = "clang++"
 $env:CGO_CFLAGS = "-I$(Join-Path $develRoot 'include')"
-$env:CGO_LDFLAGS = "-L$phpRoot -lphp8ts"
+$develLib = Join-Path $develRoot "lib"
+if (-not (Test-Path (Join-Path $develLib "php8ts.lib"))) {
+    throw "php8ts.lib not found in devel pack: $develLib"
+}
+$env:CGO_LDFLAGS = "-L$phpRoot -L$develLib -lphp8ts"
 
 Push-Location $RepoRoot
 try {
