@@ -92,7 +92,9 @@ jobs:
 
       - name: Assemble Full package (Windows)
         shell: pwsh
-        run: bash scripts/package/assemble-full.sh dist/runtime-windows-x64 windows-x64 zentao-full-windows-x64 dist/package
+        run: |
+          choco install zstd -y --no-progress | Out-Null
+          bash scripts/package/assemble-full.sh dist/runtime-windows-x64 windows-x64 zentao-full-windows-x64 dist/package
 
       - name: Upload Windows package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

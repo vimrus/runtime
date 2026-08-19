@@ -93,7 +93,9 @@ jobs:
         run: ./scripts/windows/build.ps1
       - name: Assemble Full package (Windows)
         shell: pwsh
-        run: bash scripts/package/assemble-full.sh dist/runtime-windows-x64 windows-x64 zentao-full-windows-x64 dist/package
+        run: |
+          choco install zstd -y --no-progress | Out-Null
+          bash scripts/package/assemble-full.sh dist/runtime-windows-x64 windows-x64 zentao-full-windows-x64 dist/package
       - name: Size report (Windows)
         shell: pwsh
         run: bash scripts/package/size-report.sh dist/package/zentao-full-windows-x64.tar.zst dist/package/zentao-full-windows-x64.size.json

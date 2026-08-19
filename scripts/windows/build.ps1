@@ -101,7 +101,8 @@ Copy-Item (Join-Path $RepoRoot "config\runtime.example.json") (Join-Path $Stagin
 Copy-Item (Join-Path $RepoRoot "packaging\poc\php.ini") (Join-Path $Staging "config\php.ini")
 
 & (Join-Path $Staging "runtime\php.exe") -v | Out-Null
-& (Join-Path $Staging "runtime\php.exe") -d "zend_extension=$(Join-Path $Staging 'runtime\ioncube_loader_win_8.4.dll')" -r "exit(extension_loaded('ionCube Loader') ? 0 : 1);"
+$ioncubeDll = (Resolve-Path (Join-Path $Staging "runtime\ioncube_loader_win_8.4.dll")).Path
+& (Join-Path $Staging "runtime\php.exe") -d "zend_extension=$ioncubeDll" -r "exit(extension_loaded('ionCube Loader') ? 0 : 1);"
 if ($LASTEXITCODE -ne 0) { throw "ionCube Loader did not load on Windows PHP" }
 
 Write-Host "Windows Runtime staged: $Staging"
