@@ -151,10 +151,11 @@ $Root = (Resolve-Path $Root).Path.TrimEnd('\')
 New-Item -ItemType Directory -Force -Path "$Root\run", "$Root\logs", "$Root\config\conf.d" | Out-Null
 $runtime = Get-Content "$Root\config\runtime.json.tpl" -Raw
 $runtime = $runtime.Replace('@ABS_ROOT@', $Root.Replace('\', '\\'))
-Set-Content -Path "$Root\config\runtime.json" -Value $runtime -Encoding UTF8
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText("$Root\config\runtime.json", $runtime, $utf8NoBom)
 $php = Get-Content "$Root\config\php.ini.tpl" -Raw
 $php = $php.Replace('@ABS_ROOT@', $Root)
-Set-Content -Path "$Root\config\php.ini" -Value $php -Encoding UTF8
+[System.IO.File]::WriteAllText("$Root\config\php.ini", $php, $utf8NoBom)
 EOF
     cat > "${output_dir}/run.cmd" <<EOF
 @echo off
