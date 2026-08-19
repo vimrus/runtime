@@ -4,8 +4,8 @@
 /dist/
 /tmp/
 /.cache/
-/app-packages/*
-!/app-packages/README.md
+/app-packages/*.zip
+/app-packages/*/*.zip
 
 # Test and coverage output
 *.test
