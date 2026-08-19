@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 开发计划讨论稿 |
+| 状态 | Runtime 侧已实施并通过三平台原生矩阵验证；正式发布与禅道联合测试待执行 |
 | 日期 | 2026-08-18 |
 | 责任仓库 | `vimrus/runtime` |
 | 产品名称 | `zentao` |
@@ -205,3 +205,30 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
 6. Control Plane 首版是否只提供 CLI。
 7. Prometheus 指标是否对外开放及默认监听地址。
 8. 正式包的体积上限和增长审查阈值。
+
+## 17. 实施状态记录（2026-08-19）
+
+本计划阶段 0-5 的 Runtime 侧任务已全部实现，并在 GitHub-hosted Runner 上
+完成原生矩阵验证：
+
+- Linux amd64（`ubuntu-24.04`）、Linux arm64（`ubuntu-24.04-arm`）、
+  Windows x86_64（`windows-2025`）构建、冒烟测试和 Runtime/Full 包组装
+  全部通过。
+- DuckDB 已编入默认构建（`-tags duckdb`），事件 → Parquet → 受控查询
+  全链路在本机 PoC 与真实 Runner 构建中验证。
+- MySQL 8.4.11 三平台归档已锁定并校验；MySQL Supervisor 用真实二进制完成
+  初始化/启动/停止验证；Full 包在 Linux amd64 上完成端到端组装（约 917 MB
+  压缩，含 `mysqld` 与 manifest mysql 组件）。
+- 供应链：manifest、SBOM、SHA256SUMS、大小报告与 GPG 签名脚本已实现并
+  本地验证；release workflow 已接入签名、校验和 provenance attestation。
+- 故障验收：进程崩溃恢复、双节点滚动升级、Compose 冒烟、安装 dry-run、
+  Parquet spool 运行中补发均已通过。
+
+仍未完成且属于本计划最终交付范围的门槛：
+
+- 正式安装器（Windows 安装程序、Linux deb/rpm）与正式代码签名、容器镜像
+  多架构发布（GHCR）需要发布环境和权限。
+- 禅道版本联合测试（R-CI-03/R-CI-04）依赖 `Z-REL-01` 应用制品与禅道侧
+  适配实施，见 [禅道代码适配开发计划](./zentao-application-adaptation-plan.md)。
+- 未执行的平台或数据库测试（例如真实付费版 ionCube 代码、双节点 NFS
+  故障注入）在发布说明中明确列为限制，不以“理论兼容”替代验证。

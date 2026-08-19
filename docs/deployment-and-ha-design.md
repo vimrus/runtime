@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 详细设计讨论稿 |
+| 状态 | Runtime 侧已实施；Session/NFS/Redis 共享后端待禅道适配验证 |
 | 日期 | 2026-08-18 |
 | 产品名称 | `zentao` |
 | Runtime Host | `zentao-runtime` |
@@ -552,3 +552,12 @@ Keepalived 建议使用非抢占策略，升级完成后不强制让 VIP 回到�
 - 节点可以排空、升级、验证和重新加入。
 - 数据库、NFS 或 Redis 整体故障时能够明确降级，不把责任错误归因于应用负载均衡。
 - 云负载均衡和自建 Keepalived + Caddy Gateway 使用同一 App readiness 与代理头契约。
+
+## 19. 实施状态（2026-08-19）
+
+- 内嵌 Caddy Gateway 配置生成（least_conn、主动健康检查、非幂等请求不
+  自动重试）与 Keepalived 模板/诊断脚本已实现。
+- 双节点滚动升级 E2E 已通过：共享 releases 卷、独立 current 指针，升级
+  节点 B 时节点 A 保持 v1 服务，随后升级节点 A。
+- Session/附件/NFS/Redis 的实际共享后端验证依赖禅道侧适配实施，当前
+  readiness/健康检查与配置一致性契约已写入 adaptation plan。

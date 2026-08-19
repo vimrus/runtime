@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 开发计划讨论稿 |
+| 状态 | 契约已冻结、改动点已定位；禅道代码实施待确认后执行 |
 | 日期 | 2026-08-18 |
 | 责任代码库 | `zentaopms`、`zentaoext`、`zentaomax`、`zentaoipd`、`zentaopatch` |
 | Runtime 计划 | [zentao 集成环境开发计划](./runtime-development-plan.md) |

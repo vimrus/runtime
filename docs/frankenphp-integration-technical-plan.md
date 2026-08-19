@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 方案讨论稿 |
+| 状态 | 已实施（Linux amd64/arm64 与 Windows x64 构建通过） |
 | 日期 | 2026-08-18 |
 | PHP 基线 | PHP 8.4 ZTS |
 | Web Runtime | 自研 Go Host + Caddy Library + FrankenPHP Library（Classic mode） |
@@ -603,3 +603,14 @@ readelf -Ws libphp.so | grep zend_signal
 - ionCube Loaders：<https://www.ioncube.com/loaders.php>
 - DuckDB Go API：<https://github.com/duckdb/duckdb-go>
 - DuckDB Parquet 文档：<https://duckdb.org/docs/stable/data/parquet/overview>
+
+## 22. 实施状态（2026-08-19）
+
+- Linux amd64：PHP 8.4.24 ZTS + ionCube Loader + DuckDB 构建与 PoC 全链路
+  验证通过。
+- Linux arm64：在 `ubuntu-24.04-arm` 原生 Runner 上完成构建、冒烟与包
+  组装，ionCube arm64 Loader 校验通过。
+- Windows x86_64：在 `windows-2025` 原生 Runner 上完成构建、ionCube
+  Loader 加载验证与 Full 包组装。
+- ionCube 符号检查与 `zend_signal` ABI Shim 保持最小范围；Loader 升级时
+  仍需重新执行未定义符号 diff。

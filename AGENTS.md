@@ -20,7 +20,16 @@ zentao 是禅道面向 Windows、Linux 和 Docker 的新一代集成运行环境
 
 ## 当前阶段
 
-项目已完成首个 Linux amd64 Runtime PoC，包含 Runtime Host、GitHub Actions Workflow、构建脚本、PHP 补丁和集成测试；Windows、Linux arm64、正式打包、队列及其他运行时能力仍处于设计或待实现阶段。
+项目已实现 runtime-development-plan 阶段 0-5 的全部 Runtime 侧任务，并在
+GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生
+构建矩阵（含 ionCube 与 DuckDB）。已交付：Control Plane、分层健康、
+Queue Engine、DuckDB/Parquet 可观测性、升级事务、Linux/Windows 服务集成、
+Runtime/Full 打包、签名供应链和 CI workflow。
+
+禅道侧尚未修改：适配计划已冻结联合契约（第 17 节）并定位具体改动点
+（第 18 节），待确认后按 `docs/zentao-application-adaptation-plan.md`
+实施。正式安装器、代码签名、Docker 多架构镜像推送和再分发法务确认仍需
+发布环境与权限。
 
 开始开发前必须先阅读与任务相关的设计文档，不能绕过已经确认的架构边界：
 

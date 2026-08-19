@@ -5,9 +5,9 @@
 本文件冻结 Runtime Alpha 的 PHP Queue Bridge v1 数据契约。Bridge 是 `zentao-runtime`
 与禅道 PHP Queue Service 之间的私有接口，不是公共 Web API，也不属于 APIv2。
 
-本阶段定义 DTO、版本、错误模型、大小限制和 Fake Bridge。真实 PHP 路由、Caddy 专用
-loopback Listener、每次启动随机凭据及端到端鉴权属于 `R-QUEUE-01` 与应用侧
-`Z-QUEUE-03` 的联合工作。
+实施状态（2026-08-19）：Go 侧 DTO、Fake Bridge、HTTP 客户端、Worker/租约/Reaper
+与 Host 集成已完成；真实 PHP 路由、Caddy 专用 loopback Listener、每次启动随机
+凭据及端到端鉴权属于应用侧 `Z-QUEUE-03` 的联合工作，尚未实施。
 
 Go Runtime 不连接数据库、不导入数据库 Driver、不保存数据库凭据，也不包含业务 SQL。
 
@@ -74,3 +74,10 @@ Fake Bridge 不执行 SQL，不模拟数据库并发，也不能替代 MySQL、P
 ## 7. 兼容规则
 
 未知请求字段、错误的 Schema、超过大小或批次限制的请求必须在触发业务操作前拒绝。新增必填字段或改变字段语义必须升级为 `/v2`；v1 只能新增可选字段，并同时更新 Go/PHP 共享夹具和契约测试。
+
+## 8. 实施状态（2026-08-19）
+
+- Go 侧 DTO、Fake Bridge、HTTP 客户端、Worker/租约/Reaper 与 Host 集成
+  已实现并通过单测；`internal/queue/bridge` 是本契约的唯一 Go 实现来源。
+- PHP 侧 Bridge 路由、鉴权与 Queue Service（`Z-QUEUE-03` 等）尚未实施，
+  实施时必须以本文件与 adaptation plan 第 17.2 节为准，并补齐跨仓夹具。

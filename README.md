@@ -2,7 +2,7 @@
 
 ZenTao Runtime 是禅道新一代集成运行环境。项目计划将 Caddy 和 FrankenPHP 作为 Go Library 嵌入自研 `zentao-runtime`，使用 PHP 8.4 ZTS Classic mode 运行禅道，并面向 Windows、Linux 和 Docker 提供一致的安装、运行和构建能力。
 
-当前仓库已完成首个 Linux amd64 PoC，用于验证 Runtime Host、Caddy、FrankenPHP、PHP 8.4 ZTS Classic mode 和 ionCube ABI 兼容方案。Windows、Linux arm64、正式打包及禅道业务适配仍按设计文档继续实现。
+当前仓库已实现 runtime-development-plan 的阶段 0-5 全部 Runtime 侧任务，并已在 GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生构建矩阵（含 ionCube 与 DuckDB）。禅道业务适配按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施，当前只读定位了改动点，尚未修改禅道代码。
 
 ## 已确认的技术边界
 
@@ -31,7 +31,7 @@ ZenTao Runtime 是禅道新一代集成运行环境。项目计划将 Caddy 和 
 - [DuckDB 与共享 Parquet 可观测性详细设计](./docs/duckdb-parquet-observability-design.md)
 - [Runtime Alpha 配置与 Control Plane 契约](./docs/runtime-alpha-control-contract.md)
 
-## Linux amd64 PoC
+## 本地构建与验证
 
 本地构建需要 Docker、BuildKit 和 `jq`：
 
@@ -56,9 +56,9 @@ ZENTAO_POC_APP_DIR=/home/z/zentaoipd scripts/poc/test-linux-amd64.sh
 
 IPD 付费代码不会复制到镜像、测试夹具、构建制品或公开仓库。GitHub-hosted Runner 只验证公开 PHP 夹具和 ionCube Loader 加载；真实加密代码测试应在有权访问该源码的本地或私有 Runner 上执行。
 
-PoC 运行镜像使用锁定 digest 的 Debian bookworm-slim，并在编译后删除 `phpdbg`、PHP 头文件及扩展构建工具。当前锁定版本的 Linux amd64 镜像约为 `114.6 MiB`，解压后的 `/opt/zentao` 制品约为 `177.9 MiB`；构建和测试会断言这些开发文件未进入交付物。
+PoC 运行镜像使用锁定 digest 的 Debian bookworm-slim，并在编译后删除 `phpdbg`、PHP 头文件及扩展构建工具。启用 DuckDB 后，Linux amd64 解压制品约 `233 MB`（`zentao-runtime` 约 `109 MB`）；构建和测试会断言这些开发文件未进入交付物。
 
-Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plane、生命周期状态、分层健康检查、结构化日志/审计和升级事务。配置样例在 [config/runtime.example.json](./config/runtime.example.json)，详细协议见 [Runtime Alpha 契约](./docs/runtime-alpha-control-contract.md)。
+Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plane、生命周期状态、分层健康检查、结构化日志/审计、升级事务、Queue Engine、DuckDB/Parquet 可观测性和诊断 CLI。配置样例在 [config/runtime.example.json](./config/runtime.example.json)，详细协议见 [Runtime Alpha 契约](./docs/runtime-alpha-control-contract.md)。
 
 ## 已实现能力
 
@@ -69,15 +69,26 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 - 结构化日志：`slog` JSON、敏感字段脱敏、大小轮转；Caddy access log 可写入独立文件。
 - 升级事务：Runtime/Application/Config/Data 目录分离，`app/current` 指针原子切换、备份与回滚状态机。
 - Queue Engine：PHP Queue Bridge 客户端（loopback-only + 随机凭据）、有界 Worker Pool（队列级并发、超时、取消、排空）、租约心跳与 fencing、Wakeup + 自适应轮询、Scheduler 注册表。
-- 可观测性：DuckDB Go Library 已编入默认 Linux 构建；事件信封与脱敏、节点分区 Batch/Spool/原子发布 Parquet、崩溃恢复、受控查询模板与节点自清理；CLI 提供 `logs`、`metrics`、`flush-observability`。
+- 可观测性：DuckDB Go Library 已编入默认 Linux 构建；事件信封与脱敏、节点分区 Batch/Spool/原子发布 Parquet、运行中自动补发、崩溃恢复、受控查询模板与节点自清理；CLI 提供 `logs`、`metrics`、`flush-observability`、`clean-observability`、`collect-logs`。
 - 平台与打包：systemd unit 与安装/卸载脚本、logrotate、Keepalived + Caddy Gateway 模板、Docker Compose（web/scheduler/mysql）、Runtime/Full 包组装、manifest/SBOM/校验和/大小报告；MySQL Supervisor 已用真实 MySQL 8.4.11 二进制完成初始化/启动/优雅停止验证。
 - 安全边界：构建产物校验不嵌入任何数据库 Driver（`verify-no-db-driver.sh`）；Windows 子进程挂入 Job Object（KILL_ON_JOB_CLOSE），Host 异常退出不会遗留孤儿进程。
 - 供应链：`sign-artifacts.sh` / `verify-signature.sh` / `verify-supply-chain.sh` 实现 GPG 签名与端到端校验（checksum + manifest + SBOM + 大小报告 + 签名），release workflow 已接入；受保护 release 另含 provenance attestation 与 release draft。
 - CI：PR lint/单测/文档检查、Linux amd64/arm64 原生构建矩阵、Windows x64 构建脚本、受保护 release workflow。
 - 验收测试：进程崩溃恢复、双节点滚动升级（A 保持 v1 服务期间升级 B，再升级 A）、Docker Compose 冒烟（healthcheck + Classic PHP）、安装 dry-run、升级事务 prepare/apply/rollback、应用版本合并测试均已通过。
 
+## 原生构建矩阵（已验证）
+
+`native-builds.yml` 在 GitHub-hosted Runner 上完整通过：
+
+| 平台 | Runner | 结果 |
+|---|---|---|
+| Linux amd64 | `ubuntu-24.04` | 构建 + 冒烟 + Runtime/Full 包 ✓ |
+| Linux arm64 | `ubuntu-24.04-arm` | 构建 + 冒烟 + Runtime/Full 包 ✓ |
+| Windows x86_64 | `windows-2025` | 构建 + ionCube 校验 + Runtime/Full 包 ✓ |
+
+本轮产物（GitHub Actions artifacts）：`zentao-runtime-linux-amd64`（约 67.5 MB）、`zentao-runtime-linux-arm64`（约 62.9 MB）、`zentao-runtime-windows-x64`（约 33.1 MB），以及对应的三个 Full 包（约 914.8 / 902.2 / 187.4 MB）。每个包均含 manifest、SBOM、SHA256 与大小报告。
+
 ## 尚未完成
 
-- 原生矩阵已通过：Linux amd64（ubuntu-24.04）、Linux arm64（ubuntu-24.04-arm）、Windows x86_64（windows-2025）均在 GitHub-hosted Runner 上完成构建、冒烟测试和 Runtime/Full 包组装（含 ionCube 与 DuckDB）。
-- 禅道业务适配（队列 PHP Service、缓存 Client、Session 共享、可观测性事件发送）按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施。
-- Full 包组装脚本已实现并锁定 MySQL 8.4.11 三平台归档；安装器和正式代码签名、容器镜像推送需要发布环境和法务再分发确认。
+- 禅道业务适配（队列 PHP Service、缓存 Client、Session 共享、可观测性事件发送）按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施；改动点已定位到第 18 节，待确认后修改禅道代码。
+- 正式安装器（Windows Inno Setup/WiX、Linux deb/rpm）、正式代码签名、Docker 多架构镜像推送（GHCR）与 MySQL/ionCube 再分发法务确认需要发布环境和权限。

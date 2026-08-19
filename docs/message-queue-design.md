@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 详细设计讨论稿 |
+| 状态 | Runtime 侧已实施；PHP Queue Service 待禅道适配 |
 | 日期 | 2026-08-17 |
 | Runtime Host | 自研 Go 程序 `zentao-runtime` |
 | Go 编排 | 标准 Go Worker Pool；Watermill Core 作为 POC 对照项 |
@@ -1305,3 +1305,14 @@ ZenTao Queue Management
 这套设计不增加默认第三方服务，不把数据库支持矩阵复制到 Go，适合单机，也适合只有
 两个应用节点的客户。当未来客户的吞吐或隔离需求超过业务数据库队列边界时，可以在保持
 PHP Handler Contract 的基础上增加 Redis、NATS 或其他传输，而不重写禅道业务 Handler。
+
+## 28. 实施状态（2026-08-19）
+
+- Queue Bridge v1 DTO、Fake Bridge 与 Go 客户端已实现并测试；本机传输的
+  鉴权、批量和版本协商见 `docs/queue-bridge-v1-contract.md`。
+- 有界 Worker Pool、租约/fencing、Wakeup 与自适应轮询、Reaper 和
+  Scheduler 注册表已实现并接入 Host；`runtime.json` 的 `queue` 配置段已
+  冻结默认值。
+- PHP Queue Service、DAO、管理界面与首批 Handler 迁移属于
+  `docs/zentao-application-adaptation-plan.md`，尚未实施；真实 MySQL/
+  PostgreSQL 上的并发与崩溃恢复契约测试在禅道侧实施后执行。

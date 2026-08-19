@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 详细设计讨论稿 |
+| 状态 | 已实施（阶段一至四落地，三平台原生构建通过） |
 | 日期 | 2026-08-18 |
 | Runtime Host | 自研 Go 程序 `zentao-runtime` |
 | HTTP Server | Caddy Go Library |
@@ -755,3 +755,18 @@ RuntimeRevision
 5. Control plane 是否需要提供本地 Web UI，或首期只提供 CLI。
 6. 是否对外提供 Prometheus metrics，以及默认监听策略。
 7. Caddy JSON 高级配置的开放范围和兼容承诺。
+
+## 26. 实施状态（2026-08-19）
+
+第 23 节实施阶段一至四已全部落地：
+
+- 自研 `cmd/zentao-runtime` 链接 Caddy 与 FrankenPHP Library，Classic
+  mode、PATH_INFO、上传与异常响应验证通过。
+- 配置 Schema、Control Plane（Unix Socket/Named Pipe、鉴权与审计）、
+  分层健康、结构化日志、升级事务与诊断 CLI 已实现。
+- Queue Engine、Scheduler、DuckDB/Parquet 可观测性与保留清理已接入 Host。
+- Linux systemd、Windows Service/Named Pipe/Job Object、Docker Compose
+  与 MySQL Supervisor 已实现；三平台原生构建矩阵通过。
+
+尚未实现的设计项：`backup/restore` 管理命令与 Caddy 高级 JSON 扩展的开放
+范围仍按待讨论事项处理，不属于当前 release 验收门槛。

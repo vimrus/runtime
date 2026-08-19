@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 详细设计讨论稿 |
+| 状态 | 已实施（Runtime 侧落地；NFS 真实故障注入待集成环境） |
 | 日期 | 2026-08-18 |
 | 查询与生成引擎 | DuckDB，作为 Go Library 嵌入 `zentao-runtime` |
 | 持久化格式 | Parquet |
@@ -560,3 +560,13 @@ DuckDB 会增加 Runtime 二进制体积和 CGO/C++ 链接复杂度；增加量�
 - 指标和日志中不包含已禁止的凭据、Session 和请求内容。
 - 默认查询可以按时间和节点裁剪文件，并受到行数、内存、线程和超时限制。
 - 可观测性启用后，业务请求 p95 增幅不超过 5%，且不会耗尽附件 NFS 或系统盘。
+
+## 19. 实施状态（2026-08-19）
+
+- DuckDB 1.5.5 / duckdb-go v2.10505.0 已编入默认 Linux 构建，并在
+  amd64/arm64/Windows 三平台原生构建中通过链接验证。
+- 事件信封、脱敏、Batch/Spool/原子发布、运行中自动补发、受控查询与
+  节点自清理已实现并接入 Host；CLI 提供 `logs`、`metrics`、
+  `flush-observability`、`clean-observability`、`collect-logs`。
+- 真实 NFS 中断/双节点共享数据集故障注入仍需在有 NFS 的集成环境执行；
+  当前以 spool 状态机与恢复单测覆盖，发布说明中列为未验证项。

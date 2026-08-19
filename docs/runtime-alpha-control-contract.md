@@ -2,9 +2,9 @@
 
 ## 1. 范围
 
-本文定义 Linux amd64 PoC 已实现的 Runtime Alpha 基础契约：版本化配置、生命周期状态、健康检查和本地 Control Plane。它不定义 PHP Queue Bridge、Scheduler、MySQL 管理、DuckDB 或禅道业务健康检查协议。
+本文定义 Runtime Alpha 已实现的基础契约：版本化配置、生命周期状态、健康检查和本地 Control Plane。它不定义 PHP Queue Bridge、Scheduler、MySQL 管理、DuckDB 或禅道业务健康检查协议。
 
-Windows 使用相同 JSON 请求响应模型，传输层将在 Windows Service 阶段替换为 Named Pipe；Linux 和 Docker 当前使用 Unix domain socket。
+Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-service` 已接入 Windows Service）；Linux 和 Docker 使用 Unix domain socket。
 
 ## 2. 配置文件
 

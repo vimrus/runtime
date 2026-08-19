@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 详细设计讨论稿 |
+| 状态 | 已实施（workflow 落地，三平台原生矩阵通过） |
 | 日期 | 2026-08-18 |
 | 关联方案 | [禅道 FrankenPHP 集成环境技术方案](./frankenphp-integration-technical-plan.md) |
 | CI 平台 | GitHub Actions |
@@ -1203,3 +1203,18 @@ links to test reports and SBOM
 8. 首期交付是否包含 Windows 安装器、deb 和 rpm，还是先发布压缩包。
 9. Full 包采用的 MySQL 8.4 具体 patch 版本。
 10. 正式发布需要支持的禅道历史升级起点。
+
+## 28. 实施状态（2026-08-19）
+
+本设计已落地为 `.github/workflows/` 下的 `ci.yml`、`poc-linux-amd64.yml`、
+`native-builds.yml`、`application-matrix.yml` 和 `release.yml`，并已在
+GitHub-hosted Runner 上验证：
+
+- PR/主分支 CI：lint、单测、文档链接检查、应用合并测试全部通过。
+- 原生矩阵：Linux amd64、Linux arm64、Windows x86_64 构建、冒烟和
+  Runtime/Full 包组装全部通过，产物包含 manifest、SBOM、SHA256 与大小报告。
+- release workflow 已包含 GPG 签名、provenance attestation 与 release
+  draft；正式签名密钥、镜像推送与受保护 environment 待发布环境配置。
+
+待确认项（第 27 节）中，Runner 标签已确认可用；剩余为镜像推送目标、首期
+安装器形态和历史升级起点等发布决策。
