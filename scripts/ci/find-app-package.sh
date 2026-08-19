@@ -42,6 +42,11 @@ for candidate in \
     fi
 done
 
+if [[ -f "${edition_dir}/www/index.php" ]]; then
+    echo "${edition_dir}"
+    exit 0
+fi
+
 matches=()
 while IFS= read -r -d '' zip; do
     matches+=("${zip}")
