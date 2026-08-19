@@ -51,8 +51,9 @@ $phpRoot = (Get-ChildItem (Join-Path $Work "php") -Directory | Select-Object -Fi
 if (-not $phpRoot) { $phpRoot = Join-Path $Work "php" }
 $develRoot = (Get-ChildItem (Join-Path $Work "devel") -Directory | Select-Object -First 1).FullName
 if (-not $develRoot) { $develRoot = Join-Path $Work "devel" }
-$loader = Join-Path (Join-Path $Work "ioncube") $Lock.ioncube.windows_x64.loader
-if (-not (Test-Path $loader)) { throw "ionCube Loader missing: $loader" }
+$loader = Get-ChildItem -Path (Join-Path $Work "ioncube") -Recurse -Filter $Lock.ioncube.windows_x64.loader -File | Select-Object -First 1
+if (-not $loader) { throw "ionCube Loader missing in $(Join-Path $Work 'ioncube')" }
+$loaderPath = $loader.FullName
 
 $env:CGO_ENABLED = "1"
 $env:CC = "clang"
@@ -77,7 +78,7 @@ try {
 
 Copy-Item (Join-Path $phpRoot "php.exe") (Join-Path $Staging "runtime\php.exe")
 Copy-Item (Join-Path $phpRoot "php8ts.dll") (Join-Path $Staging "runtime\php8ts.dll")
-Copy-Item $loader (Join-Path $Staging "runtime\ioncube_loader_win_8.4.dll")
+Copy-Item $loaderPath (Join-Path $Staging "runtime\ioncube_loader_win_8.4.dll")
 New-Item -ItemType Directory -Force -Path (Join-Path $Staging "runtime\ext") | Out-Null
 foreach ($extension in @("php_opcache.dll", "php_pdo_mysql.dll", "php_mysqli.dll", "php_pdo_pgsql.dll", "php_curl.dll", "php_gd.dll", "php_mbstring.dll", "php_openssl.dll", "php_intl.dll", "php_ldap.dll", "php_bcmath.dll", "php_sockets.dll", "php_zip.dll")) {
     $source = Join-Path (Join-Path $phpRoot "ext") $extension
