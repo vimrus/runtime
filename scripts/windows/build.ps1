@@ -47,8 +47,7 @@ Expand-Archive -Path $runtimeZip -DestinationPath (Join-Path $Work "php") -Force
 Expand-Archive -Path $develZip -DestinationPath (Join-Path $Work "devel") -Force
 Expand-Archive -Path $ioncubeZip -DestinationPath (Join-Path $Work "ioncube") -Force
 
-$phpRoot = (Get-ChildItem (Join-Path $Work "php") -Directory | Select-Object -First 1).FullName
-if (-not $phpRoot) { $phpRoot = Join-Path $Work "php" }
+$phpRoot = Join-Path $Work "php"
 $develRoot = (Get-ChildItem (Join-Path $Work "devel") -Directory | Select-Object -First 1).FullName
 if (-not $develRoot) { $develRoot = Join-Path $Work "devel" }
 $loader = Get-ChildItem -Path (Join-Path $Work "ioncube") -Recurse -Filter $Lock.ioncube.windows_x64.loader -File | Select-Object -First 1
@@ -58,7 +57,8 @@ $loaderPath = $loader.FullName
 $env:CGO_ENABLED = "1"
 $env:CC = "clang"
 $env:CXX = "clang++"
-$env:CGO_CFLAGS = "-I$(Join-Path $develRoot 'include')"
+$develInclude = Join-Path $develRoot "include"
+$env:CGO_CFLAGS = "-DFRANKENPHP_VERSION=$($Lock.frankenphp.version) -I$develInclude -I$develInclude\main -I$develInclude\TSRM -I$develInclude\Zend -I$develInclude\ext"
 $develLib = Join-Path $develRoot "lib"
 if (-not (Test-Path (Join-Path $develLib "php8ts.lib"))) {
     throw "php8ts.lib not found in devel pack: $develLib"
