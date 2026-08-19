@@ -94,20 +94,17 @@ func (s *Server) handle(connection *net.UnixConn) {
 	started := time.Now()
 	peer, err := peerCredentials(connection)
 	if err != nil {
-		s.write(connection, Failure("forbidden", "unable to identify control plane caller"))
-		s.audit(AuditEntry{Time: started.UTC(), Operation: "authenticate", Peer: peer, OK: false, ErrorCode: "forbidden", DurationMs: time.Since(started).Milliseconds()})
+		s.respond(connection, peer, "authenticate", started, Failure("forbidden", "unable to identify control plane caller"))
 		return
 	}
 	reader := bufio.NewReader(io.LimitReader(connection, maxRequestBytes+1))
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
-		s.write(connection, Failure("invalid_request", "request must be a single newline-delimited JSON object"))
-		s.audit(AuditEntry{Time: started.UTC(), Operation: "invalid_request", Peer: peer, OK: false, ErrorCode: "invalid_request", DurationMs: time.Since(started).Milliseconds()})
+		s.respond(connection, peer, "invalid_request", started, Failure("invalid_request", "request must be a single newline-delimited JSON object"))
 		return
 	}
 	if len(line) > maxRequestBytes {
-		s.write(connection, Failure("request_too_large", "request exceeds 65536 bytes"))
-		s.audit(AuditEntry{Time: started.UTC(), Operation: "request_too_large", Peer: peer, OK: false, ErrorCode: "request_too_large", DurationMs: time.Since(started).Milliseconds()})
+		s.respond(connection, peer, "request_too_large", started, Failure("request_too_large", "request exceeds 65536 bytes"))
 		return
 	}
 
@@ -115,27 +112,30 @@ func (s *Server) handle(connection *net.UnixConn) {
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		s.write(connection, Failure("invalid_request", "invalid control request"))
-		s.audit(AuditEntry{Time: started.UTC(), Operation: "invalid_request", Peer: peer, OK: false, ErrorCode: "invalid_request", DurationMs: time.Since(started).Milliseconds()})
+		s.respond(connection, peer, "invalid_request", started, Failure("invalid_request", "invalid control request"))
 		return
 	}
 	if request.Version != ProtocolVersion {
-		s.write(connection, Failure("unsupported_version", "unsupported control protocol version"))
-		s.audit(AuditEntry{Time: started.UTC(), Operation: request.Operation, Peer: peer, OK: false, ErrorCode: "unsupported_version", DurationMs: time.Since(started).Milliseconds()})
+		s.respond(connection, peer, request.Operation, started, Failure("unsupported_version", "unsupported control protocol version"))
 		return
 	}
 	if err := s.authorizer.Authorize(peer); err != nil {
-		s.write(connection, Failure("forbidden", "control plane caller is not authorized"))
-		s.audit(AuditEntry{Time: started.UTC(), Operation: request.Operation, Peer: peer, OK: false, ErrorCode: "forbidden", DurationMs: time.Since(started).Milliseconds()})
+		s.respond(connection, peer, request.Operation, started, Failure("forbidden", "control plane caller is not authorized"))
 		return
 	}
 	ctx := withPeer(context.Background(), peer)
 	response := s.handler.HandleControl(ctx, request)
+	s.respond(connection, peer, request.Operation, started, response)
+}
+
+// respond persists the audit entry before writing the response so callers
+// can never observe a reply before its audit record is durable.
+func (s *Server) respond(connection *net.UnixConn, peer Peer, operation string, started time.Time, response Response) {
 	errorCode := ""
 	if !response.OK && response.Error != nil {
 		errorCode = response.Error.Code
 	}
-	s.audit(AuditEntry{Time: started.UTC(), Operation: request.Operation, Peer: peer, OK: response.OK, ErrorCode: errorCode, DurationMs: time.Since(started).Milliseconds()})
+	s.audit(AuditEntry{Time: started.UTC(), Operation: operation, Peer: peer, OK: response.OK, ErrorCode: errorCode, DurationMs: time.Since(started).Milliseconds()})
 	s.write(connection, response)
 }
 
