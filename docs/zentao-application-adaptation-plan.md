@@ -390,3 +390,39 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
   `max/zentaopms.zip`、`ipd/zentaopms.zip`；每个目录只保留一个 zip，
   版本由包内 `VERSION` 识别。查找使用
   `scripts/ci/find-app-package.sh <edition>`。
+
+### 18.6 FrankenPHP Classic mode 兼容（Z-ENV-02，当前阻塞联合测试）
+
+真实应用包（ipd5.5 已核实）的 `zentaopms/www/index.php` 末尾使用：
+
+```php
+if(php_sapi_name() == 'frankenphp')
+{
+    \frankenphp_handle_request($handler);
+}
+else
+{
+    $handler();
+}
+```
+
+`frankenphp_handle_request()` 仅在 worker mode 下可用；Classic mode 调用会抛出
+`frankenphp_handle_request() called while not in worker mode`，导致 500。
+正确判断方式是 FrankenPHP 官方 profile 使用的 `FRANKENPHP_WORKER` 环境变量。
+
+禅道侧正式修复建议（待实施）：
+
+```php
+if(php_sapi_name() == 'frankenphp' && isset($_SERVER['FRANKENPHP_WORKER']))
+{
+    while(\frankenphp_handle_request($handler)) {}
+}
+else
+{
+    $handler();
+}
+```
+
+Runtime 集成环境生成时会对暂存副本应用最小兼容补丁
+（`scripts/ci/patch-classic-mode.sh`，只改 `app/releases/<version>/www/index.php`，
+不改原始 zip），作为正式修复前的临时 shim；正式修复后应移除该补丁逻辑。

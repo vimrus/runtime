@@ -28,6 +28,10 @@ cleanup() {
 trap cleanup EXIT
 
 web_root="$("${repo_root}/scripts/ci/stage-app-package.sh" "${app_input}" "${work}/app")"
+staged_release="$(dirname "${web_root}")"
+if [[ -f "${staged_release}/www/index.php" ]]; then
+    "${repo_root}/scripts/ci/patch-classic-mode.sh" "${staged_release}" >/dev/null
+fi
 
 cat > "${work}/runtime.json" <<EOF
 {

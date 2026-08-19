@@ -53,7 +53,12 @@ mkdir -p "${output_dir}"
 cp -a "${runtime_stage}/." "${output_dir}/"
 rm -f "${output_dir}/manifest.json" "${output_dir}/sbom.json"
 
-"${repo_root}/scripts/ci/stage-app-package.sh" "${package}" "${output_dir}" >/dev/null
+staged_web_root="$("${repo_root}/scripts/ci/stage-app-package.sh" "${package}" "${output_dir}")"
+staged_release="$(dirname "${staged_web_root}")"
+if [[ -f "${staged_release}/www/index.php" ]]; then
+    "${repo_root}/scripts/ci/patch-classic-mode.sh" "${staged_release}" \
+        || echo "warning: FrankenPHP Classic compatibility patch not applied" >&2
+fi
 
 mkdir -p "${output_dir}/run" "${output_dir}/logs" "${output_dir}/data" \
     "${output_dir}/observability" "${output_dir}/spool/observability" \
