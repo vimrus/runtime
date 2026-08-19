@@ -4,8 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       app_package_path:
-        description: "Runner-local path to a provided ZenTao application package (tar/tar.gz/tar.xz/tar.zst/zip) or unpacked app directory"
-        required: true
+        description: "Runner-local path to a provided ZenTao application package; leave empty to resolve from ZENTAO_APP_PACKAGES_DIR/<edition>"
+        required: false
+      edition:
+        description: "Edition used to resolve the package path when app_package_path is empty (opensource/biz/max/ipd)"
+        required: false
+        default: "ipd"
 
 permissions:
   contents: read
@@ -24,10 +28,18 @@ jobs:
       - name: Check out Runtime
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
+      - name: Resolve application package
+        run: |
+          if [[ -n "${{ github.event.inputs.app_package_path }}" ]]; then
+            echo "PACKAGE=${{ github.event.inputs.app_package_path }}" >> "${GITHUB_ENV}"
+          else
+            echo "PACKAGE=$(scripts/ci/find-app-package.sh ${{ github.event.inputs.edition }})" >> "${GITHUB_ENV}"
+          fi
+
       - name: Verify and stage ${{ matrix.edition }} package
         run: |
           root="$(mktemp -d)"
-          web_root="$(scripts/ci/stage-app-package.sh "${{ github.event.inputs.app_package_path }}" "${root}/app")"
+          web_root="$(scripts/ci/stage-app-package.sh "${PACKAGE}" "${root}/app")"
           test -f "${web_root}/index.php"
           echo "edition artifact staged: ${{ matrix.edition }}"
           echo "web_root=${web_root}" >> "${GITHUB_ENV}"
@@ -35,7 +47,7 @@ jobs:
       - name: Reject forbidden contents
         run: |
           root="$(mktemp -d)"
-          scripts/ci/stage-app-package.sh "${{ github.event.inputs.app_package_path }}" "${root}/app" >/dev/null
+          scripts/ci/stage-app-package.sh "${PACKAGE}" "${root}/app" >/dev/null
           for forbidden in .git __pycache__ node_modules .cache; do
             if find "${root}/app/app/releases" -name "${forbidden}" -print -quit | grep -q .; then
               echo "package contains forbidden entry: ${forbidden}" >&2

@@ -384,3 +384,9 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
   readiness 与 PHP 入口冒烟。
 - CI：`application-matrix.yml` 在 private/self-hosted Runner 上通过
   `app_package_path` 输入消费外部包，付费制品不上传公开 artifact。
+- 本地约定目录（`ZENTAO_APP_PACKAGES_DIR` 默认
+  `<workspace>/app-packages`）：
+  `opensource/zentao-app.zip`、`biz/zentao-app.zip`、
+  `max/zentao-app.zip`、`ipd/zentao-app.zip`；每个目录只保留一个 zip，
+  版本由包内 `VERSION` 识别。查找使用
+  `scripts/ci/find-app-package.sh <edition>`。
