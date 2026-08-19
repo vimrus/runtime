@@ -75,6 +75,7 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 - 供应链：`sign-artifacts.sh` / `verify-signature.sh` / `verify-supply-chain.sh` 实现 GPG 签名与端到端校验（checksum + manifest + SBOM + 大小报告 + 签名），release workflow 已接入；受保护 release 另含 provenance attestation 与 release draft。
 - CI：PR lint/单测/文档检查、Linux amd64/arm64 原生构建矩阵、Windows x64 构建脚本、受保护 release workflow。
 - 验收测试：进程崩溃恢复、双节点滚动升级（A 保持 v1 服务期间升级 B，再升级 A）、Docker Compose 冒烟（healthcheck + Classic PHP）、安装 dry-run、升级事务 prepare/apply/rollback、应用版本合并测试均已通过。
+- 禅道应用制品接入：由外部发布流程提供平台无关应用包（`www/` 根目录），runtime 通过 `scripts/ci/stage-app-package.sh` 解包到 `app/releases/<version>` 并切换 `app/current`，`tests/e2e/zentao-app-smoke.sh` 负责联合冒烟。
 
 ## 原生构建矩阵（已验证）
 
@@ -90,5 +91,5 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 
 ## 尚未完成
 
-- 禅道业务适配（队列 PHP Service、缓存 Client、Session 共享、可观测性事件发送）按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施；改动点已定位到第 18 节，待确认后修改禅道代码。
+- 禅道业务适配（队列 PHP Service、缓存 Client、Session 共享、可观测性事件发送）按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施；改动点已定位到第 18 节。应用制品由外部流程提供，runtime 侧接入工具已就绪，待提供真实包后执行安装/登录/队列联合测试。
 - 正式安装器（Windows Inno Setup/WiX、Linux deb/rpm）、正式代码签名、Docker 多架构镜像推送（GHCR）与 MySQL/ionCube 再分发法务确认需要发布环境和权限。

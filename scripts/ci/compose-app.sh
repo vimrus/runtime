@@ -4,6 +4,10 @@
 # source directories following the include order:
 #   opensource -> biz -> max -> ipd
 #
+# NOTE: production application packages are provided by the ZenTao release
+# pipeline (Z-REL-01). This script is only a synthetic fallback for contract
+# tests; use stage-app-package.sh to consume provided packages.
+#
 # Usage: compose-app.sh <editions-dir> <output-dir> <edition>
 # Editions: opensource|biz|max|ipd
 

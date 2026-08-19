@@ -365,3 +365,22 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
 - 改动点：Queue/Cache 的 DDL、UPSERT、影响行数与时间精度差异放入对应
   DAO 或 innovation 扩展，不在业务模块散布 driver 判断；MySQL 与
   PostgreSQL 为强制契约测试门槛。
+
+### 18.5 应用制品交付契约（Z-REL-01，外部流程提供）
+
+禅道各版本应用包由外部发布流程生成并校验，runtime 仓库不负责合并或打包。
+提供给联合测试的制品必须满足：
+
+- 格式：`tar`/`tar.gz`/`tar.xz`/`tar.zst`/`zip`，或已解包的应用目录；
+  压缩包内允许存在一层版本目录，也允许文件直接在包根。
+- 根布局：`www/` 下包含 `index.php`、`install.php`、`api.php` 等入口；
+  框架、模块、扩展随应用包合并结果一起提供（对应禅道现有
+  `zentaoext`/`zentaomax`/`zentaoipd` 合并产物）。
+- 元数据：建议包含 `VERSION` 或等价版本标识；不包含 `.git`、测试缓存、
+  开发依赖和非目标版本代码。
+- 消费方式：`scripts/ci/stage-app-package.sh <package> <install-root>`
+  解包到 `<install-root>/app/releases/<version>` 并切换 `app/current`；
+  `tests/e2e/zentao-app-smoke.sh` 在 Runtime 容器中执行
+  readiness 与 PHP 入口冒烟。
+- CI：`application-matrix.yml` 在 private/self-hosted Runner 上通过
+  `app_package_path` 输入消费外部包，付费制品不上传公开 artifact。

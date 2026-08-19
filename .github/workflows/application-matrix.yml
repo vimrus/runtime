@@ -1,19 +1,20 @@
-name: Application composition matrix
+name: Application package matrix
 
 on:
   workflow_dispatch:
     inputs:
-      editions_dir:
-        description: "Local path (on the runner) containing opensource/biz/bizext/max/ipd sources"
+      app_package_path:
+        description: "Runner-local path to a provided ZenTao application package (tar/tar.gz/tar.xz/tar.zst/zip) or unpacked app directory"
         required: true
 
 permissions:
   contents: read
 
-# This workflow runs only on private/self-hosted runners with access to the
-# paid edition sources. It never uploads paid code to public artifacts.
+# Consumes externally produced, platform-independent ZenTao application
+# packages (Z-REL-01). Runs only on private/self-hosted runners with access
+# to paid packages; packages are never uploaded to public artifacts.
 jobs:
-  compose:
+  verify-and-stage:
     strategy:
       fail-fast: false
       matrix:
@@ -23,11 +24,21 @@ jobs:
       - name: Check out Runtime
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - name: Compose ${{ matrix.edition }} application
-        run: scripts/ci/compose-app.sh "${{ github.event.inputs.editions_dir }}" dist/app ${{ matrix.edition }}
-
-      - name: Verify application artifact
+      - name: Verify and stage ${{ matrix.edition }} package
         run: |
-          test -f dist/app/zentao-app-${{ matrix.edition }}/www/index.php
-          test ! -d dist/app/zentao-app-${{ matrix.edition }}/.git
-          echo "edition artifact verified: ${{ matrix.edition }}"
+          root="$(mktemp -d)"
+          web_root="$(scripts/ci/stage-app-package.sh "${{ github.event.inputs.app_package_path }}" "${root}/app")"
+          test -f "${web_root}/index.php"
+          echo "edition artifact staged: ${{ matrix.edition }}"
+          echo "web_root=${web_root}" >> "${GITHUB_ENV}"
+
+      - name: Reject forbidden contents
+        run: |
+          root="$(mktemp -d)"
+          scripts/ci/stage-app-package.sh "${{ github.event.inputs.app_package_path }}" "${root}/app" >/dev/null
+          for forbidden in .git __pycache__ node_modules .cache; do
+            if find "${root}/app/app/releases" -name "${forbidden}" -print -quit | grep -q .; then
+              echo "package contains forbidden entry: ${forbidden}" >&2
+              exit 1
+            fi
+          done

@@ -49,6 +49,16 @@ jobs:
       - name: Docker Compose smoke
         run: tests/docker/compose-smoke.sh
 
+      - name: Application package smoke
+        run: |
+          appdir="$(mktemp -d)"
+          mkdir -p "${appdir}/www"
+          cp tests/fixtures/php/index.php tests/fixtures/php/state.php "${appdir}/www/"
+          printf '<?php // install\n' > "${appdir}/www/install.php"
+          printf '22.0\n' > "${appdir}/VERSION"
+          tar -czf /tmp/apppkg.tar.gz -C "${appdir}" .
+          tests/e2e/zentao-app-smoke.sh /tmp/apppkg.tar.gz
+
       - name: Upload PoC artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
