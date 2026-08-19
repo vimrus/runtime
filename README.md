@@ -78,7 +78,6 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 
 ## 尚未完成
 
-- Windows 原生构建尚未在真实 Windows Runner 上验证（脚本与版本锁已就绪）。
-- Linux arm64 与 Windows 原生 Runner 构建尚未执行；DuckDB/Parquet 的 Linux amd64 构建与查询已在 PoC 容器中验证。
+- 原生矩阵已通过：Linux amd64（ubuntu-24.04）、Linux arm64（ubuntu-24.04-arm）、Windows x86_64（windows-2025）均在 GitHub-hosted Runner 上完成构建、冒烟测试和 Runtime/Full 包组装（含 ionCube 与 DuckDB）。
 - 禅道业务适配（队列 PHP Service、缓存 Client、Session 共享、可观测性事件发送）按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施。
 - Full 包组装脚本已实现并锁定 MySQL 8.4.11 三平台归档；安装器和正式代码签名、容器镜像推送需要发布环境和法务再分发确认。
