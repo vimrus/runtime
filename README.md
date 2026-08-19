@@ -78,6 +78,7 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 - 禅道应用制品接入：由外部发布流程提供平台无关应用包（`www/` 根目录），runtime 通过 `scripts/ci/stage-app-package.sh` 解包到 `app/releases/<version>` 并切换 `app/current`，`tests/e2e/zentao-app-smoke.sh` 负责联合冒烟。
 - 应用包约定目录：`app-packages/{open,biz,max,ipd}/zentaopms.zip`（已加入 `.gitignore`，可用 `ZENTAO_APP_PACKAGES_DIR` 覆盖），查找用 `scripts/ci/find-app-package.sh <edition>`。
 - 集成环境生成：`scripts/package/build-integrated-env.sh <open|biz|max|ipd> <output>` 生成自包含可运行目录（runtime + PHP + 应用包 + 配置模板 + `run.sh`/`compose.yaml`/`db-init.sh`），无需安装向导。
+- Windows 集成环境：`--platform windows` 生成 Windows 布局（`runtime\zentao-runtime.exe` + PHP 依赖 DLL + `run.cmd`），并已在 `windows-2025` Runner 上完成启动与 ionCube 验证。
 
 ## 原生构建矩阵（已验证）
 
