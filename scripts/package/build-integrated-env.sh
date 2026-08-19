@@ -9,7 +9,7 @@
 # so no install wizard is required.
 #
 # Usage:
-#   build-integrated-env.sh <open|biz|max|ipd> <output-dir>
+#   build-integrated-env.sh <open|biz|max|ipd> <output-dir> [--platform linux|windows]
 #
 # Env overrides:
 #   ZENTAO_RUNTIME_STAGE       default: <repo>/dist/poc-linux-amd64
@@ -17,15 +17,28 @@
 
 set -Eeuo pipefail
 
-if [[ $# -ne 2 ]]; then
-    echo "usage: build-integrated-env.sh <open|biz|max|ipd> <output-dir>" >&2
+if [[ $# -lt 2 ]]; then
+    echo "usage: build-integrated-env.sh <open|biz|max|ipd> <output-dir> [--platform linux|windows]" >&2
     exit 2
 fi
 
 readonly edition="$1"
 readonly output_dir="$2"
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly runtime_stage="${ZENTAO_RUNTIME_STAGE:-${repo_root}/dist/poc-linux-amd64}"
+platform="linux"
+if [[ "${3:-}" == "--platform" ]]; then
+    platform="${4:-linux}"
+fi
+case "${platform}" in
+    linux|windows) ;;
+    *) echo "unknown platform: ${platform}" >&2; exit 2 ;;
+esac
+
+if [[ "${platform}" == "windows" ]]; then
+    readonly runtime_stage="${ZENTAO_RUNTIME_STAGE:-${repo_root}/dist/runtime-windows-x64}"
+else
+    readonly runtime_stage="${ZENTAO_RUNTIME_STAGE:-${repo_root}/dist/poc-linux-amd64}"
+fi
 
 case "${edition}" in
     open|biz|max|ipd) ;;
@@ -38,9 +51,20 @@ if [[ -z "${package}" ]]; then
     exit 1
 fi
 
-if [[ ! -x "${runtime_stage}/bin/zentao-runtime" ]]; then
-    echo "runtime stage is missing bin/zentao-runtime: ${runtime_stage}" >&2
-    echo "build it first with scripts/poc/build-linux-amd64.sh" >&2
+if [[ "${platform}" == "windows" ]]; then
+    runtime_binary="${runtime_stage}/runtime/zentao-runtime.exe"
+else
+    runtime_binary="${runtime_stage}/bin/zentao-runtime"
+fi
+if [[ "${platform}" == "windows" ]]; then
+    binary_ok=0
+    [[ -f "${runtime_binary}" ]] && binary_ok=1
+else
+    [[ -x "${runtime_binary}" ]] && binary_ok=1 || binary_ok=0
+fi
+if [[ "${binary_ok}" != "1" ]]; then
+    echo "runtime stage is missing ${runtime_binary}: ${runtime_stage}" >&2
+    echo "build it first with scripts/poc/build-linux-amd64.sh or scripts/windows/build.ps1" >&2
     exit 1
 fi
 
@@ -63,6 +87,97 @@ fi
 mkdir -p "${output_dir}/run" "${output_dir}/logs" "${output_dir}/data" \
     "${output_dir}/observability" "${output_dir}/spool/observability" \
     "${output_dir}/backups" "${output_dir}/config/conf.d"
+
+if [[ "${platform}" == "windows" ]]; then
+    mkdir -p "${output_dir}/runtime/ext" "${output_dir}/bin"
+    release_name="$(basename "${staged_release}")"
+    cat > "${output_dir}/config/runtime.json.tpl" <<'EOF'
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "controlSocket": "\\\\.\\pipe\\zentao-runtime",
+    "pidFile": "@ABS_ROOT@\\run\\runtime.pid",
+    "drainTimeout": "30s",
+    "auditLog": "@ABS_ROOT@\\logs\\audit.log",
+    "logPath": "@ABS_ROOT@\\logs\\runtime.log",
+    "logMaxBytes": 16777216,
+    "logMaxBackups": 5
+  },
+  "web": {
+    "root": "@ABS_ROOT@\\app\\releases\\@RELEASE@\\www",
+    "listen": "0.0.0.0:8080",
+    "threads": 8,
+    "readHeaderTimeout": "10s",
+    "idleTimeout": "30s",
+    "maxHeaderBytes": 16384,
+    "accessLog": "@ABS_ROOT@\\logs\\access.log"
+  }
+}
+EOF
+    sed -i "s|@RELEASE@|${release_name}|" "${output_dir}/config/runtime.json.tpl"
+    cat > "${output_dir}/config/php.ini.tpl" <<'EOF'
+zend_extension=@ABS_ROOT@\runtime\ioncube_loader_win_8.4.dll
+extension_dir=@ABS_ROOT@\runtime\ext
+extension=php_opcache.dll
+extension=php_pdo_mysql.dll
+extension=php_mysqli.dll
+extension=php_pdo_pgsql.dll
+extension=php_curl.dll
+extension=php_gd.dll
+extension=php_mbstring.dll
+extension=php_openssl.dll
+extension=php_intl.dll
+extension=php_ldap.dll
+extension=php_sockets.dll
+extension=php_zip.dll
+
+expose_php=Off
+display_errors=Off
+log_errors=On
+error_log=@ABS_ROOT@\logs\php-error.log
+memory_limit=512M
+max_execution_time=120
+post_max_size=110M
+upload_max_filesize=100M
+date.timezone=Asia/Shanghai
+session.use_strict_mode=1
+session.lazy_write=1
+opcache.enable=1
+EOF
+    cat > "${output_dir}/bin/render-config.ps1" <<'EOF'
+param([string]$Root = "")
+if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
+$Root = (Resolve-Path $Root).Path.TrimEnd('\')
+New-Item -ItemType Directory -Force -Path "$Root\run", "$Root\logs", "$Root\config\conf.d" | Out-Null
+$runtime = Get-Content "$Root\config\runtime.json.tpl" -Raw
+$runtime = $runtime.Replace('@ABS_ROOT@', $Root.Replace('\', '\\'))
+Set-Content -Path "$Root\config\runtime.json" -Value $runtime -Encoding UTF8
+$php = Get-Content "$Root\config\php.ini.tpl" -Raw
+$php = $php.Replace('@ABS_ROOT@', $Root)
+Set-Content -Path "$Root\config\php.ini" -Value $php -Encoding UTF8
+EOF
+    cat > "${output_dir}/run.cmd" <<EOF
+@echo off
+setlocal
+set "ROOT=%~dp0"
+set "ROOT=%ROOT:~0,-1%"
+set IN_CONTAINER=true
+set ZT_INSTALLED=true
+if not defined ZT_DB_DRIVER set ZT_DB_DRIVER=mysql
+if not defined ZT_DB_HOST set ZT_DB_HOST=127.0.0.1
+if not defined ZT_DB_PORT set ZT_DB_PORT=3306
+if not defined ZT_DB_NAME set ZT_DB_NAME=zentao
+if not defined ZT_DB_USER set ZT_DB_USER=zentao
+if not defined ZT_DB_PASSWORD set ZT_DB_PASSWORD=zentao
+if not defined ZT_DB_PREFIX set ZT_DB_PREFIX=zt_
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\bin\render-config.ps1" -Root "%ROOT%"
+"%ROOT%\runtime\zentao-runtime.exe" serve --config "%ROOT%\config\runtime.json" --install-root "%ROOT%"
+EOF
+    echo "integrated Windows environment generated: ${output_dir}"
+    echo "edition: ${edition} (platform: windows)"
+    echo "start with: ${output_dir}\\run.cmd"
+    exit 0
+fi
 
 cat > "${output_dir}/config/runtime.json.tpl" <<EOF
 {

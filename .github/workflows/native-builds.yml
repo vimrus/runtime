@@ -117,3 +117,42 @@ jobs:
           path: dist/package/zentao-full-windows-x64.*
           if-no-files-found: error
           retention-days: 7
+
+      - name: Integrated environment assembly and smoke (Windows)
+        shell: pwsh
+        env:
+          ZENTAO_RUNTIME_STAGE: dist/runtime-windows-x64
+          ZENTAO_APP_PACKAGES_DIR: .cache/synthetic
+        run: |
+          bash scripts/ci/make-synthetic-app-package.sh .cache/synthetic/open
+          bash scripts/package/build-integrated-env.sh open dist/zentao-open-win64 --platform windows
+          $root = (Resolve-Path dist/zentao-open-win64).Path
+          powershell -NoProfile -ExecutionPolicy Bypass -File "$root\bin\render-config.ps1" -Root $root
+          $proc = Start-Process -FilePath "$root\runtime\zentao-runtime.exe" `
+              -ArgumentList 'serve','--config',"$root\config\runtime.json",'--install-root',$root `
+              -PassThru -WindowStyle Hidden
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 30; $i++) {
+              Start-Sleep -Seconds 1
+              try {
+                $resp = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/_runtime/readiness" -TimeoutSec 2
+                if ($resp.StatusCode -eq 200) { $ready = $true; break }
+              } catch { }
+            }
+            if (-not $ready) { throw "Windows integrated environment readiness failed" }
+            $body = (Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/").Content
+            $json = $body | ConvertFrom-Json
+            if (-not $json.ioncube -or -not $json.zts) { throw "PHP/ionCube check failed: $body" }
+            & "$root\runtime\php.exe" -d "zend_extension=$root\runtime\ioncube_loader_win_8.4.dll" -r "exit(extension_loaded('ionCube Loader')?0:1);"
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload Windows integrated environment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-integrated-env-windows-x64
+          path: dist/zentao-open-win64
+          if-no-files-found: error
+          retention-days: 7
