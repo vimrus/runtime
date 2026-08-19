@@ -68,6 +68,7 @@ $loaderPath = $loader.FullName
 $env:CGO_ENABLED = "1"
 $env:CC = "clang"
 $env:CXX = "clang++"
+$env:CGO_LDFLAGS_ALLOW = "-Wl,-fuse-ld=lld"
 $develInclude = Join-Path $develRoot "include"
 $env:CGO_CFLAGS = "-DFRANKENPHP_VERSION=$($Lock.frankenphp.version) -I$vcpkgInclude -I$develInclude -I$develInclude\main -I$develInclude\TSRM -I$develInclude\Zend -I$develInclude\ext"
 $develLib = Join-Path $develRoot "lib"
