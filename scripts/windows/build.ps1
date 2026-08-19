@@ -68,20 +68,19 @@ $loaderPath = $loader.FullName
 $env:CGO_ENABLED = "1"
 $env:CC = "clang"
 $env:CXX = "clang++"
-$env:CGO_LDFLAGS_ALLOW = "-fuse-ld=lld"
 $develInclude = Join-Path $develRoot "include"
 $env:CGO_CFLAGS = "-DFRANKENPHP_VERSION=$($Lock.frankenphp.version) -I$vcpkgInclude -I$develInclude -I$develInclude\main -I$develInclude\TSRM -I$develInclude\Zend -I$develInclude\ext"
 $develLib = Join-Path $develRoot "lib"
 if (-not (Test-Path (Join-Path $develLib "php8ts.lib"))) {
     throw "php8ts.lib not found in devel pack: $develLib"
 }
-$env:CGO_LDFLAGS = "-fuse-ld=lld -L$vcpkgLib -L$phpRoot -L$develLib -lphp8ts"
+$env:CGO_LDFLAGS = "-L$vcpkgLib -L$phpRoot -L$develLib -lphp8ts"
 
 Push-Location $RepoRoot
 try {
     go build `
         -tags "nobadger nomysql nopgx nowatcher nobrotli nomercure" `
-        -ldflags "-s -w -X main.runtimeVersion=dev -X main.frankenPHPVersion=$($Lock.frankenphp.version) -X main.caddyVersion=$($Lock.caddy.version)" `
+        -ldflags "-s -w -X main.runtimeVersion=dev -X main.frankenPHPVersion=$($Lock.frankenphp.version) -X main.caddyVersion=$($Lock.caddy.version) -extldflags=-fuse-ld=lld" `
         -o (Join-Path $Staging "runtime\zentao-runtime.exe") `
         .\cmd\zentao-runtime
 } finally {
