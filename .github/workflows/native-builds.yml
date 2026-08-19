@@ -130,7 +130,9 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File "$root\bin\render-config.ps1" -Root $root
           $proc = Start-Process -FilePath "$root\runtime\zentao-runtime.exe" `
               -ArgumentList 'serve','--config',"$root\config\runtime.json",'--install-root',$root `
-              -PassThru -WindowStyle Hidden
+              -PassThru -WindowStyle Hidden `
+              -RedirectStandardOutput "$root\logs\run.out.log" `
+              -RedirectStandardError "$root\logs\run.err.log"
           try {
             $ready = $false
             for ($i = 0; $i -lt 30; $i++) {
@@ -140,7 +142,11 @@ jobs:
                 if ($resp.StatusCode -eq 200) { $ready = $true; break }
               } catch { }
             }
-            if (-not $ready) { throw "Windows integrated environment readiness failed" }
+            if (-not $ready) {
+              Get-Content "$root\logs\run.err.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
+              Get-Content "$root\logs\runtime.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
+              throw "Windows integrated environment readiness failed"
+            }
             $body = (Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8080/").Content
             $json = $body | ConvertFrom-Json
             if (-not $json.ioncube -or -not $json.zts) { throw "PHP/ionCube check failed: $body" }

@@ -39,6 +39,11 @@ sed -i \
     "${index}"
 
 if ! grep -q "FRANKENPHP_WORKER" "${index}"; then
+    if ! grep -q "frankenphp_handle_request" "${index}"; then
+        rm -f "${index}.zentao-orig"
+        echo "no FrankenPHP worker block found; no patch needed for ${index}"
+        exit 0
+    fi
     echo "FrankenPHP Classic compatibility patch could not be applied (pattern mismatch)" >&2
     echo "original copy kept at ${index}.zentao-orig" >&2
     exit 1
