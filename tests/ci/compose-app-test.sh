@@ -17,7 +17,7 @@ for edition in opensource biz bizext max ipd; do
     fi
 done
 
-for edition in opensource biz max ipd; do
+for edition in open biz max ipd; do
     "${repo_root}/scripts/ci/compose-app.sh" "${tmpdir}/editions" "${tmpdir}/out" "${edition}" >/dev/null
     [[ -f "${tmpdir}/out/zentao-app-${edition}/www/index.php" ]]
     if [[ -d "${tmpdir}/out/zentao-app-${edition}/.git" ]]; then

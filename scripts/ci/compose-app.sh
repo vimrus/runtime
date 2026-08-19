@@ -2,14 +2,14 @@
 #
 # Compose a platform-independent ZenTao application artifact from edition
 # source directories following the include order:
-#   opensource -> biz -> max -> ipd
+#   open(opensource) -> biz -> max -> ipd
 #
 # NOTE: production application packages are provided by the ZenTao release
 # pipeline (Z-REL-01). This script is only a synthetic fallback for contract
 # tests; use stage-app-package.sh to consume provided packages.
 #
 # Usage: compose-app.sh <editions-dir> <output-dir> <edition>
-# Editions: opensource|biz|max|ipd
+# Editions: open|biz|max|ipd
 
 set -Eeuo pipefail
 
@@ -35,7 +35,7 @@ apply_edition() {
 }
 
 case "${edition}" in
-    opensource)
+    open)
         apply_edition opensource
         ;;
     biz)

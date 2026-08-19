@@ -94,7 +94,7 @@ func Config(options Options) *caddy.Config {
 	}
 	if options.AccessLogPath != "" {
 		roll := true
-		config.AppsRaw["logging"] = caddyconfig.JSON(caddy.Logging{
+		config.Logging = &caddy.Logging{
 			Logs: map[string]*caddy.CustomLog{
 				"default": {
 					BaseLog: caddy.BaseLog{
@@ -104,7 +104,7 @@ func Config(options Options) *caddy.Config {
 					},
 				},
 			},
-		}, nil)
+		}
 	}
 	return config
 }

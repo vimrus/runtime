@@ -4,7 +4,7 @@
 # from the agreed package directory layout:
 #
 #   <ZENTAO_APP_PACKAGES_DIR>/
-#     opensource/zentaopms.zip      (or any single *.zip)
+#     open/zentaopms.zip            (or any single *.zip)
 #     biz/zentaopms.zip
 #     max/zentaopms.zip
 #     ipd/zentaopms.zip
@@ -14,7 +14,7 @@
 # also works:
 #   find-app-package.sh /path/to/zentaopms-ipd-22.0.zip
 #
-# Usage: find-app-package.sh <opensource|biz|max|ipd|path-to-package>
+# Usage: find-app-package.sh <open|biz|max|ipd|path-to-package>
 
 set -Eeuo pipefail
 
@@ -25,7 +25,7 @@ if [[ -f "${edition}" ]]; then
 fi
 
 case "${edition}" in
-    opensource|biz|max|ipd) ;;
+    open|biz|max|ipd) ;;
     *) echo "unknown edition: ${edition}" >&2; exit 2 ;;
 esac
 

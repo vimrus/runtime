@@ -10,7 +10,7 @@
 
 ```text
 runtime/app-packages/
-  opensource/zentaopms.zip
+  open/zentaopms.zip
   biz/zentaopms.zip
   max/zentaopms.zip
   ipd/zentaopms.zip

@@ -386,7 +386,7 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
   `app_package_path` 输入消费外部包，付费制品不上传公开 artifact。
 - 本地约定目录为 runtime 仓库内的 `app-packages/`（已加入
   `.gitignore`，付费包不会入库；`ZENTAO_APP_PACKAGES_DIR` 可覆盖）：
-  `opensource/zentaopms.zip`、`biz/zentaopms.zip`、
+  `open/zentaopms.zip`、`biz/zentaopms.zip`、
   `max/zentaopms.zip`、`ipd/zentaopms.zip`；每个目录只保留一个 zip，
   版本由包内 `VERSION` 识别。查找使用
   `scripts/ci/find-app-package.sh <edition>`。
