@@ -128,6 +128,8 @@ jobs:
           bash scripts/package/build-integrated-env.sh open dist/zentao-open-win64 --platform windows
           $root = (Resolve-Path dist/zentao-open-win64).Path
           powershell -NoProfile -ExecutionPolicy Bypass -File "$root\bin\render-config.ps1" -Root $root
+          & "$root\runtime\zentao-runtime.exe" version
+          if ($LASTEXITCODE -ne 0) { throw "zentao-runtime.exe version check failed: $LASTEXITCODE" }
           $proc = Start-Process -FilePath "$root\runtime\zentao-runtime.exe" `
               -ArgumentList 'serve','--config',"$root\config\runtime.json",'--install-root',$root `
               -PassThru -WindowStyle Hidden `
@@ -143,6 +145,10 @@ jobs:
               } catch { }
             }
             if (-not $ready) {
+              if ($proc.HasExited) {
+                Write-Host "runtime exited with code $($proc.ExitCode)"
+              }
+              Get-Content "$root\logs\run.out.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
               Get-Content "$root\logs\run.err.log" -ErrorAction SilentlyContinue | Select-Object -Last 30
               Get-Content "$root\logs\runtime.log" -ErrorAction SilentlyContinue | Select-Object -Last 20
               throw "Windows integrated environment readiness failed"
