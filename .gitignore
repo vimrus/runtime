@@ -4,6 +4,8 @@
 /dist/
 /tmp/
 /.cache/
+/app-packages/
+!/app-packages/README.md
 
 # Test and coverage output
 *.test
@@ -27,4 +29,3 @@ core.*
 .vscode/
 .DS_Store
 Thumbs.db
-

@@ -76,7 +76,7 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 - CI：PR lint/单测/文档检查、Linux amd64/arm64 原生构建矩阵、Windows x64 构建脚本、受保护 release workflow。
 - 验收测试：进程崩溃恢复、双节点滚动升级（A 保持 v1 服务期间升级 B，再升级 A）、Docker Compose 冒烟（healthcheck + Classic PHP）、安装 dry-run、升级事务 prepare/apply/rollback、应用版本合并测试均已通过。
 - 禅道应用制品接入：由外部发布流程提供平台无关应用包（`www/` 根目录），runtime 通过 `scripts/ci/stage-app-package.sh` 解包到 `app/releases/<version>` 并切换 `app/current`，`tests/e2e/zentao-app-smoke.sh` 负责联合冒烟。
-- 应用包约定目录：`/home/z/dev/app-packages/{opensource,biz,max,ipd}/zentao-app.zip`（可被 `ZENTAO_APP_PACKAGES_DIR` 覆盖），查找用 `scripts/ci/find-app-package.sh <edition>`。
+- 应用包约定目录：`app-packages/{opensource,biz,max,ipd}/zentaopms.zip`（已加入 `.gitignore`，可用 `ZENTAO_APP_PACKAGES_DIR` 覆盖），查找用 `scripts/ci/find-app-package.sh <edition>`。
 
 ## 原生构建矩阵（已验证）
 

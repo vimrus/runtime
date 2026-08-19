@@ -4,14 +4,15 @@
 # from the agreed package directory layout:
 #
 #   <ZENTAO_APP_PACKAGES_DIR>/
-#     opensource/zentao-app.zip      (or any single *.zip)
-#     biz/zentao-app.zip
-#     max/zentao-app.zip
-#     ipd/zentao-app.zip
+#     opensource/zentaopms.zip      (or any single *.zip)
+#     biz/zentaopms.zip
+#     max/zentaopms.zip
+#     ipd/zentaopms.zip
 #
-# Default package directory is <repo-root>/../app-packages, i.e.
-# /home/z/dev/app-packages. A direct file path also works:
-#   find-app-package.sh /path/to/zentao-app-ipd-22.0.zip
+# Default package directory is <repo-root>/app-packages and is gitignored,
+# so paid packages are never pushed to the repository. A direct file path
+# also works:
+#   find-app-package.sh /path/to/zentaopms-ipd-22.0.zip
 #
 # Usage: find-app-package.sh <opensource|biz|max|ipd|path-to-package>
 
@@ -29,12 +30,12 @@ case "${edition}" in
 esac
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-packages_dir="${ZENTAO_APP_PACKAGES_DIR:-$(dirname "${repo_root}")/app-packages}"
+packages_dir="${ZENTAO_APP_PACKAGES_DIR:-${repo_root}/app-packages}"
 edition_dir="${packages_dir}/${edition}"
 
 for candidate in \
-    "${edition_dir}/zentao-app.zip" \
-    "${edition_dir}/zentao-app-${edition}.zip"; do
+    "${edition_dir}/zentaopms.zip" \
+    "${edition_dir}/zentaopms-${edition}.zip"; do
     if [[ -f "${candidate}" ]]; then
         echo "${candidate}"
         exit 0
@@ -56,5 +57,5 @@ if [[ ${#matches[@]} -gt 1 ]]; then
 fi
 
 echo "no application package found for ${edition} in ${edition_dir}" >&2
-echo "place the zip at: ${edition_dir}/zentao-app.zip" >&2
+echo "place the zip at: ${edition_dir}/zentaopms.zip" >&2
 exit 1
