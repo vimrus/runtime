@@ -50,6 +50,17 @@ Expand-Archive -Path $ioncubeZip -DestinationPath (Join-Path $Work "ioncube") -F
 $phpRoot = Join-Path $Work "php"
 $develRoot = (Get-ChildItem (Join-Path $Work "devel") -Directory | Select-Object -First 1).FullName
 if (-not $develRoot) { $develRoot = Join-Path $Work "devel" }
+
+# FrankenPHP's Windows C sources require pthread.h; upstream provides it via
+# the vcpkg pthreads port. GitHub-hosted Windows images ship vcpkg.
+$vcpkgRoot = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:\vcpkg" }
+$vcpkgExe = Join-Path $vcpkgRoot "vcpkg.exe"
+if (-not (Test-Path $vcpkgExe)) { throw "vcpkg not found at $vcpkgExe" }
+& $vcpkgExe install pthreads --triplet x64-windows
+if ($LASTEXITCODE -ne 0) { throw "vcpkg install pthreads failed" }
+$vcpkgInclude = Join-Path $vcpkgRoot "installed\x64-windows\include"
+$vcpkgLib = Join-Path $vcpkgRoot "installed\x64-windows\lib"
+
 $loader = Get-ChildItem -Path (Join-Path $Work "ioncube") -Recurse -Filter $Lock.ioncube.windows_x64.loader -File | Select-Object -First 1
 if (-not $loader) { throw "ionCube Loader missing in $(Join-Path $Work 'ioncube')" }
 $loaderPath = $loader.FullName
@@ -58,12 +69,12 @@ $env:CGO_ENABLED = "1"
 $env:CC = "clang"
 $env:CXX = "clang++"
 $develInclude = Join-Path $develRoot "include"
-$env:CGO_CFLAGS = "-DFRANKENPHP_VERSION=$($Lock.frankenphp.version) -I$develInclude -I$develInclude\main -I$develInclude\TSRM -I$develInclude\Zend -I$develInclude\ext"
+$env:CGO_CFLAGS = "-DFRANKENPHP_VERSION=$($Lock.frankenphp.version) -I$vcpkgInclude -I$develInclude -I$develInclude\main -I$develInclude\TSRM -I$develInclude\Zend -I$develInclude\ext"
 $develLib = Join-Path $develRoot "lib"
 if (-not (Test-Path (Join-Path $develLib "php8ts.lib"))) {
     throw "php8ts.lib not found in devel pack: $develLib"
 }
-$env:CGO_LDFLAGS = "-L$phpRoot -L$develLib -lphp8ts"
+$env:CGO_LDFLAGS = "-L$vcpkgLib -L$phpRoot -L$develLib -lphp8ts"
 
 Push-Location $RepoRoot
 try {
