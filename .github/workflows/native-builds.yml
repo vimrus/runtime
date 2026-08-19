@@ -90,6 +90,12 @@ jobs:
         shell: pwsh
         run: ./scripts/windows/build.ps1
 
+      - name: Generate manifest and SBOM
+        shell: pwsh
+        run: |
+          bash scripts/package/generate-manifest.sh dist/runtime-windows-x64
+          bash scripts/package/generate-sbom.sh dist/runtime-windows-x64
+
       - name: Assemble Full package (Windows)
         shell: pwsh
         run: |
