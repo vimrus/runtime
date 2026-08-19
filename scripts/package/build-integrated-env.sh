@@ -156,6 +156,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $php = Get-Content "$Root\config\php.ini.tpl" -Raw
 $php = $php.Replace('@ABS_ROOT@', $Root)
 [System.IO.File]::WriteAllText("$Root\config\php.ini", $php, $utf8NoBom)
+[System.IO.File]::WriteAllText("$Root\runtime\php.ini", $php, $utf8NoBom)
 EOF
     cat > "${output_dir}/run.cmd" <<EOF
 @echo off
@@ -164,6 +165,7 @@ set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"
 set IN_CONTAINER=true
 set ZT_INSTALLED=true
+set PHPRC=%ROOT%\config
 if not defined ZT_DB_DRIVER set ZT_DB_DRIVER=mysql
 if not defined ZT_DB_HOST set ZT_DB_HOST=127.0.0.1
 if not defined ZT_DB_PORT set ZT_DB_PORT=3306

@@ -130,6 +130,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File "$root\bin\render-config.ps1" -Root $root
           & "$root\runtime\zentao-runtime.exe" version
           if ($LASTEXITCODE -ne 0) { throw "zentao-runtime.exe version check failed: $LASTEXITCODE" }
+          $env:PHPRC = "$root\config"
           $proc = Start-Process -FilePath "$root\runtime\zentao-runtime.exe" `
               -ArgumentList 'serve','--config',"$root\config\runtime.json",'--install-root',$root `
               -PassThru -WindowStyle Hidden `
