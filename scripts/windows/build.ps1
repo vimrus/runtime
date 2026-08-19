@@ -95,6 +95,7 @@ foreach ($extension in @("php_opcache.dll", "php_pdo_mysql.dll", "php_mysqli.dll
     $source = Join-Path (Join-Path $phpRoot "ext") $extension
     if (Test-Path $source) { Copy-Item $source (Join-Path $Staging "runtime\ext") }
 }
+Copy-Item (Join-Path $phpRoot "*.dll") (Join-Path $Staging "runtime") -ErrorAction SilentlyContinue
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Staging "config\conf.d"), (Join-Path $Staging "licenses") | Out-Null
 Copy-Item (Join-Path $RepoRoot "config\runtime.example.json") (Join-Path $Staging "config\runtime.example.json")
