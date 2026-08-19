@@ -354,7 +354,7 @@ func serve(args []string) error {
 		return fmt.Errorf("start Caddy: %w", err)
 	}
 	controlServer, err := control.ListenWithOptions(cfg.Runtime.ControlSocket, host, control.Options{
-		Authorizer: control.SameUserAuthorizer{},
+		Authorizer: controlAuthorizer(),
 		Auditor:    auditor,
 	})
 	if err != nil {
