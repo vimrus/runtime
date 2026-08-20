@@ -95,7 +95,17 @@ if (-not $msvcRoot) {
 }
 Write-Host "Using Visual Studio at $vsInstall"
 
-$sdkRoot = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows Kits\InstalledRoots" -ErrorAction SilentlyContinue).KitsRoot10
+$sdkRoot = ""
+foreach ($sdkCandidate in @(
+    (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows Kits\InstalledRoots" -ErrorAction SilentlyContinue).KitsRoot10,
+    "C:\Program Files (x86)\Windows Kits\10",
+    "C:\Program Files\Windows Kits\10"
+)) {
+    if ($sdkCandidate -and (Test-Path (Join-Path $sdkCandidate "Include"))) {
+        $sdkRoot = $sdkCandidate
+        break
+    }
+}
 $sdkVersion = ""
 if ($sdkRoot -and (Test-Path (Join-Path $sdkRoot "Include"))) {
     $sdkVersion = (Get-ChildItem (Join-Path $sdkRoot "Include") -Directory |
