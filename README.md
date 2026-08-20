@@ -67,6 +67,7 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 - CLI 扩展：`upgrade prepare/apply/rollback/status`、`logs/metrics`、`flush-observability/clean-observability`、`collect-logs` 诊断包、`php-cli`（与 Web 共用 PHP/ionCube）。
 - 分层健康检查：`/_runtime/liveness|readiness` 动态反映 Host 状态，`health --deep` 返回 runtime/php/app 组件结果。
 - 结构化日志：`slog` JSON、敏感字段脱敏、大小轮转；Caddy access log 可写入独立文件。
+- 自动请求日志：启用 `web.accessLog` 后，每次请求自动写入 `access.log`（JSON）：`request.uri`（URL）、`duration`（响应时间，秒）、`status`（状态码）、`size`、`method`、`remote_ip`；Caddy 错误与 PHP 错误分别进入同一 access 文件（`http.log.error`）和 `logs/php-error.log`，默认不记录 Cookie/Authorization。
 - 升级事务：Runtime/Application/Config/Data 目录分离，`app/current` 指针原子切换、备份与回滚状态机。
 - Queue Engine：PHP Queue Bridge 客户端（loopback-only + 随机凭据）、有界 Worker Pool（队列级并发、超时、取消、排空）、租约心跳与 fencing、Wakeup + 自适应轮询、Scheduler 注册表。
 - 可观测性：DuckDB Go Library 已编入默认 Linux 构建；事件信封与脱敏、节点分区 Batch/Spool/原子发布 Parquet、运行中自动补发、崩溃恢复、受控查询模板与节点自清理；CLI 提供 `logs`、`metrics`、`flush-observability`、`clean-observability`、`collect-logs`。

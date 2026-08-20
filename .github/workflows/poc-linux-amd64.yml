@@ -59,6 +59,12 @@ jobs:
           tar -czf /tmp/apppkg.tar.gz -C "${appdir}" .
           tests/e2e/zentao-app-smoke.sh /tmp/apppkg.tar.gz
 
+      - name: Access log smoke
+        run: |
+          appdir="$(mktemp -d)"
+          scripts/ci/make-synthetic-app-package.sh "${appdir}"
+          tests/e2e/access-log-smoke.sh "${appdir}"
+
       - name: Upload PoC artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

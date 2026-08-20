@@ -79,6 +79,9 @@ func Config(options Options) *caddy.Config {
 	}
 
 	persist := false
+	if options.AccessLogPath != "" {
+		server.Logs = &caddyhttp.ServerLogConfig{DefaultLoggerName: "access"}
+	}
 	config := &caddy.Config{
 		Admin: &caddy.AdminConfig{
 			Disabled: true,
@@ -96,12 +99,13 @@ func Config(options Options) *caddy.Config {
 		roll := true
 		config.Logging = &caddy.Logging{
 			Logs: map[string]*caddy.CustomLog{
-				"default": {
+				"access": {
 					BaseLog: caddy.BaseLog{
 						WriterRaw:  caddyconfig.JSONModuleObject(logging.FileWriter{Filename: options.AccessLogPath, Roll: &roll, RollSizeMB: 64}, "output", "file", nil),
 						EncoderRaw: caddyconfig.JSONModuleObject(logging.JSONEncoder{}, "format", "json", nil),
-						Level:      "INFO",
+						Level:      "DEBUG",
 					},
+					Include: []string{"http.log.access", "http.log.error"},
 				},
 			},
 		}

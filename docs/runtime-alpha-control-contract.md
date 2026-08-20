@@ -166,6 +166,22 @@ zentao-runtime metrics --since 1h --metric-name http.request.duration --control-
 `collect-logs` 生成受大小限制的诊断包（Runtime/Caddy/PHP 日志、审计、
 版本与脱敏配置摘要），不包含凭据、Token、请求内容或业务数据。
 
+## 8. 自动请求日志
+
+配置 `web.accessLog`（绝对路径）后，Runtime 自动记录每次请求：
+
+- `request.uri`：请求 URL（含查询串）；
+- `duration`：响应时间（秒，浮点）；
+- `status`：HTTP 状态码；
+- `size`：响应字节数；
+- `method`、`host`、`remote_ip`、`proto`；
+- `logger`：`http.log.access.access` 表示访问日志；
+  `http.log.error.*` 表示 Caddy 处理器错误（含 `error` 字段）。
+
+日志为 JSON Lines，写入后按 64 MB 轮转。默认不记录 Cookie、
+Authorization 等凭据头。PHP 侧错误消息由 `php.ini` 的 `error_log` 写入
+`logs/php-error.log`，与访问日志按时间戳关联。
+
 ## 5. Reload 边界
 
 `web.readHeaderTimeout`、`web.idleTimeout` 和 `web.maxHeaderBytes` 可以通过 Caddy Library 热加载。候选配置会先严格解析和校验，Caddy 拒绝候选配置时实例保持旧配置并进入 `degraded`。

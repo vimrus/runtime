@@ -17,6 +17,7 @@ readonly output="$1"
 mkdir -p "${output}/www"
 cat > "${output}/www/index.php" <<'EOF'
 <?php
+if(isset($_GET['fatal'])) trigger_error('synthetic fatal', E_USER_ERROR);
 header('Content-Type: application/json');
 echo json_encode(array('php' => PHP_VERSION, 'zts' => (bool) PHP_ZTS, 'ioncube' => extension_loaded('ionCube Loader')));
 EOF
