@@ -6,9 +6,13 @@ runner with Visual Studio LLVM/Clang and Go installed.
 
 .PARAMETER Staging
 Output staging directory.
+
+.PARAMETER SkipDuckDB
+Skip the DuckDB source build (use only when a DuckDB cache already exists).
 #>
 param(
-    [string]$Staging = "dist/runtime-windows-x64"
+    [string]$Staging = "dist/runtime-windows-x64",
+    [switch]$SkipDuckDB
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,18 +78,49 @@ $develLib = Join-Path $develRoot "lib"
 if (-not (Test-Path (Join-Path $develLib "php8ts.lib"))) {
     throw "php8ts.lib not found in devel pack: $develLib"
 }
-$env:CGO_LDFLAGS = "-L$vcpkgLib -L$phpRoot -L$develLib -lphp8ts -lphp8embed"
+
+# Build the locked DuckDB from source with MSVC. The official Windows prebuilt
+# archives are MinGW GNU archives (libstdc++), which cannot link against the
+# clang/lld + MSVC PHP toolchain, so a COFF .lib build is produced instead.
+$duckdbLibDir = Join-Path $RepoRoot ".cache\duckdb-windows\build\Release"
+if (-not $SkipDuckDB) {
+    & (Join-Path $PSScriptRoot "build-duckdb.ps1")
+    if ($LASTEXITCODE -ne 0) { throw "DuckDB source build failed" }
+}
+if (-not (Test-Path (Join-Path $duckdbLibDir "duckdb_static.lib"))) {
+    throw "DuckDB static library not found at $duckdbLibDir; run build-duckdb.ps1 first"
+}
+
+$env:CGO_LDFLAGS = "-L$vcpkgLib -L$phpRoot -L$develLib -L$duckdbLibDir " +
+    "-lphp8ts -lphp8embed " +
+    "-lduckdb_static -lduckdb_generated_extension_loader " +
+    "-lcore_functions_extension -ljson_extension -lparquet_extension " +
+    "-lws2_32 -lwsock32 -lrstrtmgr -lbcrypt"
 
 Push-Location $RepoRoot
 try {
     go build `
-        -tags "nobadger nomysql nopgx nowatcher nobrotli nomercure" `
+        -tags "duckdb duckdb_use_static_lib nobadger nomysql nopgx nowatcher nobrotli nomercure" `
         -ldflags "-s -w -X main.runtimeVersion=dev -X main.frankenPHPVersion=$($Lock.frankenphp.version) -X main.caddyVersion=$($Lock.caddy.version) -extldflags=-fuse-ld=lld" `
         -o (Join-Path $Staging "runtime\zentao-runtime.exe") `
         .\cmd\zentao-runtime
 } finally {
     Pop-Location
 }
+if ($LASTEXITCODE -ne 0) { throw "go build failed" }
+
+# Validate the DuckDB COFF static library end to end: the test opens an
+# in-memory database, writes Parquet through the writer and reads it back.
+Push-Location $RepoRoot
+try {
+    & go test `
+        -tags "duckdb duckdb_use_static_lib nobadger nomysql nopgx nowatcher nobrotli nomercure" `
+        -run "TestDuckDBWriterProducesReadableParquet" `
+        .\internal\observability\duckdb
+} finally {
+    Pop-Location
+}
+if ($LASTEXITCODE -ne 0) { throw "DuckDB Parquet smoke test failed" }
 
 Copy-Item (Join-Path $phpRoot "php.exe") (Join-Path $Staging "runtime\php.exe")
 Copy-Item (Join-Path $phpRoot "php8ts.dll") (Join-Path $Staging "runtime\php8ts.dll")

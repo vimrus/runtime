@@ -87,6 +87,7 @@
     "version": "1.5.5",
     "repository": "https://github.com/duckdb/duckdb.git",
     "commit": "d8cdaa33fda8df955cc76ef58a280f68f4cd43fa",
+    "source_sha256": "8eb72543d047018df3f5cd82f2fee5846d0682823b4860d699cdbf3f8459035a",
     "go_binding": {
       "module": "github.com/duckdb/duckdb-go/v2",
       "version": "v2.10505.0"

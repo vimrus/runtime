@@ -163,6 +163,7 @@ duckdb:
   version: <exact-version>
   repository: https://github.com/duckdb/duckdb.git
   commit: <verified-commit-sha>
+  source_sha256: <required-when-windows-source-build>
   go_binding:
     module: github.com/duckdb/duckdb-go/v2
     version: <exact-go-module-version>
@@ -542,7 +543,10 @@ Windows 不需要 Linux ionCube signal ABI patch。直接下载锁定版本的�
 - PHP 8.4 VS17 x64 Development Package。
 - ionCube Windows VC17 x86-64 Loader。
 - 与 PHP 8.4 VS17 x64 Thread Safe ABI 匹配的 `php_redis.dll` 及必要依赖。
-- DuckDB Go Binding 所需的静态对象，或经锁定和签名的 DuckDB/C++ Runtime DLL。
+- DuckDB 源码（`versions.lock.json` 锁定 commit 与 source SHA256），由
+  `scripts/windows/build-duckdb.ps1` 用 MSVC 编译为 COFF `.lib`，再通过
+  Go Binding 的 `duckdb_use_static_lib` tag 静态链接（官方 Windows 预编译
+  `.a` 是 MinGW 归档并依赖 libstdc++，不能用于当前 clang/lld + MSVC 工具链）。
 
 所有 ZIP 在解压前校验 SHA256。
 

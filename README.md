@@ -2,7 +2,7 @@
 
 ZenTao Runtime 是禅道新一代集成运行环境。项目计划将 Caddy 和 FrankenPHP 作为 Go Library 嵌入自研 `zentao-runtime`，使用 PHP 8.4 ZTS Classic mode 运行禅道，并面向 Windows、Linux 和 Docker 提供一致的安装、运行和构建能力。
 
-当前仓库已实现 runtime-development-plan 的阶段 0-5 全部 Runtime 侧任务，并已在 GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生构建矩阵（Linux 含 DuckDB，三平台均含 ionCube）。禅道业务适配按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施，当前只读定位了改动点，尚未修改禅道代码。
+当前仓库已实现 runtime-development-plan 的阶段 0-5 全部 Runtime 侧任务，并已在 GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生构建矩阵（三平台均含 DuckDB 与 ionCube）。禅道业务适配按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施，当前只读定位了改动点，尚未修改禅道代码。
 
 ## 已确认的技术边界
 
@@ -97,7 +97,9 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 
 - 禅道业务适配（队列 PHP Service、缓存 Client、Session 共享、可观测性事件发送）按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施；改动点已定位到第 18 节。应用制品由外部流程提供，runtime 侧接入工具已就绪，待提供真实包后执行安装/登录/队列联合测试。
 - 正式安装器（Windows Inno Setup/WiX、Linux deb/rpm）、正式代码签名、Docker 多架构镜像推送（GHCR）与 MySQL/ionCube 再分发法务确认需要发布环境和权限。
-- Windows DuckDB/Parquet：DuckDB 官方 Windows 预编译库是 MinGW GNU 归档
-  （`.a`），与当前 Windows 工具链（clang/lld + MSVC PHP）不兼容；Windows
-  版暂只提供按节点 JSONL 日志与轮转，不做 JSONL → Parquet 转换。待切换
-  MinGW 工具链或 DuckDB 提供 COFF `.lib` 后再启用。
+- Windows DuckDB/Parquet：官方 Windows 预编译库是 MinGW GNU 归档（`.a`），
+  与当前 clang/lld + MSVC PHP 工具链不兼容；Windows 构建改为从
+  `versions.lock.json` 锁定的 DuckDB 源码用 MSVC 自行编译 COFF `.lib`
+  （`scripts/windows/build-duckdb.ps1`），已启用 observability/Parquet。
+  运行环境需安装 VC++ 2015-2022 Redistributable（PHP 8.4 Windows 版同样
+  依赖该运行库）。

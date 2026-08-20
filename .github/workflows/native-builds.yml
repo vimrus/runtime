@@ -75,7 +75,7 @@ jobs:
 
   build-windows:
     runs-on: windows-2025
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Check out source
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -85,6 +85,12 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: true
+
+      - name: Cache DuckDB Windows source build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .cache/duckdb-windows
+          key: duckdb-windows-${{ hashFiles('versions.lock.json', 'scripts/windows/build-duckdb.ps1') }}
 
       - name: Build Windows x86_64 Runtime
         shell: pwsh
@@ -128,8 +134,8 @@ jobs:
           bash scripts/package/build-integrated-env.sh open dist/zentao-open-win64 --platform windows
           $root = (Resolve-Path dist/zentao-open-win64).Path
           powershell -NoProfile -ExecutionPolicy Bypass -File "$root\bin\render-config.ps1" -Root $root
-          & "$root\runtime\zentao-runtime.exe" version
-          if ($LASTEXITCODE -ne 0) { throw "zentao-runtime.exe version check failed: $LASTEXITCODE" }
+          $version = (& "$root\runtime\zentao-runtime.exe" version | Out-String | ConvertFrom-Json)
+          if ($version.duckdb -ne "v2.10505.0") { throw "duckdb version check failed: $($version.duckdb)" }
           $env:PHPRC = "$root\config"
           $proc = Start-Process -FilePath "$root\runtime\zentao-runtime.exe" `
               -ArgumentList 'serve','--config',"$root\config\runtime.json",'--install-root',$root `
@@ -158,6 +164,12 @@ jobs:
             $json = $body | ConvertFrom-Json
             if (-not $json.ioncube -or -not $json.zts) { throw "PHP/ionCube check failed: $body" }
             & "$root\runtime\php.exe" -d "zend_extension=$root\runtime\ioncube_loader_win_8.4.dll" -r "exit(extension_loaded('ionCube Loader')?0:1);"
+            if ($LASTEXITCODE -ne 0) { throw "ionCube Loader check failed" }
+            & "$root\runtime\zentao-runtime.exe" flush-observability --control-socket "\\.\pipe\zentao-runtime"
+            if ($LASTEXITCODE -ne 0) { throw "Windows observability flush failed" }
+            $parquet = Get-ChildItem -Path "$root\observability" -Recurse -Filter "*.parquet" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $parquet) { throw "no Parquet published by Windows observability" }
+            Write-Host "Windows observability Parquet: $($parquet.FullName)"
           } finally {
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           }

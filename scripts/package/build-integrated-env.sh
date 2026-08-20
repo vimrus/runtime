@@ -109,6 +109,20 @@ if [[ "${platform}" == "windows" ]]; then
     "readHeaderTimeout": "10s",
     "idleTimeout": "30s",
     "maxHeaderBytes": 16384
+  },
+  "observability": {
+    "enabled": true,
+    "datasetRoot": "@ABS_ROOT@\\observability",
+    "spoolPath": "@ABS_ROOT@\\spool\\observability",
+    "maxSpoolBytes": 1073741824,
+    "maxBatchRows": 10000,
+    "maxBatchBytes": 16777216,
+    "flushInterval": "60s",
+    "metricsDays": 30,
+    "logDays": 7,
+    "jsonlConvertInterval": "1h",
+    "jsonlConvertSources": ["access", "runtime"],
+    "jsonlKeepDays": 7
   }
 }
 EOF

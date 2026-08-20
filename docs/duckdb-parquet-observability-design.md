@@ -566,6 +566,8 @@ DuckDB 会增加 Runtime 二进制体积和 CGO/C++ 链接复杂度；增加量�
 ### 15.5 平台测试
 
 - Linux amd64、Linux arm64、Windows x64 的 DuckDB 加载和 Parquet 读写。
+- Windows 使用源码自编译的 MSVC COFF 静态库（官方预编译 `.a` 为 MinGW
+  归档，依赖 libstdc++），构建入口见 `scripts/windows/build-duckdb.ps1`。
 - Docker 本地卷和 NFS Volume。
 - Windows 非 ASCII 和带空格路径。
 - DuckDB 与 PHP Embed/FrankenPHP/ionCube 同进程启动、请求、查询和优雅退出。
