@@ -233,6 +233,11 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
 
 - 正式安装器（Windows 安装程序、Linux deb/rpm）与正式代码签名、容器镜像
   多架构发布（GHCR）需要发布环境和权限。
+- Windows DuckDB/Parquet：DuckDB 官方 Windows 预编译库是 MinGW GNU 归档
+  （`.a`）并依赖 libstdc++，与当前 Windows 工具链（clang/lld + MSVC
+  PHP）不兼容；Windows 暂只提供按节点 JSONL 日志与轮转，不启用
+  observability/Parquet（R-OBS-01 Windows 链接待 MinGW 工具链迁移或
+  DuckDB 提供 COFF `.lib` 后验证）。
 - 禅道版本联合测试（R-CI-03/R-CI-04）依赖 `Z-REL-01` 应用制品与禅道侧
   适配实施，见 [禅道代码适配开发计划](./zentao-application-adaptation-plan.md)。
 - 未执行的平台或数据库测试（例如真实付费版 ionCube 代码、双节点 NFS
