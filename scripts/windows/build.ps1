@@ -117,6 +117,7 @@ Push-Location $RepoRoot
 try {
     & go test `
         -tags "duckdb duckdb_use_static_lib nobadger nomysql nopgx nowatcher nobrotli nomercure" `
+        -ldflags "-extldflags=-fuse-ld=lld" `
         -run "TestDuckDBWriterProducesReadableParquet" `
         .\internal\observability\duckdb
 } finally {
