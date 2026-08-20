@@ -79,7 +79,7 @@ $env:CGO_LDFLAGS = "-L$vcpkgLib -L$phpRoot -L$develLib -lphp8ts -lphp8embed"
 Push-Location $RepoRoot
 try {
     go build `
-        -tags "duckdb nobadger nomysql nopgx nowatcher nobrotli nomercure" `
+        -tags "nobadger nomysql nopgx nowatcher nobrotli nomercure" `
         -ldflags "-s -w -X main.runtimeVersion=dev -X main.frankenPHPVersion=$($Lock.frankenphp.version) -X main.caddyVersion=$($Lock.caddy.version) -extldflags=-fuse-ld=lld" `
         -o (Join-Path $Staging "runtime\zentao-runtime.exe") `
         .\cmd\zentao-runtime
