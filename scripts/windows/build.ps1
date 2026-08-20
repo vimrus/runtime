@@ -82,9 +82,11 @@ if (-not (Test-Path (Join-Path $develLib "php8ts.lib"))) {
 # Build the locked DuckDB from source with MSVC. The official Windows prebuilt
 # archives are MinGW GNU archives (libstdc++), which cannot link against the
 # clang/lld + MSVC PHP toolchain, so a COFF .lib build is produced instead.
-$duckdbLibDir = Join-Path $RepoRoot ".cache\duckdb-windows\build\Release"
+$duckdbLibDir = Join-Path $RepoRoot ".cache\duckdb-windows\lib"
 if (-not $SkipDuckDB) {
-    & (Join-Path $PSScriptRoot "build-duckdb.ps1")
+    # Run in a child process: build-duckdb.ps1 imports the MSVC developer
+    # environment (INCLUDE/LIB/PATH), which must not leak into the Go link.
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build-duckdb.ps1")
     if ($LASTEXITCODE -ne 0) { throw "DuckDB source build failed" }
 }
 if (-not (Test-Path (Join-Path $duckdbLibDir "duckdb_static.lib"))) {

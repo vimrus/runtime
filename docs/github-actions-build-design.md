@@ -555,7 +555,7 @@ Windows 不需要 Linux ionCube signal ABI patch。直接下载锁定版本的�
 工具链跟随 FrankenPHP 官方 Windows workflow 的已验证组合，但最终 `go build` 目标改为自研 Runtime Host：
 
 ```text
-Visual Studio 2022 LLVM/Clang
+Visual Studio（2022/2026）LLVM/Clang
 Go locked by FrankenPHP go.mod/toolchain
 PHP VS17 TS Runtime
 PHP VS17 Development Package
