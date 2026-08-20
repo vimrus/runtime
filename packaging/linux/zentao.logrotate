@@ -1,18 +1,7 @@
-/opt/zentao/logs/runtime.log {
+/opt/zentao/logs/php-error.log {
     weekly
     rotate 5
-    maxsize 16M
-    missingok
-    notifempty
-    compress
-    delaycompress
-    copytruncate
-}
-
-/opt/zentao/logs/access.log {
-    weekly
-    rotate 5
-    maxsize 64M
+    maxsize 32M
     missingok
     notifempty
     compress

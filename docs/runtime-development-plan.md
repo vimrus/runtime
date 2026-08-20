@@ -216,6 +216,11 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
   全部通过。
 - DuckDB 已编入默认构建（`-tags duckdb`），事件 → Parquet → 受控查询
   全链路在本机 PoC 与真实 Runner 构建中验证。
+- 日志自动记录与 JSONL → Parquet 管线（2026-08-20）：Caddy 访问日志和
+  Runtime 结构化日志按节点命名（`access-<nodeID>.jsonl`、
+  `runtime-<nodeID>.jsonl`），每小时整点轮转并按 `jsonlConvertInterval`
+  同步为 Parquet；`convert-jsonl` 可手动触发且幂等，原始 JSONL 按
+  `jsonlKeepDays`（默认 7 天）保留后清理（R-LOG-01/R-OBS-02 扩展）。
 - MySQL 8.4.11 三平台归档已锁定并校验；MySQL Supervisor 用真实二进制完成
   初始化/启动/停止验证；Full 包在 Linux amd64 上完成端到端组装（约 917 MB
   压缩，含 `mysqld` 与 manifest mysql 组件）。

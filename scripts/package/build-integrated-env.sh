@@ -98,7 +98,6 @@ if [[ "${platform}" == "windows" ]]; then
     "controlSocket": "\\\\.\\pipe\\zentao-runtime",
     "pidFile": "@ABS_ROOT@\\run\\runtime.pid",
     "drainTimeout": "30s",
-    "auditLog": "@ABS_ROOT@\\logs\\audit.log",
     "logPath": "@ABS_ROOT@\\logs\\runtime.log",
     "logMaxBytes": 16777216,
     "logMaxBackups": 5
@@ -109,8 +108,7 @@ if [[ "${platform}" == "windows" ]]; then
     "threads": 8,
     "readHeaderTimeout": "10s",
     "idleTimeout": "30s",
-    "maxHeaderBytes": 16384,
-    "accessLog": "@ABS_ROOT@\\logs\\access.log"
+    "maxHeaderBytes": 16384
   }
 }
 EOF
@@ -189,7 +187,6 @@ cat > "${output_dir}/config/runtime.json.tpl" <<EOF
     "controlSocket": "@ABS_ROOT@/run/runtime.sock",
     "pidFile": "@ABS_ROOT@/run/runtime.pid",
     "drainTimeout": "30s",
-    "auditLog": "@ABS_ROOT@/logs/audit.log",
     "logPath": "@ABS_ROOT@/logs/runtime.log",
     "logMaxBytes": 16777216,
     "logMaxBackups": 5
@@ -200,8 +197,7 @@ cat > "${output_dir}/config/runtime.json.tpl" <<EOF
     "threads": 8,
     "readHeaderTimeout": "10s",
     "idleTimeout": "30s",
-    "maxHeaderBytes": 16384,
-    "accessLog": "@ABS_ROOT@/logs/access.log"
+    "maxHeaderBytes": 16384
   },
   "observability": {
     "enabled": true,
@@ -212,7 +208,10 @@ cat > "${output_dir}/config/runtime.json.tpl" <<EOF
     "maxBatchBytes": 16777216,
     "flushInterval": "60s",
     "metricsDays": 30,
-    "logDays": 7
+    "logDays": 7,
+    "jsonlConvertInterval": "1h",
+    "jsonlConvertSources": ["access", "runtime"],
+    "jsonlKeepDays": 7
   }
 }
 EOF

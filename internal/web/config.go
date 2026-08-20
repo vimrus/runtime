@@ -21,6 +21,7 @@ type Options struct {
 	IdleTimeout       time.Duration
 	MaxHeaderBytes    int
 	AccessLogPath     string
+	AccessLogKeepDays int
 }
 
 // Config builds the smallest useful Classic-mode Caddy configuration.
@@ -97,11 +98,27 @@ func Config(options Options) *caddy.Config {
 	}
 	if options.AccessLogPath != "" {
 		roll := true
+		keepDays := options.AccessLogKeepDays
+		if keepDays <= 0 {
+			keepDays = 7
+		}
+		// Hourly rolling creates many small segments; keep enough backups to
+		// honor the day-based retention before MaxBackups trims them.
+		rollKeep := keepDays*24 + 1
 		config.Logging = &caddy.Logging{
 			Logs: map[string]*caddy.CustomLog{
 				"access": {
 					BaseLog: caddy.BaseLog{
-						WriterRaw:  caddyconfig.JSONModuleObject(logging.FileWriter{Filename: options.AccessLogPath, Roll: &roll, RollSizeMB: 64}, "output", "file", nil),
+						WriterRaw: caddyconfig.JSONModuleObject(logging.FileWriter{
+							Filename:         options.AccessLogPath,
+							Roll:             &roll,
+							RollSizeMB:       64,
+							RollAtMinutes:    []int{0},
+							RollKeepDays:     keepDays,
+							RollKeep:         rollKeep,
+							RollCompression:  "none",
+							BackupTimeFormat: "2006-01-02T15-04-05.000",
+						}, "output", "file", nil),
 						EncoderRaw: caddyconfig.JSONModuleObject(logging.JSONEncoder{}, "format", "json", nil),
 						Level:      "DEBUG",
 					},

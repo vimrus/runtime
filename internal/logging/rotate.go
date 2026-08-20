@@ -11,19 +11,23 @@ import (
 	"time"
 )
 
-// RotatingFile is a size-limited, append-only log writer. When the active
-// file exceeds MaxBytes it is renamed to <name>.<timestamp>.rotated and the
-// oldest backups beyond MaxBackups are removed.
+// RotatingFile is an append-only log writer. When the active file exceeds
+// MaxBytes (or RollInterval has elapsed) it is renamed to
+// <name>-<timestamp>.log and the oldest backups beyond MaxBackups or
+// KeepDays are removed.
 type RotatingFile struct {
-	mu         sync.Mutex
-	path       string
-	maxBytes   int64
-	maxBackups int
-	file       *os.File
-	size       int64
+	mu           sync.Mutex
+	path         string
+	maxBytes     int64
+	maxBackups   int
+	rollInterval time.Duration
+	keepDays     int
+	file         *os.File
+	size         int64
+	lastRoll     time.Time
 }
 
-func NewRotatingFile(path string, maxBytes int64, maxBackups int) (*RotatingFile, error) {
+func NewRotatingFile(path string, maxBytes int64, maxBackups int, rollInterval time.Duration, keepDays int) (*RotatingFile, error) {
 	file, err := openAppend(path)
 	if err != nil {
 		return nil, err
@@ -33,7 +37,7 @@ func NewRotatingFile(path string, maxBytes int64, maxBackups int) (*RotatingFile
 		file.Close()
 		return nil, err
 	}
-	return &RotatingFile{path: path, maxBytes: maxBytes, maxBackups: maxBackups, file: file, size: info.Size()}, nil
+	return &RotatingFile{path: path, maxBytes: maxBytes, maxBackups: maxBackups, rollInterval: rollInterval, keepDays: keepDays, file: file, size: info.Size(), lastRoll: time.Now().UTC()}, nil
 }
 
 func openAppend(path string) (*os.File, error) {
@@ -46,6 +50,11 @@ func (r *RotatingFile) Write(data []byte) (int, error) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.rollInterval > 0 && time.Since(r.lastRoll) >= r.rollInterval {
+		if err := r.rotate(); err != nil {
+			return 0, err
+		}
+	}
 	if r.maxBytes > 0 && r.size+int64(len(data)) > r.maxBytes {
 		if err := r.rotate(); err != nil {
 			return 0, err
@@ -61,7 +70,7 @@ func (r *RotatingFile) rotate() error {
 		return err
 	}
 	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
-	backup := r.path + "." + stamp + ".rotated"
+	backup := r.path + "-" + stamp + ".log"
 	if err := os.Rename(r.path, backup); err != nil {
 		r.file, _ = openAppend(r.path)
 		return err
@@ -72,11 +81,45 @@ func (r *RotatingFile) rotate() error {
 	}
 	r.file = file
 	r.size = 0
+	r.lastRoll = time.Now().UTC()
+	r.pruneByDays()
 	return r.prune(backup)
 }
 
+func (r *RotatingFile) pruneByDays() {
+	if r.keepDays <= 0 {
+		return
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(r.keepDays) * 24 * time.Hour)
+	entries, err := os.ReadDir(filepath.Dir(r.path))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, filepath.Base(r.path)+"-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		stamp, err := rotationStamp(filepath.Join(filepath.Dir(r.path), name))
+		if err != nil || stamp.Before(cutoff) {
+			_ = os.Remove(filepath.Join(filepath.Dir(r.path), name))
+		}
+	}
+}
+
+// Prune removes rotated segments older than KeepDays without waiting for the
+// next write to trigger a rotation.
+func (r *RotatingFile) Prune() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneByDays()
+}
+
 func (r *RotatingFile) prune(_ string) error {
-	if r.maxBackups <= 0 {
+	// Day-based retention is the primary limit for JSONL segments; the
+	// size-based backup count would otherwise discard hourly segments long
+	// before jsonlKeepDays.
+	if r.maxBackups <= 0 || r.keepDays > 0 {
 		return nil
 	}
 	entries, err := os.ReadDir(filepath.Dir(r.path))
@@ -86,7 +129,7 @@ func (r *RotatingFile) prune(_ string) error {
 	var rotated []string
 	for _, entry := range entries {
 		name := entry.Name()
-		if strings.HasPrefix(name, filepath.Base(r.path)+".") && strings.HasSuffix(name, ".rotated") {
+		if strings.HasPrefix(name, filepath.Base(r.path)+"-") && strings.HasSuffix(name, ".log") {
 			rotated = append(rotated, filepath.Join(filepath.Dir(r.path), name))
 		}
 	}
@@ -108,8 +151,8 @@ func (r *RotatingFile) prune(_ string) error {
 
 func rotationStamp(path string) (time.Time, error) {
 	prefix := filepath.Base(path)
-	start := strings.Index(prefix, ".") + 1
-	end := strings.LastIndex(prefix, ".rotated")
+	start := strings.LastIndex(prefix, "-") + 1
+	end := strings.LastIndex(prefix, ".log")
 	if start <= 0 || end <= start {
 		return time.Time{}, fmt.Errorf("invalid rotation name %q", path)
 	}

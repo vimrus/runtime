@@ -118,6 +118,7 @@ RUN go test ./internal/config ./internal/lifecycle ./internal/health ./internal/
     ./internal/logging ./internal/upgrade ./internal/queue/bridge ./internal/queue/fake \
     ./internal/queue/client ./internal/queue/lease ./internal/queue/worker ./internal/queue/engine ./internal/scheduler \
     ./internal/observability ./internal/observability/query ./internal/observability/retention \
+    ./internal/observability/jsonl \
     ./internal/observability/duckdb
 
 RUN go test -tags duckdb ./internal/observability/duckdb

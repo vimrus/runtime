@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -28,6 +30,7 @@ import (
 	"github.com/vimrus/runtime/internal/logging"
 	"github.com/vimrus/runtime/internal/observability"
 	"github.com/vimrus/runtime/internal/observability/duckdb"
+	"github.com/vimrus/runtime/internal/observability/jsonl"
 	"github.com/vimrus/runtime/internal/observability/query"
 	"github.com/vimrus/runtime/internal/observability/retention"
 	queueclient "github.com/vimrus/runtime/internal/queue/client"
@@ -72,7 +75,7 @@ func notRunningError(format string, args ...any) error {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return usageError("usage: zentao-runtime <serve|start|status|stop|reload|health|diagnose|upgrade|logs|metrics|flush-observability|clean-observability|collect-logs|php-cli|version|run-service>")
+		return usageError("usage: zentao-runtime <serve|start|status|stop|reload|health|diagnose|upgrade|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|run-service>")
 	}
 	switch args[0] {
 	case "serve", "start":
@@ -91,6 +94,8 @@ func run(args []string) error {
 		return flushObservabilityCommand(args[1:])
 	case "clean-observability":
 		return cleanObservabilityCommand(args[1:])
+	case "convert-jsonl":
+		return convertJSONLCommand(args[1:])
 	case "collect-logs":
 		return collectLogsCommand(args[1:])
 	case "version":
@@ -98,6 +103,22 @@ func run(args []string) error {
 	default:
 		return usageError("unknown command %q", args[0])
 	}
+}
+
+func convertJSONLCommand(args []string) error {
+	flags := flag.NewFlagSet("convert-jsonl", flag.ContinueOnError)
+	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
+	if err := flags.Parse(args); err != nil {
+		return usageError("%v", err)
+	}
+	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: "convert-jsonl"})
+	if err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("%s: %s", response.Error.Code, response.Error.Message)
+	}
+	return printRawJSON(response.Result)
 }
 
 func collectLogsCommand(args []string) error {
@@ -270,28 +291,46 @@ func serve(args []string) error {
 		return fmt.Errorf("document root %q is not a directory", cfg.Web.Root)
 	}
 
+	nodeID, err := resolveNodeID(cfg, *installRoot)
+	if err != nil {
+		return err
+	}
+	cfg.Runtime.NodeID = nodeID
+	logsDir := filepath.Dir(cfg.Runtime.LogPath)
+	if cfg.Runtime.LogPath == "" {
+		logsDir = "/opt/zentao/logs"
+	}
+	effectiveLogPath := filepath.Join(logsDir, "runtime-"+nodeID+".jsonl")
+	effectiveAuditLog := cfg.Runtime.AuditLog
+	if effectiveAuditLog == "" {
+		effectiveAuditLog = filepath.Join(logsDir, "audit-"+nodeID+".jsonl")
+	}
+	effectiveAccessLog := filepath.Join(logsDir, "access-"+nodeID+".jsonl")
+
 	logger, err := logging.New(logging.Options{
-		Level:      slog.LevelInfo,
-		OutputPath: cfg.Runtime.LogPath,
-		MaxBytes:   cfg.Runtime.LogMaxBytes,
-		MaxBackups: cfg.Runtime.LogMaxBackups,
-		NodeID:     cfg.Runtime.NodeID,
-		InstanceID: instanceID(),
-		Component:  "runtime",
+		Level:        slog.LevelInfo,
+		OutputPath:   effectiveLogPath,
+		MaxBytes:     cfg.Runtime.LogMaxBytes,
+		MaxBackups:   cfg.Runtime.LogMaxBackups,
+		RollInterval: cfg.Observability.JSONLConvertInterval,
+		KeepDays:     cfg.Observability.JSONLKeepDays,
+		NodeID:       nodeID,
+		InstanceID:   instanceID(),
+		Component:    "runtime",
 	})
 	if err != nil {
 		return fmt.Errorf("initialize logging: %w", err)
 	}
 	defer logger.Close()
 
-	auditor, err := control.NewFileAuditor(cfg.Runtime.AuditLog)
+	auditor, err := control.NewFileAuditor(effectiveAuditLog)
 	if err != nil {
 		return fmt.Errorf("initialize audit log: %w", err)
 	}
 	defer auditor.Close()
 
 	registry := newHealthRegistry(cfg)
-	obsPublisher, err := newObservabilityPublisher(cfg)
+	obsPublisher, err := newObservabilityPublisher(cfg, nodeID)
 	if err != nil {
 		return err
 	}
@@ -307,7 +346,7 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	queueEngine, err := newQueueEngine(cfg, logger)
+	queueEngine, err := newQueueEngine(cfg, logger, nodeID)
 	if err != nil {
 		return err
 	}
@@ -318,16 +357,31 @@ func serve(args []string) error {
 	if err != nil {
 		return fmt.Errorf("initialize upgrade controller: %w", err)
 	}
-	host := newHost(*configPath, cfg, logger, registry, auditor, upgradeController, queryEngine, obsPublisher)
-	logsDir := filepath.Dir(cfg.Runtime.LogPath)
-	if cfg.Runtime.LogPath == "" {
-		logsDir = "/opt/zentao/logs"
+	var jsonlConverter *jsonl.Converter
+	if obsPublisher != nil {
+		clusterID := cfg.Runtime.ClusterID
+		if clusterID == "" {
+			clusterID = "standalone"
+		}
+		jsonlConverter, err = jsonl.New(jsonl.Config{
+			LogsDir:   logsDir,
+			NodeID:    nodeID,
+			ClusterID: clusterID,
+			BootID:    instanceID(),
+			Sources:   cfg.Observability.JSONLConvertSources,
+			Publisher: obsPublisher,
+			Interval:  cfg.Observability.JSONLConvertInterval,
+		})
+		if err != nil {
+			return fmt.Errorf("initialize jsonl converter: %w", err)
+		}
 	}
+	host := newHost(*configPath, cfg, logger, registry, auditor, upgradeController, queryEngine, obsPublisher, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
 	host.collector = &diagnostics.Collector{
 		LogPaths: []string{
-			cfg.Runtime.LogPath,
-			cfg.Runtime.AuditLog,
-			cfg.Web.AccessLog,
+			effectiveLogPath,
+			effectiveAuditLog,
+			effectiveAccessLog,
 			"/opt/zentao/logs/php-error.log",
 		},
 		OutputDir: logsDir,
@@ -349,7 +403,7 @@ func serve(args []string) error {
 	if err := host.machine.Transition(lifecycle.CaddyStarting, "loading Caddy and FrankenPHP"); err != nil {
 		return err
 	}
-	if err := caddy.Run(webConfig(cfg)); err != nil {
+	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays)); err != nil {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
@@ -370,11 +424,8 @@ func serve(args []string) error {
 	logger.Info("runtime ready", slog.String("listen", cfg.Web.Listen), slog.String("root", cfg.Web.Root), slog.String("mode", "classic"))
 	serveCtx, serveCancel := context.WithCancel(context.Background())
 	defer serveCancel()
+	go runLogPruneLoop(serveCtx, logger)
 	if obsPublisher != nil {
-		nodeID := cfg.Runtime.NodeID
-		if nodeID == "" {
-			nodeID = "node-" + instanceID()
-		}
 		clusterID := cfg.Runtime.ClusterID
 		if clusterID == "" {
 			clusterID = "standalone"
@@ -400,7 +451,8 @@ func serve(args []string) error {
 	if obsPublisher != nil {
 		go func() { _ = obsPublisher.Recover(serveCtx) }()
 		go obsPublisher.Run(serveCtx)
-		go runRetentionLoop(serveCtx, cfg, logger)
+		go runRetentionLoop(serveCtx, cfg, logger, nodeID)
+		go jsonlConverter.Run(serveCtx)
 		logger.Info("observability publisher started")
 	}
 
@@ -439,7 +491,20 @@ func serve(args []string) error {
 	return nil
 }
 
-func newQueueEngine(cfg config.Config, logger *logging.Logger) (*queueengine.Engine, error) {
+func runLogPruneLoop(ctx context.Context, logger *logging.Logger) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			logger.Prune()
+		}
+	}
+}
+
+func newQueueEngine(cfg config.Config, logger *logging.Logger, nodeID string) (*queueengine.Engine, error) {
 	if !cfg.Queue.Enabled {
 		return nil, nil
 	}
@@ -462,10 +527,6 @@ func newQueueEngine(cfg config.Config, logger *logging.Logger) (*queueengine.Eng
 		})
 	}
 	instance := instanceID()
-	nodeID := cfg.Runtime.NodeID
-	if nodeID == "" {
-		nodeID = "node-" + instance
-	}
 	return queueengine.New(queueengine.Config{
 		NodeID:            nodeID,
 		InstanceID:        instance,
@@ -481,7 +542,7 @@ func newQueueEngine(cfg config.Config, logger *logging.Logger) (*queueengine.Eng
 	}, bridgeClient)
 }
 
-func newObservabilityPublisher(cfg config.Config) (*observability.Publisher, error) {
+func newObservabilityPublisher(cfg config.Config, nodeID string) (*observability.Publisher, error) {
 	if !cfg.Observability.Enabled {
 		return nil, nil
 	}
@@ -493,10 +554,6 @@ func newObservabilityPublisher(cfg config.Config) (*observability.Publisher, err
 		return nil, fmt.Errorf("initialize DuckDB writer: %w", err)
 	}
 	instance := instanceID()
-	nodeID := cfg.Runtime.NodeID
-	if nodeID == "" {
-		nodeID = "node-" + instance
-	}
 	clusterID := cfg.Runtime.ClusterID
 	if clusterID == "" {
 		clusterID = "standalone"
@@ -521,11 +578,7 @@ func newObservabilityQueryEngine(cfg config.Config) (query.Engine, error) {
 	return duckdb.NewEngine(2, "256MB")
 }
 
-func runRetentionLoop(ctx context.Context, cfg config.Config, logger *logging.Logger) {
-	nodeID := cfg.Runtime.NodeID
-	if nodeID == "" {
-		nodeID = "node-" + instanceID()
-	}
+func runRetentionLoop(ctx context.Context, cfg config.Config, logger *logging.Logger, nodeID string) {
 	cleaner, err := retention.New(retention.Config{
 		DatasetRoot: cfg.Observability.DatasetRoot,
 		NodeID:      nodeID,
@@ -641,33 +694,39 @@ func loadServeConfig(path, root, listen, pidFile, controlSocket string, threads 
 }
 
 type host struct {
-	configPath   string
-	machine      *lifecycle.Machine
-	stop         chan struct{}
-	stopOnce     sync.Once
-	mu           sync.RWMutex
-	config       config.Config
-	logger       *logging.Logger
-	health       *health.Registry
-	auditor      control.Auditor
-	upgrades     *upgrade.Controller
-	queryEngine  query.Engine
-	obsPublisher *observability.Publisher
-	collector    *diagnostics.Collector
+	configPath        string
+	machine           *lifecycle.Machine
+	stop              chan struct{}
+	stopOnce          sync.Once
+	mu                sync.RWMutex
+	config            config.Config
+	logger            *logging.Logger
+	health            *health.Registry
+	auditor           control.Auditor
+	upgrades          *upgrade.Controller
+	queryEngine       query.Engine
+	obsPublisher      *observability.Publisher
+	jsonlConverter    *jsonl.Converter
+	accessLogPath     string
+	accessLogKeepDays int
+	collector         *diagnostics.Collector
 }
 
-func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, upgrades *upgrade.Controller, queryEngine query.Engine, obsPublisher *observability.Publisher) *host {
+func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, upgrades *upgrade.Controller, queryEngine query.Engine, obsPublisher *observability.Publisher, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
 	return &host{
-		configPath:   configPath,
-		config:       cfg,
-		machine:      lifecycle.New(),
-		stop:         make(chan struct{}),
-		logger:       logger,
-		health:       registry,
-		auditor:      auditor,
-		upgrades:     upgrades,
-		queryEngine:  queryEngine,
-		obsPublisher: obsPublisher,
+		configPath:        configPath,
+		config:            cfg,
+		machine:           lifecycle.New(),
+		stop:              make(chan struct{}),
+		logger:            logger,
+		health:            registry,
+		auditor:           auditor,
+		upgrades:          upgrades,
+		queryEngine:       queryEngine,
+		obsPublisher:      obsPublisher,
+		jsonlConverter:    jsonlConverter,
+		accessLogPath:     accessLogPath,
+		accessLogKeepDays: accessLogKeepDays,
 	}
 }
 
@@ -705,11 +764,24 @@ func (h *host) HandleControl(_ context.Context, request control.Request) control
 		return h.observabilityFlush()
 	case "observability-clean":
 		return h.observabilityClean()
+	case "convert-jsonl":
+		return h.convertJSONL()
 	case "collect-logs":
 		return h.collectLogs()
 	default:
 		return control.Failure("unknown_operation", "unsupported control operation")
 	}
+}
+
+func (h *host) convertJSONL() control.Response {
+	if h.jsonlConverter == nil {
+		return control.Failure("unavailable", "jsonl converter is not available")
+	}
+	result, err := h.jsonlConverter.ConvertOnce(context.Background())
+	if err != nil {
+		return control.Failure("convert_failed", "jsonl to parquet conversion failed")
+	}
+	return control.Success(result)
 }
 
 func (h *host) collectLogs() control.Response {
@@ -917,7 +989,7 @@ func (h *host) reload() control.Response {
 		_ = h.machine.Transition(lifecycle.Ready, "restart-required configuration change not applied")
 		return control.Success(map[string]any{"reloaded": false, "restartRequired": true})
 	}
-	rendered, err := json.Marshal(webConfig(candidate))
+	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays))
 	if err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy configuration rendering failed")
 		return control.Failure("reload_failed", "render Caddy configuration")
@@ -925,6 +997,9 @@ func (h *host) reload() control.Response {
 	if err := caddy.Load(rendered, true); err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy reload failed")
 		return control.Failure("reload_failed", "Caddy rejected configuration")
+	}
+	if candidate.Runtime.NodeID == "" {
+		candidate.Runtime.NodeID = current.Runtime.NodeID
 	}
 	h.mu.Lock()
 	h.config = candidate
@@ -935,7 +1010,7 @@ func (h *host) reload() control.Response {
 	return control.Success(map[string]any{"reloaded": true, "restartRequired": false})
 }
 
-func webConfig(cfg config.Config) *caddy.Config {
+func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int) *caddy.Config {
 	return web.Config(web.Options{
 		Root:              cfg.Web.Root,
 		Listen:            cfg.Web.Listen,
@@ -943,7 +1018,8 @@ func webConfig(cfg config.Config) *caddy.Config {
 		ReadHeaderTimeout: cfg.Web.ReadHeaderTimeout,
 		IdleTimeout:       cfg.Web.IdleTimeout,
 		MaxHeaderBytes:    cfg.Web.MaxHeaderBytes,
-		AccessLogPath:     cfg.Web.AccessLog,
+		AccessLogPath:     accessLogPath,
+		AccessLogKeepDays: accessLogKeepDays,
 	})
 }
 
@@ -1064,4 +1140,73 @@ func instanceID() string {
 		return strconv.Itoa(os.Getpid())
 	}
 	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
+}
+
+// resolveNodeID returns the configured node ID, or a stable per-installation
+// ID persisted in <installRoot>/data/node-id so that log file names and
+// Parquet partitions stay stable across restarts.
+func resolveNodeID(cfg config.Config, installRoot string) (string, error) {
+	if cfg.Runtime.NodeID != "" {
+		return cfg.Runtime.NodeID, nil
+	}
+	dataDir := filepath.Join(installRoot, "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return "", fmt.Errorf("create data directory: %w", err)
+	}
+	nodeFile := filepath.Join(dataDir, "node-id")
+	if data, err := os.ReadFile(nodeFile); err == nil {
+		if id := strings.TrimSpace(string(data)); id != "" {
+			if !validNodeID(id) {
+				return "", fmt.Errorf("node id file contains unsupported characters: %q", id)
+			}
+			return id, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("read node id: %w", err)
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown"
+	}
+	var random [4]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", fmt.Errorf("generate node id: %w", err)
+	}
+	host := safeHostname(hostname)
+	if len(host) > 48 {
+		host = host[:48]
+	}
+	id := fmt.Sprintf("node-%s-%x", host, random)
+	if err := os.WriteFile(nodeFile, []byte(id+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("write node id: %w", err)
+	}
+	return id, nil
+}
+
+func validNodeID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == ':' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func safeHostname(hostname string) string {
+	var builder strings.Builder
+	for _, r := range hostname {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			builder.WriteRune(r)
+		} else {
+			builder.WriteRune('-')
+		}
+	}
+	if value := strings.Trim(builder.String(), "-"); value != "" {
+		return value
+	}
+	return "host"
 }

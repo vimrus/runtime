@@ -43,7 +43,7 @@ type Web struct {
 	ReadHeaderTimeout time.Duration `json:"readHeaderTimeout"`
 	IdleTimeout       time.Duration `json:"idleTimeout"`
 	MaxHeaderBytes    int           `json:"maxHeaderBytes"`
-	AccessLog         string        `json:"accessLog,omitempty"`
+	AccessLog         string        `json:"accessLog,omitempty"` // deprecated: runtime now derives per-node access log paths
 }
 
 type Queue struct {
@@ -68,15 +68,18 @@ type QueueWorker struct {
 }
 
 type Observability struct {
-	Enabled       bool          `json:"enabled"`
-	DatasetRoot   string        `json:"datasetRoot"`
-	SpoolPath     string        `json:"spoolPath"`
-	MaxSpoolBytes int64         `json:"maxSpoolBytes"`
-	MaxBatchRows  int           `json:"maxBatchRows"`
-	MaxBatchBytes int64         `json:"maxBatchBytes"`
-	FlushInterval time.Duration `json:"flushInterval"`
-	MetricsDays   int           `json:"metricsDays"`
-	LogDays       int           `json:"logDays"`
+	Enabled              bool          `json:"enabled"`
+	DatasetRoot          string        `json:"datasetRoot"`
+	SpoolPath            string        `json:"spoolPath"`
+	MaxSpoolBytes        int64         `json:"maxSpoolBytes"`
+	MaxBatchRows         int           `json:"maxBatchRows"`
+	MaxBatchBytes        int64         `json:"maxBatchBytes"`
+	FlushInterval        time.Duration `json:"flushInterval"`
+	MetricsDays          int           `json:"metricsDays"`
+	LogDays              int           `json:"logDays"`
+	JSONLConvertInterval time.Duration `json:"jsonlConvertInterval,omitempty"`
+	JSONLConvertSources  []string      `json:"jsonlConvertSources,omitempty"`
+	JSONLKeepDays        int           `json:"jsonlKeepDays,omitempty"`
 }
 
 type Overrides struct {
@@ -134,12 +137,15 @@ func Default() Config {
 			},
 		},
 		Observability: Observability{
-			MaxSpoolBytes: 1024 * 1024 * 1024,
-			MaxBatchRows:  10000,
-			MaxBatchBytes: 16 * 1024 * 1024,
-			FlushInterval: 60 * time.Second,
-			MetricsDays:   30,
-			LogDays:       7,
+			MaxSpoolBytes:        1024 * 1024 * 1024,
+			MaxBatchRows:         10000,
+			MaxBatchBytes:        16 * 1024 * 1024,
+			FlushInterval:        60 * time.Second,
+			MetricsDays:          30,
+			LogDays:              7,
+			JSONLConvertInterval: time.Hour,
+			JSONLConvertSources:  []string{"access", "runtime"},
+			JSONLKeepDays:        7,
 		},
 	}
 }
@@ -205,15 +211,18 @@ func decode(data []byte) (Config, error) {
 		Workers           *[]rawQueueWorker `json:"workers"`
 	}
 	type rawObservability struct {
-		Enabled       *bool   `json:"enabled"`
-		DatasetRoot   *string `json:"datasetRoot"`
-		SpoolPath     *string `json:"spoolPath"`
-		MaxSpoolBytes *int64  `json:"maxSpoolBytes"`
-		MaxBatchRows  *int    `json:"maxBatchRows"`
-		MaxBatchBytes *int64  `json:"maxBatchBytes"`
-		FlushInterval *string `json:"flushInterval"`
-		MetricsDays   *int    `json:"metricsDays"`
-		LogDays       *int    `json:"logDays"`
+		Enabled              *bool    `json:"enabled"`
+		DatasetRoot          *string  `json:"datasetRoot"`
+		SpoolPath            *string  `json:"spoolPath"`
+		MaxSpoolBytes        *int64   `json:"maxSpoolBytes"`
+		MaxBatchRows         *int     `json:"maxBatchRows"`
+		MaxBatchBytes        *int64   `json:"maxBatchBytes"`
+		FlushInterval        *string  `json:"flushInterval"`
+		MetricsDays          *int     `json:"metricsDays"`
+		LogDays              *int     `json:"logDays"`
+		JSONLConvertInterval *string  `json:"jsonlConvertInterval"`
+		JSONLConvertSources  []string `json:"jsonlConvertSources"`
+		JSONLKeepDays        *int     `json:"jsonlKeepDays"`
 	}
 	type rawConfig struct {
 		SchemaVersion *int              `json:"schemaVersion"`
@@ -406,6 +415,19 @@ func decode(data []byte) (Config, error) {
 		}
 		if raw.Observability.LogDays != nil {
 			config.Observability.LogDays = *raw.Observability.LogDays
+		}
+		if raw.Observability.JSONLConvertInterval != nil {
+			value, err := time.ParseDuration(*raw.Observability.JSONLConvertInterval)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse observability.jsonlConvertInterval: %w", err)
+			}
+			config.Observability.JSONLConvertInterval = value
+		}
+		if raw.Observability.JSONLConvertSources != nil {
+			config.Observability.JSONLConvertSources = raw.Observability.JSONLConvertSources
+		}
+		if raw.Observability.JSONLKeepDays != nil {
+			config.Observability.JSONLKeepDays = *raw.Observability.JSONLKeepDays
 		}
 	}
 	return config, nil
@@ -651,6 +673,14 @@ func (c Config) Validate() error {
 		if c.Observability.FlushInterval <= 0 || c.Observability.MetricsDays <= 0 || c.Observability.LogDays <= 0 {
 			return fmt.Errorf("observability intervals and retention must be positive")
 		}
+		if c.Observability.JSONLConvertInterval <= 0 || c.Observability.JSONLKeepDays <= 0 {
+			return fmt.Errorf("observability jsonl convert interval and keep days must be positive")
+		}
+		for _, source := range c.Observability.JSONLConvertSources {
+			if source != "access" && source != "runtime" {
+				return fmt.Errorf("observability.jsonlConvertSources only supports access or runtime")
+			}
+		}
 	}
 	return nil
 }
@@ -669,6 +699,9 @@ func validIdentity(value string) bool {
 }
 
 func RestartRequired(current, candidate Config) bool {
+	if candidate.Runtime.NodeID == "" {
+		candidate.Runtime.NodeID = current.Runtime.NodeID
+	}
 	return current.Web.Root != candidate.Web.Root ||
 		current.Web.Listen != candidate.Web.Listen ||
 		current.Web.Threads != candidate.Web.Threads ||
@@ -680,7 +713,6 @@ func RestartRequired(current, candidate Config) bool {
 		current.Runtime.LogMaxBackups != candidate.Runtime.LogMaxBackups ||
 		current.Runtime.NodeID != candidate.Runtime.NodeID ||
 		current.Runtime.ClusterID != candidate.Runtime.ClusterID ||
-		current.Web.AccessLog != candidate.Web.AccessLog ||
 		current.Queue.Enabled != candidate.Queue.Enabled ||
 		current.Queue.BridgeBaseURL != candidate.Queue.BridgeBaseURL ||
 		current.Queue.BridgeToken != candidate.Queue.BridgeToken ||
@@ -691,5 +723,20 @@ func RestartRequired(current, candidate Config) bool {
 		current.Observability.Enabled != candidate.Observability.Enabled ||
 		current.Observability.DatasetRoot != candidate.Observability.DatasetRoot ||
 		current.Observability.SpoolPath != candidate.Observability.SpoolPath ||
-		current.Observability.FlushInterval != candidate.Observability.FlushInterval
+		current.Observability.FlushInterval != candidate.Observability.FlushInterval ||
+		current.Observability.JSONLConvertInterval != candidate.Observability.JSONLConvertInterval ||
+		current.Observability.JSONLKeepDays != candidate.Observability.JSONLKeepDays ||
+		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources)
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

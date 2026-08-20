@@ -7,10 +7,10 @@
 | 状态 | 已实施（Runtime 侧落地；NFS 真实故障注入待集成环境） |
 | 日期 | 2026-08-18 |
 | 查询与生成引擎 | DuckDB，作为 Go Library 嵌入 `zentao-runtime` |
-| 持久化格式 | Parquet |
+| 持久化格式 | 近期日志 JSONL（追加）+ 历史 Parquet（DuckDB 查询） |
 | 单机存储 | 本地 Parquet 数据集 |
-| 多节点存储 | NFSv4.1 共享 Parquet 数据集 |
-| 写入模型 | 每节点独立分区、批量生成、不可变 part 文件 |
+| 多节点存储 | NFSv4.1 共享 Parquet 数据集；JSONL 可本地或共享目录按节点分文件 |
+| 写入模型 | 日志按节点/小时 JSONL 追加，每小时同步为不可变 Parquet part；指标内存聚合后批量发布 |
 | 共享 `.duckdb` | 禁止 |
 | 关联设计 | [Runtime Host 详细设计](./runtime-host-library-design.md)、[多节点部署设计](./deployment-and-ha-design.md)、[GitHub Actions 构建设计](./github-actions-build-design.md) |
 
@@ -30,6 +30,9 @@ zentao 使用 DuckDB 保存和查询 Runtime 度量项与结构化日志，但�
 8. NFS 不可用时写入节点本地有界 spool，恢复后使用原 `batchID` 补发；可观测性故障不能阻止禅道业务请求。
 9. 查询必须限制时间范围、返回行数、线程和内存，公共 Web 接口不接受任意 DuckDB SQL。
 10. Runtime 操作指标和日志可以以 Parquet 为主存储；禅道业务度量结果若参与事务、权限或业务状态，业务数据库仍是事实来源，Parquet 只保存分析副本。
+11. 日志先以 JSONL 追加落盘（每节点独立文件名），每小时由 Runtime
+    解析并同步为不可变 Parquet；历史与受控查询以 Parquet 为准，近期日志
+    可直接读取 JSONL 或与 Parquet UNION。
 
 ## 3. 目标与非目标
 
@@ -37,6 +40,7 @@ zentao 使用 DuckDB 保存和查询 Runtime 度量项与结构化日志，但�
 
 - 不引入 Prometheus、Loki、Elasticsearch、ClickHouse 等强制外部服务，也能查询本机和双节点历史运行状态。
 - 统一保存 Runtime、Caddy、FrankenPHP、PHP、Scheduler、队列和缓存产生的结构化度量与日志。
+- 日志写入采用低成本追加式 JSONL，配合每小时批量转 Parquet，兼顾写入性能与查询性能。
 - 两个应用节点可以同时向共享 NFS 发布数据，不产生同文件竞争、覆盖或部分文件可见。
 - 节点故障后，已经发布到 NFS 的历史数据仍可由另一节点查询。
 - 通过日期、小时和节点分区裁剪，避免每次诊断扫描全部历史文件。
@@ -58,17 +62,15 @@ zentao 使用 DuckDB 保存和查询 Runtime 度量项与结构化日志，但�
 ```text
 Runtime/Caddy/FrankenPHP/PHP/Scheduler
   -> Structured Telemetry Event
-  -> Node-local bounded buffers
-       +-- metric window aggregation
-       +-- log batch buffer
-       +-- local spool on shared-storage failure
-  -> DuckDB COPY ... TO Parquet
-  -> .<batchID>.parquet.tmp
-  -> validate and atomic rename
-  -> shared Parquet dataset
+       +-- 指标: Node-local bounded buffers
+       +-- 日志: Node-local JSONL append（每节点独立文件，每小时轮转段）
+       +-- 每小时同步: 逐行解析 JSONL -> COPY ... TO Parquet
+  -> .<batchID>.parquet.tmp -> validate -> atomic rename
+  -> shared Parquet dataset（NFS 多节点）
 
 Admin CLI / protected diagnostics
   -> DuckDB read_parquet(..., hive_partitioning=true)
+  -> 近期可直接读取 JSONL，或与历史 Parquet UNION
   -> time/row/resource limits
   -> formatted logs, metrics or diagnostic bundle
 ```
@@ -267,6 +269,51 @@ Collecting
 - 最终文件损坏：移动到本节点 quarantine 目录、告警并从 spool 重建；没有 spool 时保留证据，不静默删除。
 
 Runtime 不扫描或修复其他节点的临时文件，除非管理员明确执行节点接管命令。
+
+### 7.5 日志 JSONL 写入与每小时同步（2026-08-20 决策）
+
+日志写入形态采用“近期 JSONL + 历史 Parquet”：
+
+1. 每个节点把结构化日志逐条追加到本节点 JSONL 文件，文件名为平铺的
+   节点前缀形式（用户确认的命名约定）：
+
+   ```text
+   <logs_dir>/access-node-a.jsonl                    # Caddy 访问日志（追加中）
+   <logs_dir>/access-node-a-<时间戳>-time.jsonl      # Caddy 已封闭小时段
+   <logs_dir>/access-node-a-<时间戳>-size.jsonl      # Caddy 大小触发段
+   <logs_dir>/runtime-node-a.jsonl                   # Runtime 结构化日志（追加中）
+   <logs_dir>/runtime-node-a.jsonl-<时间戳>.log      # Runtime 已封闭小时段
+   ```
+
+   JSONL 与 Parquet 使用同一份日志 Schema（第 6.3 节），保证同步与
+   UNION 时字段一致。日志目录按 `runtime.logPath` 推断，缺省为
+   `/opt/zentao/logs`。
+2. 每个文件只允许所属节点追加，多节点在 NFS 共享目录下各写自己的
+   `<source>-<nodeID>.jsonl` 文件；禁止多个节点追加同一个 JSONL 文件（NFS 的
+   `O_APPEND` 跨节点不提供原子性保证）。
+3. 每小时执行一次同步（`jsonlConvertInterval`，默认 `1h`）：Runtime
+   扫描本节点已封闭的 `access-<nodeID>-*.jsonl`（Caddy 轮转段）与
+   `runtime-<nodeID>.jsonl-*.log`（Runtime 轮转段），按行解析 JSON，
+   复用既有 Publisher 生成不可变 `part-<batchID>.parquet`，校验后在
+   同一文件系统内原子 `rename` 发布到共享 Parquet 数据集。
+4. 同步以段文件的 `(size, mtime)` 水位线记录在
+   `<logs_dir>/.jsonl-state-<nodeID>.json`，重复同步不产生重复 Parquet；
+   每个节点只处理自己的前缀，NFS 多节点互不干扰。
+5. 查询：历史与受控查询以 Parquet 为准；近期日志可直接
+   读取 JSONL，或与历史 Parquet `UNION ALL`（列名与类型一致）。
+6. NFS 故障：停止同步并保留本节点 JSONL（可本地缓冲），恢复后补同步；
+   可观测性故障不阻断业务请求。
+
+性能与风险控制：
+
+- 按小时/节点分文件（Caddy 每小时整点轮转，Runtime 日志按
+  `jsonlConvertInterval` 轮转），避免单个大 JSONL 导致查询退化。
+- 每小时最多一个（或按阈值拆分的少量）Parquet part，避免小文件膨胀。
+- 已封闭 JSONL 段按 `jsonlKeepDays`（默认 7 天）保留，过期由轮转器与
+  每小时后台清理任务自动删除；Parquet 长期保留由 `observability.logDays`
+  控制。
+- 转换范围由 `jsonlConvertSources` 配置（当前支持 `access`、`runtime`），
+  审计日志与 PHP 错误日志保留各自原始文件，不进入每小时转换。
 
 ## 8. 本地缓冲与降级
 

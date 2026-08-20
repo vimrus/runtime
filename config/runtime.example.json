@@ -4,7 +4,6 @@
     "controlSocket": "/run/zentao/runtime.sock",
     "pidFile": "/run/zentao/runtime.pid",
     "drainTimeout": "30s",
-    "auditLog": "/opt/zentao/logs/audit.log",
     "logPath": "/opt/zentao/logs/runtime.log",
     "logMaxBytes": 16777216,
     "logMaxBackups": 5,
@@ -17,8 +16,7 @@
     "threads": 4,
     "readHeaderTimeout": "10s",
     "idleTimeout": "30s",
-    "maxHeaderBytes": 16384,
-    "accessLog": "/opt/zentao/logs/access.log"
+    "maxHeaderBytes": 16384
   },
   "queue": {
     "enabled": false,
@@ -45,6 +43,9 @@
     "maxBatchBytes": 16777216,
     "flushInterval": "60s",
     "metricsDays": 30,
-    "logDays": 7
+    "logDays": 7,
+    "jsonlConvertInterval": "1h",
+    "jsonlConvertSources": ["access", "runtime"],
+    "jsonlKeepDays": 7
   }
 }

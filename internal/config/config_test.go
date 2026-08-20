@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadAppliesDefaultsAndEnvironment(t *testing.T) {
@@ -53,14 +54,26 @@ func TestLoadRejectsUnknownAndInvalidFields(t *testing.T) {
 func TestRestartRequired(t *testing.T) {
 	current := Default()
 	current.Web.Root = "/app"
+	current.Runtime.NodeID = "node-generated"
 	candidate := current
 	candidate.Web.IdleTimeout *= 2
 	if RestartRequired(current, candidate) {
 		t.Fatal("timeout-only update must be hot reloadable")
 	}
-	candidate.Web.Threads++
-	if !RestartRequired(current, candidate) {
+	unset := candidate
+	unset.Runtime.NodeID = ""
+	if RestartRequired(current, unset) {
+		t.Fatal("missing generated nodeID in candidate must not force restart")
+	}
+	threads := current
+	threads.Web.Threads++
+	if !RestartRequired(current, threads) {
 		t.Fatal("thread count update must require restart")
+	}
+	jsonl := candidate
+	jsonl.Observability.JSONLKeepDays = 14
+	if !RestartRequired(current, jsonl) {
+		t.Fatal("jsonl retention change must require restart")
 	}
 }
 
@@ -155,6 +168,40 @@ func TestObservabilityValidation(t *testing.T) {
 	config.Observability.SpoolPath = "spool/observability"
 	if err := config.Validate(); err == nil {
 		t.Fatal("relative spool path must be rejected")
+	}
+}
+
+func TestObservabilityJSONLDefaultsAndValidation(t *testing.T) {
+	config := Default()
+	config.Web.Root = "/opt/zentao/app/current/www"
+	config.Observability.Enabled = true
+	config.Observability.DatasetRoot = "/opt/zentao/observability"
+	config.Observability.SpoolPath = "/opt/zentao/spool/observability"
+	if config.Observability.JSONLConvertInterval != time.Hour || config.Observability.JSONLKeepDays != 7 {
+		t.Fatalf("jsonl defaults not applied: %#v", config.Observability)
+	}
+	config.Observability.JSONLConvertSources = []string{"access", "cache"}
+	if err := config.Validate(); err == nil {
+		t.Fatal("unsupported jsonl source must be rejected")
+	}
+	loaded, err := Load(pathWithContent(t, `{
+  "schemaVersion": 1,
+  "runtime": {"controlSocket": "/run/zentao/runtime.sock", "pidFile": "/run/zentao/runtime.pid"},
+  "web": {"root": "/opt/zentao/app/current/www", "listen": "127.0.0.1:8080"},
+  "observability": {
+    "enabled": true,
+    "datasetRoot": "/opt/zentao/observability",
+    "spoolPath": "/opt/zentao/spool/observability",
+    "jsonlConvertInterval": "30m",
+    "jsonlConvertSources": ["access"],
+    "jsonlKeepDays": 3
+  }
+}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Observability.JSONLConvertInterval != 30*time.Minute || loaded.Observability.JSONLKeepDays != 3 || len(loaded.Observability.JSONLConvertSources) != 1 {
+		t.Fatalf("jsonl settings not loaded: %#v", loaded.Observability)
 	}
 }
 

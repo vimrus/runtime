@@ -35,15 +35,19 @@ fi
 cat > "${work}/runtime.json" <<EOF
 {
   "schemaVersion": 1,
-  "runtime": {"controlSocket": "/tmp/zentao.sock", "pidFile": "/tmp/zentao.pid", "drainTimeout": "10s"},
+  "runtime": {
+    "controlSocket": "/tmp/zentao.sock",
+    "pidFile": "/tmp/zentao.pid",
+    "drainTimeout": "10s",
+    "logPath": "/shared/logs/runtime.log"
+  },
   "web": {
     "root": "/shared/app/current/www",
     "listen": "127.0.0.1:8080",
     "threads": 4,
     "readHeaderTimeout": "10s",
     "idleTimeout": "30s",
-    "maxHeaderBytes": 16384,
-    "accessLog": "/shared/logs/access.log"
+    "maxHeaderBytes": 16384
   }
 }
 EOF
@@ -70,12 +74,14 @@ docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/not
 docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/index.php?fatal=1"
 sleep 1
 
-docker exec "${container}" sh -c 'grep -c "http.log.access" /shared/logs/access.log >/dev/null' \
+node_id="$(docker exec "${container}" cat /shared/app/data/node-id)"
+access_log="/shared/logs/access-${node_id}.jsonl"
+docker exec "${container}" sh -c "grep -c 'http.log.access' '${access_log}' >/dev/null" \
     || { echo "no access log entries found" >&2; exit 1; }
-docker exec "${container}" cat /shared/logs/access.log \
+docker exec "${container}" cat "${access_log}" \
     | jq -e 'select(.logger | contains("http.log.access")) | (.request.uri != null) and (.status != null) and (.duration != null)' >/dev/null \
     || { echo "access log entries missing uri/status/duration" >&2; exit 1; }
-docker exec "${container}" cat /shared/logs/access.log \
+docker exec "${container}" cat "${access_log}" \
     | jq -e 'select(.logger | contains("http.log.access")) | select(.request.uri == "/index.php?fatal=1") | .status == 500' >/dev/null \
     || { echo "fatal request must be logged with status 500" >&2; exit 1; }
 docker exec "${container}" cat /opt/zentao/logs/php-error.log 2>/dev/null \

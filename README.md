@@ -2,7 +2,7 @@
 
 ZenTao Runtime 是禅道新一代集成运行环境。项目计划将 Caddy 和 FrankenPHP 作为 Go Library 嵌入自研 `zentao-runtime`，使用 PHP 8.4 ZTS Classic mode 运行禅道，并面向 Windows、Linux 和 Docker 提供一致的安装、运行和构建能力。
 
-当前仓库已实现 runtime-development-plan 的阶段 0-5 全部 Runtime 侧任务，并已在 GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生构建矩阵（含 ionCube 与 DuckDB）。禅道业务适配按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施，当前只读定位了改动点，尚未修改禅道代码。
+当前仓库已实现 runtime-development-plan 的阶段 0-5 全部 Runtime 侧任务，并已在 GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生构建矩阵（Linux 含 DuckDB，三平台均含 ionCube）。禅道业务适配按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施，当前只读定位了改动点，尚未修改禅道代码。
 
 ## 已确认的技术边界
 
@@ -64,13 +64,13 @@ Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plan
 
 - 版本锁定清单 `versions.lock.json`：PHP 8.4.24、FrankenPHP v1.12.7、Caddy v2.11.4、DuckDB 1.5.5/Go Binding、phpredis 6.3.0、ionCube（Linux amd64/arm64、Windows x64）、MySQL 8.4.11 三平台归档（含校验和）与许可证。
 - 本地 Control Plane：`status/start/stop/reload/health/diagnose/version`，Linux Unix Socket `0600` + `SO_PEERCRED` 鉴权，审计日志 JSON Lines；Windows Named Pipe ACL 与 `run-service` 入口。
-- CLI 扩展：`upgrade prepare/apply/rollback/status`、`logs/metrics`、`flush-observability/clean-observability`、`collect-logs` 诊断包、`php-cli`（与 Web 共用 PHP/ionCube）。
+- CLI 扩展：`upgrade prepare/apply/rollback/status`、`logs/metrics`、`flush-observability/clean-observability`、`convert-jsonl`、`collect-logs` 诊断包、`php-cli`（与 Web 共用 PHP/ionCube）。
 - 分层健康检查：`/_runtime/liveness|readiness` 动态反映 Host 状态，`health --deep` 返回 runtime/php/app 组件结果。
-- 结构化日志：`slog` JSON、敏感字段脱敏、大小轮转；Caddy access log 可写入独立文件。
-- 自动请求日志：启用 `web.accessLog` 后，每次请求自动写入 `access.log`（JSON）：`request.uri`（URL）、`duration`（响应时间，秒）、`status`（状态码）、`size`、`method`、`remote_ip`；Caddy 错误与 PHP 错误分别进入同一 access 文件（`http.log.error`）和 `logs/php-error.log`，默认不记录 Cookie/Authorization。
+- 结构化日志：`slog` JSON、敏感字段脱敏、按小时轮转；Runtime 日志写入 `logs/runtime-<nodeID>.jsonl`，按节点区分文件。
+- 自动请求日志：每次请求自动写入 `logs/access-<nodeID>.jsonl`（JSON）：`request.uri`（URL）、`duration`（响应时间，秒）、`status`（状态码）、`size`、`method`、`remote_ip`；Caddy 错误与 PHP 错误分别进入同一 access 文件（`http.log.error`）和 `logs/php-error.log`，默认不记录 Cookie/Authorization。
 - 升级事务：Runtime/Application/Config/Data 目录分离，`app/current` 指针原子切换、备份与回滚状态机。
 - Queue Engine：PHP Queue Bridge 客户端（loopback-only + 随机凭据）、有界 Worker Pool（队列级并发、超时、取消、排空）、租约心跳与 fencing、Wakeup + 自适应轮询、Scheduler 注册表。
-- 可观测性：DuckDB Go Library 已编入默认 Linux 构建；事件信封与脱敏、节点分区 Batch/Spool/原子发布 Parquet、运行中自动补发、崩溃恢复、受控查询模板与节点自清理；CLI 提供 `logs`、`metrics`、`flush-observability`、`clean-observability`、`collect-logs`。
+- 可观测性：DuckDB Go Library 已编入默认 Linux 构建；事件信封与脱敏、节点分区 Batch/Spool/原子发布 Parquet、运行中自动补发、崩溃恢复、受控查询模板与节点自清理；日志采用“近期 JSONL 追加 + 每小时同步 Parquet”，access/runtime 按节点文件名区分，JSONL 默认保留 7 天（见 `docs/duckdb-parquet-observability-design.md` §7.5）；CLI 提供 `logs`、`metrics`、`flush-observability`、`clean-observability`、`convert-jsonl`、`collect-logs`。
 - 平台与打包：systemd unit 与安装/卸载脚本、logrotate、Keepalived + Caddy Gateway 模板、Docker Compose（web/scheduler/mysql）、Runtime/Full 包组装、manifest/SBOM/校验和/大小报告；MySQL Supervisor 已用真实 MySQL 8.4.11 二进制完成初始化/启动/优雅停止验证。
 - 安全边界：构建产物校验不嵌入任何数据库 Driver（`verify-no-db-driver.sh`）；Windows 子进程挂入 Job Object（KILL_ON_JOB_CLOSE），Host 异常退出不会遗留孤儿进程。
 - 供应链：`sign-artifacts.sh` / `verify-signature.sh` / `verify-supply-chain.sh` 实现 GPG 签名与端到端校验（checksum + manifest + SBOM + 大小报告 + 签名），release workflow 已接入；受保护 release 另含 provenance attestation 与 release draft。

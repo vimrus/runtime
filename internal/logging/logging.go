@@ -10,16 +10,19 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Options struct {
-	Level      slog.Level
-	OutputPath string // empty means stderr
-	MaxBytes   int64  // per-file rotation threshold, 0 disables rotation
-	MaxBackups int    // retained rotated files
-	NodeID     string
-	InstanceID string
-	Component  string
+	Level        slog.Level
+	OutputPath   string        // empty means stderr
+	MaxBytes     int64         // per-file rotation threshold, 0 disables rotation
+	MaxBackups   int           // retained rotated files
+	RollInterval time.Duration // time-based rotation interval, 0 disables
+	KeepDays     int           // retain rotated segments for this many days
+	NodeID       string
+	InstanceID   string
+	Component    string
 }
 
 // Logger is a source-tagged structured logger.
@@ -41,7 +44,7 @@ func New(options Options) (*Logger, error) {
 			return nil, err
 		}
 		var err error
-		rotating, err = NewRotatingFile(options.OutputPath, options.MaxBytes, options.MaxBackups)
+		rotating, err = NewRotatingFile(options.OutputPath, options.MaxBytes, options.MaxBackups, options.RollInterval, options.KeepDays)
 		if err != nil {
 			return nil, err
 		}
@@ -82,6 +85,13 @@ func (l *Logger) Log(ctx context.Context, level slog.Level, message string, args
 // require *slog.Logger.
 func (l *Logger) Slog() *slog.Logger {
 	return l.inner
+}
+
+// Prune removes rotated JSONL segments older than the configured KeepDays.
+func (l *Logger) Prune() {
+	if l.file != nil {
+		l.file.Prune()
+	}
 }
 
 func (l *Logger) Close() error {

@@ -19,8 +19,11 @@ if ! docker image inspect "${POC_IMAGE}" >/dev/null 2>&1; then
 fi
 
 readonly container="zentao-runtime-native-${POC_ARCH}-${RANDOM}-$$"
+readonly synthetic_dir="$(mktemp -d)"
 cleanup() {
     docker rm --force "${container}" >/dev/null 2>&1 || true
+    find "${synthetic_dir}" -mindepth 1 -delete 2>/dev/null || true
+    rmdir "${synthetic_dir}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -45,5 +48,10 @@ docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/ \
 docker exec "${container}" php --ri 'ionCube Loader' | grep -F 'ionCube Loader'
 docker exec "${container}" zentao-runtime version \
     | jq --exit-status '.mode == "classic" and .php_zts == true and .zend_signals == false and .duckdb == "v2.10505.0"' >/dev/null
+
+mkdir -p "${synthetic_dir}/open"
+"${repo_root}/scripts/ci/make-synthetic-app-package.sh" "${synthetic_dir}/open" >/dev/null
+"${repo_root}/tests/e2e/access-log-smoke.sh" "${synthetic_dir}/open"
+"${repo_root}/tests/e2e/jsonl-parquet-smoke.sh"
 
 echo "Linux ${POC_ARCH} smoke tests passed"

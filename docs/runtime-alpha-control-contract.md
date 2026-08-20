@@ -17,7 +17,6 @@ Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-se
     "controlSocket": "/run/zentao/runtime.sock",
     "pidFile": "/run/zentao/runtime.pid",
     "drainTimeout": "30s",
-    "auditLog": "/opt/zentao/logs/audit.log",
     "logPath": "/opt/zentao/logs/runtime.log",
     "logMaxBytes": 16777216,
     "logMaxBackups": 5,
@@ -30,8 +29,18 @@ Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-se
     "threads": 4,
     "readHeaderTimeout": "10s",
     "idleTimeout": "30s",
-    "maxHeaderBytes": 16384,
-    "accessLog": "/opt/zentao/logs/access.log"
+    "maxHeaderBytes": 16384
+  },
+  "observability": {
+    "enabled": true,
+    "datasetRoot": "/opt/zentao/observability",
+    "spoolPath": "/opt/zentao/spool/observability",
+    "flushInterval": "60s",
+    "metricsDays": 30,
+    "logDays": 7,
+    "jsonlConvertInterval": "1h",
+    "jsonlConvertSources": ["access", "runtime"],
+    "jsonlKeepDays": 7
   }
 }
 ```
@@ -95,7 +104,10 @@ Linux 默认 Socket 为 `/run/zentao/runtime.sock`，创建后权限为 `0600`�
 {"version":1,"ok":false,"error":{"code":"invalid_configuration","message":"..."}}
 ```
 
-当前支持 `status`、`version`、`health`、`diagnose`、`reload` 和 `stop`；Linux 入口同时提供 `start`（等价于 `serve`），Windows 提供 `run-service`。CLI 使用同一二进制：
+当前支持 `status`、`version`、`health`、`diagnose`、`reload`、`stop`、
+`upgrade`、`logs`、`metrics`、`observability-flush`、
+`observability-clean`、`convert-jsonl` 和 `collect-logs`；Linux 入口同时
+提供 `start`（等价于 `serve`），Windows 提供 `run-service`。CLI 使用同一二进制：
 
 ```bash
 zentao-runtime status --control-socket /run/zentao/runtime.sock
@@ -121,6 +133,8 @@ Linux Control Plane 通过 `SO_PEERCRED` 校验调用者必须与 Runtime 同属
 effective user 或 root，Socket 权限固定为 `0600`。Windows Named Pipe 使用
 仅 SYSTEM 和管理员可访问的 ACL。每次控制操作写入审计日志（JSON Lines），
 审计记录包含操作、调用者身份、结果和时间，不包含凭据或配置明文。
+未配置 `runtime.auditLog` 时，审计日志默认写入
+`<logs_dir>/audit-<nodeID>.jsonl`，与 Runtime/访问日志一样按节点区分。
 
 健康探针由 Runtime Host 动态提供：
 
@@ -155,6 +169,7 @@ app-root 以及未来的数据库、Session、NFS 探针），组件状态为
 ```bash
 zentao-runtime flush-observability --control-socket /run/zentao/runtime.sock
 zentao-runtime clean-observability --control-socket /run/zentao/runtime.sock
+zentao-runtime convert-jsonl --control-socket /run/zentao/runtime.sock
 zentao-runtime collect-logs --control-socket /run/zentao/runtime.sock
 zentao-runtime logs --since 30m --level error --node node-a --control-socket /run/zentao/runtime.sock
 zentao-runtime metrics --since 1h --metric-name http.request.duration --control-socket /run/zentao/runtime.sock
@@ -163,12 +178,17 @@ zentao-runtime metrics --since 1h --metric-name http.request.duration --control-
 查询只使用固定模板和受控参数：时间范围、节点、日志级别或指标名、行数上限；
 不接收任意 SQL 或任意路径。
 
+`convert-jsonl` 立即把本节点已封闭的 JSONL 段（访问日志和 Runtime 日志）
+同步为 Parquet，返回 `{"segments":N,"events":N,"skipped":N,"malformed":N}`；
+运行中每 `jsonlConvertInterval`（默认 1 小时）自动执行一次，重复执行幂等。
+原始 JSONL 段按 `jsonlKeepDays`（默认 7 天）保留后由轮转器清理。
+
 `collect-logs` 生成受大小限制的诊断包（Runtime/Caddy/PHP 日志、审计、
 版本与脱敏配置摘要），不包含凭据、Token、请求内容或业务数据。
 
 ## 8. 自动请求日志
 
-配置 `web.accessLog`（绝对路径）后，Runtime 自动记录每次请求：
+Runtime 启动后自动记录每次请求（无需额外配置路径）：
 
 - `request.uri`：请求 URL（含查询串）；
 - `duration`：响应时间（秒，浮点）；
@@ -178,9 +198,17 @@ zentao-runtime metrics --since 1h --metric-name http.request.duration --control-
 - `logger`：`http.log.access.access` 表示访问日志；
   `http.log.error.*` 表示 Caddy 处理器错误（含 `error` 字段）。
 
-日志为 JSON Lines，写入后按 64 MB 轮转。默认不记录 Cookie、
-Authorization 等凭据头。PHP 侧错误消息由 `php.ini` 的 `error_log` 写入
-`logs/php-error.log`，与访问日志按时间戳关联。
+日志为 JSON Lines，写入 `<runtime.logPath 目录>/access-<nodeID>.jsonl`；
+每个节点独立文件，适合 NFS 多节点共享日志目录。Caddy 每小时整点
+（`roll_minutes: [0]`）把追加文件轮转为
+`access-<nodeID>-<时间戳>-time.jsonl`（大小触发时为
+`-size.jsonl`），按 `jsonlKeepDays` 保留。
+默认不记录 Cookie、Authorization 等凭据头。PHP 侧错误消息由 `php.ini`
+的 `error_log` 写入 `logs/php-error.log`，与访问日志按时间戳关联。
+
+Runtime 自身结构化日志写入 `runtime-<nodeID>.jsonl`，按
+`jsonlConvertInterval` 轮转为 `runtime-<nodeID>.jsonl-<时间戳>.log`。
+两者均通过 `convert-jsonl` 或自动调度转换为 Parquet（见第 7 节）。
 
 ## 5. Reload 边界
 
@@ -191,7 +219,6 @@ Authorization 等凭据头。PHP 侧错误消息由 `php.ini` 的 `error_log` �
 - `web.root`
 - `web.listen`
 - `web.threads`
-- `web.accessLog`
 - `runtime.controlSocket`
 - `runtime.pidFile`
 - `runtime.auditLog`
@@ -200,5 +227,8 @@ Authorization 等凭据头。PHP 侧错误消息由 `php.ini` 的 `error_log` �
 - `runtime.logMaxBackups`
 - `runtime.nodeID`
 - `runtime.clusterID`
+- `observability.jsonlConvertInterval`
+- `observability.jsonlConvertSources`
+- `observability.jsonlKeepDays`
 
 PHP 版本、ionCube、Zend extension、PHP 初始化参数和 Runtime 二进制也属于必须重启的范围。
