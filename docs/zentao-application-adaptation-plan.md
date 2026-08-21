@@ -86,7 +86,7 @@
 
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
-| Z-QUEUE-01 | P0 | 新队列 Schema | 安装/升级 SQL、innovation 方言 | Job、Attempt、Lease 相关表和索引 | 无 | 不复用 `zt_queue` 协议，不占用已有 `zt_job`；迁移可回滚 |
+| Z-QUEUE-01 | P0 | 新队列 Schema | 安装/升级 SQL、innovation 方言 | 改造后的 `zt_queue`、`zt_queueexec`、`zt_servernode` 及索引 | 无 | 不沿用旧 cron 消费协议，不占用已有 `zt_job`；迁移可回滚且只保留最近一天数据 |
 | Z-QUEUE-02 | P0 | 冻结 Queue Service 契约 | lib/module | PHP 接口、状态机、错误分类、Payload Schema | 无，与 R-ARCH-04 联合设计 | 语义为 At-least-once，明确不承诺 Exactly-once |
 | Z-QUEUE-03 | P0 | 实现私有 Queue Bridge | 私有 PHP 入口、鉴权层 | 批量 Claim/Heartbeat/ACK/Retry/Cancel API | R-ARCH-04, Z-QUEUE-02 | 可通过 Fake Runtime 独立测试；仅本机 Runtime 可调用 |
 | Z-QUEUE-04 | P0 | 实现 Portable CAS 领取 | Queue DAO、数据库适配 | 候选查询、条件更新、租约和 fencing | Z-QUEUE-01 | 正确性不依赖 `SKIP LOCKED`；领取结束后立即释放事务 |
@@ -187,7 +187,7 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 ## 14. 建议的迁移顺序
 
 1. 先完成 Classic mode、安装和健康检查兼容，不改变现有业务能力。
-2. 新建队列表和 Queue Service，与旧 `zt_queue` 并存但不双消费。
+2. 改造 `zt_queue` 为新队列表并新建 Queue Service；旧数据只迁移最近一天，其余丢弃。
 3. 选择邮件或 Webhook 等边界清晰、可幂等的任务完成首批迁移。
 4. 完成队列管理界面和故障恢复后，再迁移更多 Handler 与 Scheduler。
 5. 缓存先完成 Client 和数据库契约，再按实际性能数据接入少量热点。
@@ -333,11 +333,14 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
   - `type=system` 直接 `exec($task->command)`（约 442 行），存在任意系统
     命令执行面，Scheduler 改造必须改为白名单映射。
 - `zt_job` 已被 CI 模块占用（`zentaomax/db/standard/*.sql` 中建表），
-  新队列表不能使用该名称；建议 `zt_asyncjob`、`zt_asyncjobattempt`、
-  `zt_runtimelease`，最终命名进入数据库评审后确认。
+  不能使用；命名已确认：`zt_queue`（原地改造）、`zt_queueexec`、
+  `zt_servernode`。`TABLE_QUEUE` 沿用，新增 `TABLE_QUEUEEXEC`、
+  `TABLE_SERVERNODE`。旧数据迁移口径：只保留最近 24 小时内
+  `status='wait'` 的任务，`doing` 不迁移，其余丢弃；升级先
+  `RENAME TABLE zt_queue TO zt_queue_backup_<版本>` 保留回滚路径。
 - 改动点：新增 Queue Service/DAO、Portable CAS、租约与 fencing、持久化
-  重试/死信、私有 Bridge 入口（loopback + 随机凭据）、按 Handler 切换的
-  灰度迁移；新表 SQL 进入 `zentao.sql` + `db/update*.sql` +
+  重试/死信、私有 Bridge 入口（loopback + 随机凭据）、旧 `zt_queue`
+  一次性切换（旧数据仅保留最近一天）；新表 SQL 进入 `zentao.sql` + `db/update*.sql` +
   `zentaopatch/innovation` 方言。
 
 ### 18.3 安装、升级与入口（Z-INSTALL-01/Z-UPGRADE-01/Z-ENV-01/Z-HEALTH-01）

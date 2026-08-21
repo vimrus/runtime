@@ -17,8 +17,9 @@
 
 ## 2. 核心结论
 
-新的消息队列继续使用禅道业务数据库作为持久化存储，但不复用当前
-`zt_queue` 的消费协议，也不从零实现完整的消息处理框架。
+新的消息队列继续使用禅道业务数据库作为持久化存储，但不再复用当前
+`zt_queue` 的消费协议（表结构将原地改造为新任务 Schema），也不从零实现
+完整的消息处理框架。
 
 正式方案如下：
 
@@ -222,7 +223,7 @@ PHP Queue Service 是较薄的任务协议层，不重新实现 PDO 驱动。
 ```text
 ZenTao PHP Application
   -> enqueue in current business transaction
-  -> zt_asyncjob in the configured ZenTao database
+  -> zt_queue (new schema) in the configured ZenTao database
   -> after commit, best-effort wakeup to local Go Runtime
 
 zentao-runtime (no DB driver and no DB credentials)
@@ -343,18 +344,18 @@ stateDiagram-v2
 
 ### 10.1 表命名
 
-现有代码已经使用 `zt_queue` 作为 cron 队列，并使用 `zt_job` 表示 CI Job，不能复用
-`zt_job` 名称。新设计建议使用：
+`zt_job` 已被 CI 模块占用，不能复用；`zt_task` 是项目任务表。命名已确认：
 
 ```text
-zt_asyncjob
-zt_asyncjobattempt
-zt_runtimelease
+zt_queue       -- 改造后的任务主表（原 cron 队列表整体替换结构）
+zt_queueexec   -- 每次执行记录（审计与 stale_result 留痕）
+zt_servernode  -- 服务器节点注册/心跳/控制
 ```
 
-实际表前缀继续使用 `$config->db->prefix`。表名属于设计建议，进入数据库评审后最终确认。
+实际表前缀继续使用 `$config->db->prefix`。`TABLE_QUEUE` 沿用，新增
+`TABLE_QUEUEEXEC`、`TABLE_SERVERNODE`。
 
-### 10.2 `zt_asyncjob`
+### 10.2 `zt_queue`（改造后的任务主表）
 
 | 字段 | 逻辑类型 | 说明 |
 |---|---|---|
@@ -386,9 +387,10 @@ zt_runtimelease
 | `updatedAt` | timestamp | 最近更新时间 |
 | `version` | integer | 管理操作的乐观锁版本 |
 
-### 10.3 `zt_asyncjobattempt`
+### 10.3 `zt_queueexec`
 
-每次领取生成一条 Attempt，至少记录：
+每次领取生成一条执行记录（表名不使用 attempt，字段与 Bridge 契约对齐），
+至少记录：
 
 | 字段 | 说明 |
 |---|---|
@@ -403,17 +405,22 @@ zt_runtimelease
 | `durationMs` | 执行耗时 |
 | `outputSummary` | 有大小限制的摘要，不保存无限输出 |
 
-Attempt 表用于客户诊断和审计，不参与高频领取条件。
+执行记录表用于客户诊断和审计，不参与高频领取条件。
 
-### 10.4 `zt_runtimelease`
+### 10.4 `zt_servernode`
 
-该表用于 Scheduler Leader 等少量单例角色，不用于普通队列消费。建议字段：
+运行时服务器节点注册表，一行一个部署 Runtime 的服务器节点，用于 Bridge
+鉴权、节点心跳与 fencing、pause/resume 控制，并可作为可观测性事件来源校验
+和健康报告的依据。建议字段：
 
 ```text
-name, owner, token, leaseUntil, heartbeatAt, updatedAt
+clusterID, nodeID, instanceID, tokenHash, heartbeatAt,
+state(active|paused|draining), startedAt, version, updatedAt
 ```
 
-普通 Worker 通过条件更新 CAS 竞争不同任务，不需要选举一个“队列主节点”。
+`tokenHash` 只存 Bridge 随机凭据的 HMAC 哈希，不存明文。普通 Worker 通过条件
+更新 CAS 竞争不同任务，不需要选举“队列主节点”；Scheduler 等单例角色如需
+Leader Lease，可复用本表增加 `role/leaderUntil` 列，Go 不直接更新该表。
 
 ### 10.5 索引
 
@@ -505,7 +512,7 @@ PHP Queue Service receives claim(queue set, batch size, worker identity)
   -> read a candidate window ordered by priority/availableAt/id
   -> for each candidate:
        generate a unique lease token
-       UPDATE zt_asyncjob
+       UPDATE zt_queue
           SET status       = 'running',
               leaseOwner   = worker identity,
               leaseToken   = generated token,
@@ -579,7 +586,7 @@ final class QueueDriverCapabilities
 Execute 在 PHP 中执行 Handler，并使用条件更新持久化结果：
 
 ```text
-UPDATE zt_asyncjob
+UPDATE zt_queue
    SET status='succeeded', finishedAt=now, version=version+1, ...
  WHERE id=? AND status='running' AND leaseToken=?
 ```
@@ -750,12 +757,12 @@ Queue Client 负责：
 
 ### 13.2 事务一致性
 
-业务数据与 `zt_asyncjob` 位于同一个数据库时，首选在同一事务中直接插入任务：
+业务数据与 `zt_queue` 位于同一个数据库时，首选在同一事务中直接插入任务：
 
 ```text
 BEGIN
   update business tables
-  insert zt_asyncjob
+  insert zt_queue
 COMMIT
 ```
 
@@ -841,8 +848,8 @@ Scheduler Leader: 根据计划产生任务
 All Queue Workers: 并发消费已产生任务
 ```
 
-Scheduler 通过 PHP Queue Service 和 DAO 在 `zt_runtimelease` 获取短期 Leader Lease。
-Go 不直接更新该表。Leader 崩溃后其他节点接管。
+Scheduler 通过 PHP Queue Service 和 DAO 在 `zt_servernode` 上维护 Leader Lease
+（`role/leaderUntil` 列）。Go 不直接更新该表。Leader 崩溃后其他节点接管。
 每个周期任务使用确定性的幂等键：
 
 ```text
@@ -1123,37 +1130,42 @@ zentaopatch/innovation/
 
 ## 22. 迁移方案
 
-### 22.1 不原地改造 `zt_queue`
+### 22.1 原地改造 `zt_queue`
 
-使用新表 `zt_asyncjob`，原因如下：
+已确认不再保留两套队列：`zt_queue` 直接改造为新任务表（任务主表），配套
+`zt_queueexec`（执行记录）和 `zt_servernode`（服务器节点）。原因与边界：
 
-- 当前 `zt_queue` 仍被 cron 代码读写。
-- 新旧状态语义差异很大。
-- 原地增加字段不能安全解决运行中旧任务的归属。
-- 独立表便于灰度、回滚和对比指标。
 - `zt_job` 已被 CI 模块占用，不能用作新队列表名。
+- 旧协议（`cron/type/command/execId` 消费循环）整体废弃；`zt_cron` 调度保留，
+  入队与消费改为新 Queue Service。
+- 新旧状态语义差异通过一次性数据迁移解决，不做原地双语义并存。
+- 旧数据迁移口径：只迁移最近 24 小时内且 `status='wait'` 的任务；
+  `doing` 中的旧任务不迁移（旧消费者已停，按失败丢弃更安全）；其余丢弃。
+- 升级 SQL 先 `RENAME TABLE zt_queue TO zt_queue_backup_<版本>` 保留回滚
+  路径，确认稳定后再删除备份表。
 
-### 22.2 分阶段迁移
+### 22.2 一次性切换
 
 ```text
-Phase 0: 建表和 Runtime Queue 自检，默认禁用
-Phase 1: 选择低风险任务类型，仅新任务写入 zt_asyncjob
-Phase 2: 上线管理界面、指标、Retry 和 Dead Letter
-Phase 3: 迁移邮件、Webhook 等独立任务
-Phase 4: 迁移 cron 任务生产和执行
-Phase 5: 旧 zt_queue 只读观察并最终停止使用
+Phase 0: 改造 zt_queue 结构并新建 zt_queueexec/zt_servernode；
+         迁移最近 24 小时 wait 数据，默认禁用
+Phase 1: 实现 PHP Queue Service、Portable CAS 与 Bridge 7 端点，
+         Runtime 集成冒烟（领取→执行→ACK→重试→reap）
+Phase 2: 改造 cron 入队（zt_cron 调度保留，任务走新队列），
+         删除旧 consumeTasks/consumeTask 消费循环
+Phase 3: 上线管理界面、指标、Retry 和 Dead Letter
+Phase 4: 确认稳定后删除 zt_queue_backup_<版本> 与旧消费代码
 ```
 
-同一业务任务不能同时被新旧 Consumer 执行。迁移开关必须按 Handler 类型切换，禁止
-无去重能力的双写双消费。
+同一业务任务不能同时被新旧 Consumer 执行。迁移 SQL 必须幂等：重复执行不重复
+迁移；禁止无去重能力的双写双消费。
 
 ### 22.3 回滚
 
-- 保留旧 Consumer 和 Schema 一个完整兼容周期。
-- 切换前让旧 Queue 中对应任务排空。
-- 回滚只影响新任务路由，不删除 `zt_asyncjob` 中已有任务。
-- 提供暂停、导出和受控重放工具处理回滚期间的任务。
-- 数据库迁移首期只新增表和索引，不删除旧字段。
+- 升级 SQL 保留 `zt_queue_backup_<版本>` 供回滚；回滚时恢复旧表结构与旧
+  Consumer（若代码保留）或按备份受控重放。
+- 回滚不删除新表中已入队任务；提供暂停、导出和受控重放工具处理回滚期间任务。
+- 新表上线后旧 `zt_queue` 不再写入，不存在双写双消费窗口。
 
 ## 23. 测试设计
 
@@ -1234,7 +1246,7 @@ Bridge Contract Tests 必须验证版本、鉴权、大小限制、超时、部�
 
 以下事项不改变总体架构，但需要在 POC 或产品设计阶段确认：
 
-1. 新表最终命名是否采用 `zt_asyncjob` 和 `zt_asyncjobattempt`。
+1. 新表命名已确认：`zt_queue`（改造）、`zt_queueexec`、`zt_servernode`。
 2. 首发必须通过完整 Queue Contract 的数据库清单。
 3. 首批迁移的任务类型，建议从邮件或 Webhook 等边界清晰的任务开始。
 4. PHP 内部 Executor 最终使用独立 loopback Listener 还是稳定的进程内 Handler API。
