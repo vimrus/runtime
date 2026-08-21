@@ -20,6 +20,8 @@ Go Runtime 不连接数据库、不导入数据库 Driver、不保存数据库�
 - JSON 必须只有一个根值，且拒绝未知字段。
 - 请求和响应 Body 上限均为 64 KiB；批量 Claim、Heartbeat、Stats 的单次数量上限为 128。
 - 时间统一使用 UTC RFC 3339 字符串，并要求微秒精度；PHP 负责与数据库字段的精度适配。
+- 字段命名与禅道队列表列名保持一致（`uuid`、`channel`、`leaseEnd`、
+  `heartbeatTime` 等），PHP 不进行字段名映射，只做时间格式与精度转换。
 
 ## 3. 端点
 
@@ -37,20 +39,20 @@ Go Runtime 不连接数据库、不导入数据库 Driver、不保存数据库�
 
 ## 4. 租约与 fencing
 
-`ClaimResponse.leases` 只包含 `jobUUID`、`queue`、`handler`、`attempt`、`leaseToken`、
-`leaseUntil`、`timeoutSeconds` 和 `traceID`，**不包含业务 Payload**。
+`ClaimResponse.leases` 只包含 `uuid`、`channel`、`handler`、`attempt`、`leaseToken`、
+`leaseEnd`、`timeoutSeconds` 和 `traceID`，**不包含业务 Payload**。
 
-`ExecuteRequest` 必须携带 `jobUUID`、正整数 `attempt`、`leaseToken` 和 `traceID`。
-Heartbeat 中每个 `LeaseRef` 也必须携带 `jobUUID`、`attempt`、`leaseToken`。取消、人工重试等对运行中任务有状态影响的 Control 操作同样要求 `leaseToken`。
+`ExecuteRequest` 必须携带 `uuid`、正整数 `attempt`、`leaseToken` 和 `traceID`。
+Heartbeat 中每个 `LeaseRef` 也必须携带 `uuid`、`attempt`、`leaseToken`。取消、人工重试等对运行中任务有状态影响的 Control 操作同样要求 `leaseToken`。
 
-PHP 只能使用 `jobUUID + leaseToken + running` 的条件更新 ACK、Retry、Failed、Canceled 和
+PHP 只能使用 `uuid + leaseToken + running` 的条件更新 ACK、Retry、Failed、Canceled 和
 Heartbeat。条件更新未命中意味着租约已失效；旧执行结果只能作为 `stale_result` 记录，不能覆盖新租约。
 
 ## 5. 结果与错误
 
 `ExecuteResponse.result` 只允许 `success`、`retry`、`failed`、`canceled`。`retry` 可以提供非负的 `retryAfterSeconds`；其他结果必须为零。
 
-Heartbeat 对每条租约独立返回 `extended`、`stale`、`not_found` 或 `error`，因此一个批次可以部分成功。`extended` 必须返回新的 `leaseUntil`。
+Heartbeat 对每条租约独立返回 `extended`、`stale`、`not_found` 或 `error`，因此一个批次可以部分成功。`extended` 必须返回新的 `leaseEnd`。
 
 可跨实现稳定识别的错误码为：
 

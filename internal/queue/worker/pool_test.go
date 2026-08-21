@@ -44,8 +44,8 @@ func (b *fakeBridge) Heartbeat(_ context.Context, request bridge.HeartbeatReques
 
 func TestPoolClaimsExecutesAndDrains(t *testing.T) {
 	claimed := bridge.Lease{
-		JobUUID: "job-1", Queue: "mail", Handler: "mail.send", Attempt: 1,
-		LeaseToken: "token-1", LeaseUntil: time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano),
+		UUID: "job-1", Channel: "mail", Handler: "mail.send", Attempt: 1,
+		LeaseToken: "token-1", LeaseEnd: time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano),
 		TimeoutSeconds: 10, TraceID: "trace-1",
 	}
 	queueBridge := &fakeBridge{
@@ -57,7 +57,7 @@ func TestPoolClaimsExecutesAndDrains(t *testing.T) {
 		NodeID:       "node-a",
 		InstanceID:   "instance-a",
 		WorkerID:     "worker-a",
-		Queues:       []QueueConfig{{Name: "mail", Concurrency: 2, MinPoll: 10 * time.Millisecond, MaxPoll: 20 * time.Millisecond}},
+		Channels:     []QueueConfig{{Name: "mail", Concurrency: 2, MinPoll: 10 * time.Millisecond, MaxPoll: 20 * time.Millisecond}},
 		ClaimBatch:   1,
 		LeaseSeconds: 60,
 		DrainTimeout: 2 * time.Second,

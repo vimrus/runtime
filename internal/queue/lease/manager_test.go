@@ -37,15 +37,15 @@ func TestManagerExtendsAndCancelsStaleLeases(t *testing.T) {
 	heartbeater := &recordingHeartbeater{
 		responses: []bridge.HeartbeatResponse{
 			{Schema: bridge.SchemaVersion, Results: []bridge.HeartbeatResult{
-				{JobUUID: "job-1", Attempt: 1, Status: bridge.LeaseExtended, LeaseUntil: time.Now().UTC().Add(30 * time.Second).Format(time.RFC3339Nano)},
-				{JobUUID: "job-2", Attempt: 1, Status: bridge.LeaseStale, Code: "lease_lost"},
+				{UUID: "job-1", Attempt: 1, Status: bridge.LeaseExtended, LeaseEnd: time.Now().UTC().Add(30 * time.Second).Format(time.RFC3339Nano)},
+				{UUID: "job-2", Attempt: 1, Status: bridge.LeaseStale, Code: "lease_lost"},
 			}},
 		},
 	}
 	manager := NewManager("node-a", "instance-a", "worker-a", heartbeater, 10*time.Millisecond, 8)
 	var cancelled sync.Map
-	manager.Add(bridge.Lease{JobUUID: "job-1", Attempt: 1, LeaseToken: "t1", LeaseUntil: time.Now().UTC().Add(10 * time.Second).Format(time.RFC3339Nano), TimeoutSeconds: 10}, func() { cancelled.Store("job-1", true) })
-	manager.Add(bridge.Lease{JobUUID: "job-2", Attempt: 1, LeaseToken: "t2", LeaseUntil: time.Now().UTC().Add(10 * time.Second).Format(time.RFC3339Nano), TimeoutSeconds: 10}, func() { cancelled.Store("job-2", true) })
+	manager.Add(bridge.Lease{UUID: "job-1", Attempt: 1, LeaseToken: "t1", LeaseEnd: time.Now().UTC().Add(10 * time.Second).Format(time.RFC3339Nano), TimeoutSeconds: 10}, func() { cancelled.Store("job-1", true) })
+	manager.Add(bridge.Lease{UUID: "job-2", Attempt: 1, LeaseToken: "t2", LeaseEnd: time.Now().UTC().Add(10 * time.Second).Format(time.RFC3339Nano), TimeoutSeconds: 10}, func() { cancelled.Store("job-2", true) })
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()

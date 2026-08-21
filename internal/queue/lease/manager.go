@@ -16,12 +16,12 @@ type Heartbeater interface {
 
 // Lease is an active execution lease with its worker cancellation handle.
 type Lease struct {
-	JobUUID        string
-	Queue          string
+	UUID           string
+	Channel        string
 	Handler        string
 	Attempt        int
 	LeaseToken     string
-	LeaseUntil     time.Time
+	LeaseEnd       time.Time
 	TimeoutSeconds int
 	TraceID        string
 	cancel         context.CancelFunc
@@ -59,24 +59,24 @@ func NewManager(nodeID, instanceID, workerID string, heartbeat Heartbeater, inte
 func (m *Manager) Add(lease bridge.Lease, cancel context.CancelFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	until, _ := time.Parse(time.RFC3339Nano, lease.LeaseUntil)
-	m.leases[lease.JobUUID] = &Lease{
-		JobUUID:        lease.JobUUID,
-		Queue:          lease.Queue,
+	until, _ := time.Parse(time.RFC3339Nano, lease.LeaseEnd)
+	m.leases[lease.UUID] = &Lease{
+		UUID:           lease.UUID,
+		Channel:        lease.Channel,
 		Handler:        lease.Handler,
 		Attempt:        lease.Attempt,
 		LeaseToken:     lease.LeaseToken,
-		LeaseUntil:     until,
+		LeaseEnd:       until,
 		TimeoutSeconds: lease.TimeoutSeconds,
 		TraceID:        lease.TraceID,
 		cancel:         cancel,
 	}
 }
 
-func (m *Manager) Remove(jobUUID string) {
+func (m *Manager) Remove(uuid string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.leases, jobUUID)
+	delete(m.leases, uuid)
 }
 
 func (m *Manager) Count() int {
@@ -90,7 +90,7 @@ func (m *Manager) Active() []bridge.LeaseRef {
 	defer m.mu.Unlock()
 	refs := make([]bridge.LeaseRef, 0, len(m.leases))
 	for _, lease := range m.leases {
-		refs = append(refs, bridge.LeaseRef{JobUUID: lease.JobUUID, Attempt: lease.Attempt, LeaseToken: lease.LeaseToken})
+		refs = append(refs, bridge.LeaseRef{UUID: lease.UUID, Attempt: lease.Attempt, LeaseToken: lease.LeaseToken})
 	}
 	return refs
 }
@@ -138,20 +138,20 @@ func (m *Manager) heartbeatOnce(ctx context.Context) {
 		}
 		m.mu.Lock()
 		for _, result := range response.Results {
-			lease, ok := m.leases[result.JobUUID]
+			lease, ok := m.leases[result.UUID]
 			if !ok {
 				continue
 			}
 			switch result.Status {
 			case bridge.LeaseExtended:
-				if until, err := time.Parse(time.RFC3339Nano, result.LeaseUntil); err == nil {
-					lease.LeaseUntil = until
+				if until, err := time.Parse(time.RFC3339Nano, result.LeaseEnd); err == nil {
+					lease.LeaseEnd = until
 				}
 			case bridge.LeaseStale, bridge.LeaseNotFound, bridge.LeaseError:
 				if lease.cancel != nil {
 					lease.cancel()
 				}
-				delete(m.leases, result.JobUUID)
+				delete(m.leases, result.UUID)
 			}
 		}
 		m.mu.Unlock()
@@ -162,10 +162,10 @@ func (m *Manager) cancelBatch(refs []bridge.LeaseRef, reason string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, ref := range refs {
-		if lease, ok := m.leases[ref.JobUUID]; ok && lease.cancel != nil {
+		if lease, ok := m.leases[ref.UUID]; ok && lease.cancel != nil {
 			lease.cancel()
 		}
-		delete(m.leases, ref.JobUUID)
+		delete(m.leases, ref.UUID)
 	}
 	_ = reason
 }

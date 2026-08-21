@@ -72,7 +72,7 @@ func New(config Config, queueBridge Bridge) (*Engine, error) {
 		NodeID:       config.NodeID,
 		InstanceID:   config.InstanceID,
 		WorkerID:     config.WorkerID,
-		Queues:       config.Workers,
+		Channels:     config.Workers,
 		ClaimBatch:   config.ClaimBatch,
 		LeaseSeconds: config.LeaseSeconds,
 		DrainTimeout: config.DrainTimeout,

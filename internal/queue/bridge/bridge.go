@@ -92,7 +92,7 @@ type ClaimRequest struct {
 	NodeID       string   `json:"nodeID"`
 	InstanceID   string   `json:"instanceID"`
 	WorkerID     string   `json:"workerID"`
-	Queues       []string `json:"queues"`
+	Channels     []string `json:"channels"`
 	Limit        int      `json:"limit"`
 	LeaseSeconds int      `json:"leaseSeconds"`
 }
@@ -101,10 +101,10 @@ func (r ClaimRequest) Validate() error {
 	if err := validateIdentity(r.Schema, r.NodeID, r.InstanceID); err != nil {
 		return err
 	}
-	if r.WorkerID == "" || len(r.Queues) == 0 || len(r.Queues) > MaxBatchSize || r.Limit < 1 || r.Limit > MaxBatchSize || r.LeaseSeconds < 1 {
+	if r.WorkerID == "" || len(r.Channels) == 0 || len(r.Channels) > MaxBatchSize || r.Limit < 1 || r.Limit > MaxBatchSize || r.LeaseSeconds < 1 {
 		return fmt.Errorf("invalid claim request")
 	}
-	for _, queue := range r.Queues {
+	for _, queue := range r.Channels {
 		if strings.TrimSpace(queue) == "" {
 			return fmt.Errorf("invalid claim queue")
 		}
@@ -113,18 +113,18 @@ func (r ClaimRequest) Validate() error {
 }
 
 type Lease struct {
-	JobUUID        string `json:"jobUUID"`
-	Queue          string `json:"queue"`
+	UUID           string `json:"uuid"`
+	Channel        string `json:"channel"`
 	Handler        string `json:"handler"`
 	Attempt        int    `json:"attempt"`
 	LeaseToken     string `json:"leaseToken"`
-	LeaseUntil     string `json:"leaseUntil"`
+	LeaseEnd       string `json:"leaseEnd"`
 	TimeoutSeconds int    `json:"timeoutSeconds"`
 	TraceID        string `json:"traceID"`
 }
 
 func (l Lease) Validate() error {
-	if l.JobUUID == "" || l.Queue == "" || l.Handler == "" || l.Attempt < 1 || l.LeaseToken == "" || l.LeaseUntil == "" || l.TimeoutSeconds < 1 || l.TraceID == "" {
+	if l.UUID == "" || l.Channel == "" || l.Handler == "" || l.Attempt < 1 || l.LeaseToken == "" || l.LeaseEnd == "" || l.TimeoutSeconds < 1 || l.TraceID == "" {
 		return fmt.Errorf("invalid lease")
 	}
 	return nil
@@ -156,7 +156,7 @@ func (r ClaimResponse) Validate() error {
 
 type ExecuteRequest struct {
 	Schema     int    `json:"schema"`
-	JobUUID    string `json:"jobUUID"`
+	UUID       string `json:"uuid"`
 	Attempt    int    `json:"attempt"`
 	LeaseToken string `json:"leaseToken"`
 	TraceID    string `json:"traceID"`
@@ -166,8 +166,8 @@ func (r ExecuteRequest) Validate() error {
 	if r.Schema != SchemaVersion {
 		return fmt.Errorf("unsupported queue bridge schema %d", r.Schema)
 	}
-	if r.JobUUID == "" || r.Attempt < 1 || r.LeaseToken == "" || r.TraceID == "" {
-		return fmt.Errorf("execute requires jobUUID, attempt, leaseToken and traceID")
+	if r.UUID == "" || r.Attempt < 1 || r.LeaseToken == "" || r.TraceID == "" {
+		return fmt.Errorf("execute requires uuid, attempt, leaseToken and traceID")
 	}
 	return nil
 }
@@ -214,13 +214,13 @@ type HeartbeatRequest struct {
 }
 
 type LeaseRef struct {
-	JobUUID    string `json:"jobUUID"`
+	UUID       string `json:"uuid"`
 	Attempt    int    `json:"attempt"`
 	LeaseToken string `json:"leaseToken"`
 }
 
 func (l LeaseRef) Validate() error {
-	if l.JobUUID == "" || l.Attempt < 1 || l.LeaseToken == "" {
+	if l.UUID == "" || l.Attempt < 1 || l.LeaseToken == "" {
 		return fmt.Errorf("invalid lease reference")
 	}
 	return nil
@@ -250,11 +250,11 @@ const (
 )
 
 type HeartbeatResult struct {
-	JobUUID    string      `json:"jobUUID"`
-	Attempt    int         `json:"attempt"`
-	Status     LeaseStatus `json:"status"`
-	LeaseUntil string      `json:"leaseUntil,omitempty"`
-	Code       string      `json:"code,omitempty"`
+	UUID     string      `json:"uuid"`
+	Attempt  int         `json:"attempt"`
+	Status   LeaseStatus `json:"status"`
+	LeaseEnd string      `json:"leaseEnd,omitempty"`
+	Code     string      `json:"code,omitempty"`
 }
 type HeartbeatResponse struct {
 	Schema  int               `json:"schema"`
@@ -273,7 +273,7 @@ func (r HeartbeatResponse) Validate() error {
 		return fmt.Errorf("heartbeat response exceeds batch limit")
 	}
 	for _, result := range r.Results {
-		if result.JobUUID == "" || result.Attempt < 1 || (result.Status != LeaseExtended && result.Status != LeaseStale && result.Status != LeaseNotFound && result.Status != LeaseError) || (result.Status == LeaseExtended && result.LeaseUntil == "") {
+		if result.UUID == "" || result.Attempt < 1 || (result.Status != LeaseExtended && result.Status != LeaseStale && result.Status != LeaseNotFound && result.Status != LeaseError) || (result.Status == LeaseExtended && result.LeaseEnd == "") {
 			return fmt.Errorf("invalid heartbeat result")
 		}
 	}
@@ -315,22 +315,22 @@ func (r ReapResponse) Validate() error {
 }
 
 type StatsRequest struct {
-	Schema int      `json:"schema"`
-	Queues []string `json:"queues,omitempty"`
+	Schema   int      `json:"schema"`
+	Channels []string `json:"channels,omitempty"`
 }
 
 func (r StatsRequest) Validate() error {
 	if r.Schema != SchemaVersion {
 		return fmt.Errorf("unsupported queue bridge schema %d", r.Schema)
 	}
-	if len(r.Queues) > MaxBatchSize {
+	if len(r.Channels) > MaxBatchSize {
 		return fmt.Errorf("too many queues")
 	}
 	return nil
 }
 
 type QueueStats struct {
-	Queue             string `json:"queue"`
+	Channel           string `json:"channel"`
 	Queued            int64  `json:"queued"`
 	Running           int64  `json:"running"`
 	Retrying          int64  `json:"retrying"`
@@ -338,16 +338,16 @@ type QueueStats struct {
 	OldestAvailableAt string `json:"oldestAvailableAt,omitempty"`
 }
 type StatsResponse struct {
-	Schema int          `json:"schema"`
-	Queues []QueueStats `json:"queues"`
-	Error  *Error       `json:"error,omitempty"`
+	Schema   int          `json:"schema"`
+	Channels []QueueStats `json:"channels"`
+	Error    *Error       `json:"error,omitempty"`
 }
 
 func (r StatsResponse) Validate() error {
 	if err := validateResponseSchema(r.Schema, r.Error); err != nil {
 		return err
 	}
-	if r.Error == nil && len(r.Queues) > MaxBatchSize {
+	if r.Error == nil && len(r.Channels) > MaxBatchSize {
 		return fmt.Errorf("stats response exceeds queue limit")
 	}
 	return nil
@@ -365,9 +365,9 @@ const (
 type ControlRequest struct {
 	Schema     int           `json:"schema"`
 	Action     ControlAction `json:"action"`
-	JobUUID    string        `json:"jobUUID,omitempty"`
+	UUID       string        `json:"uuid,omitempty"`
 	LeaseToken string        `json:"leaseToken,omitempty"`
-	Queue      string        `json:"queue,omitempty"`
+	Channel    string        `json:"channel,omitempty"`
 	TraceID    string        `json:"traceID"`
 }
 
@@ -378,8 +378,8 @@ func (r ControlRequest) Validate() error {
 	if r.Action != ControlPause && r.Action != ControlResume && r.Action != ControlCancel && r.Action != ControlRetry {
 		return fmt.Errorf("invalid control action")
 	}
-	if (r.Action == ControlCancel || r.Action == ControlRetry) && (r.JobUUID == "" || r.LeaseToken == "") {
-		return fmt.Errorf("control action requires jobUUID and leaseToken")
+	if (r.Action == ControlCancel || r.Action == ControlRetry) && (r.UUID == "" || r.LeaseToken == "") {
+		return fmt.Errorf("control action requires uuid and leaseToken")
 	}
 	return nil
 }

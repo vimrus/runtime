@@ -31,7 +31,7 @@ type Config struct {
 	NodeID       string
 	InstanceID   string
 	WorkerID     string
-	Queues       []QueueConfig
+	Channels     []QueueConfig
 	ClaimBatch   int
 	LeaseSeconds int
 	DrainTimeout time.Duration
@@ -69,8 +69,8 @@ func NewPool(queueBridge Bridge, leases *lease.Manager, config Config, logger *s
 	if config.DrainTimeout <= 0 {
 		config.DrainTimeout = 30 * time.Second
 	}
-	sems := make(map[string]chan struct{}, len(config.Queues))
-	for _, queue := range config.Queues {
+	sems := make(map[string]chan struct{}, len(config.Channels))
+	for _, queue := range config.Channels {
 		if queue.Concurrency <= 0 {
 			queue.Concurrency = 1
 		}
@@ -117,7 +117,7 @@ func (p *Pool) Run(ctx context.Context) {
 	p.running = true
 	p.mu.Unlock()
 
-	for _, queue := range p.config.Queues {
+	for _, queue := range p.config.Channels {
 		p.wg.Add(1)
 		go func(queue QueueConfig) {
 			defer p.wg.Done()
@@ -161,13 +161,13 @@ func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
 			NodeID:       p.config.NodeID,
 			InstanceID:   p.config.InstanceID,
 			WorkerID:     p.config.WorkerID,
-			Queues:       []string{queue.Name},
+			Channels:     []string{queue.Name},
 			Limit:        p.config.ClaimBatch,
 			LeaseSeconds: p.config.LeaseSeconds,
 		}
 		response, err := p.bridge.Claim(ctx, request)
 		if err != nil {
-			p.logger.Warn("queue claim failed", slog.String("queue", queue.Name), slog.Any("error", err))
+			p.logger.Warn("queue claim failed", slog.String("channel", queue.Name), slog.Any("error", err))
 			interval = backoff(interval, queue.MaxPoll)
 			if !sleepCtx(ctx, interval) {
 				return
@@ -175,7 +175,7 @@ func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
 			continue
 		}
 		if response.Error != nil {
-			p.logger.Warn("queue claim rejected", slog.String("queue", queue.Name), slog.String("code", response.Error.Code))
+			p.logger.Warn("queue claim rejected", slog.String("channel", queue.Name), slog.String("code", response.Error.Code))
 			interval = backoff(interval, queue.MaxPoll)
 			if !sleepCtx(ctx, interval) {
 				return
@@ -193,7 +193,7 @@ func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
 		for _, claimed := range response.Leases {
 			sem := p.sem(queue.Name)
 			if sem == nil {
-				p.logger.Warn("lease references unknown queue", slog.String("queue", claimed.Queue), slog.String("job", claimed.JobUUID))
+				p.logger.Warn("lease references unknown queue", slog.String("channel", claimed.Channel), slog.String("job", claimed.UUID))
 				continue
 			}
 			select {
@@ -222,12 +222,12 @@ func (p *Pool) execute(parent context.Context, claimed bridge.Lease) {
 	p.leases.Add(claimed, cancel)
 	defer func() {
 		cancel()
-		p.leases.Remove(claimed.JobUUID)
+		p.leases.Remove(claimed.UUID)
 	}()
 
 	request := bridge.ExecuteRequest{
 		Schema:     bridge.SchemaVersion,
-		JobUUID:    claimed.JobUUID,
+		UUID:       claimed.UUID,
 		Attempt:    claimed.Attempt,
 		LeaseToken: claimed.LeaseToken,
 		TraceID:    claimed.TraceID,
@@ -236,14 +236,14 @@ func (p *Pool) execute(parent context.Context, claimed bridge.Lease) {
 	if err != nil {
 		// Result is unknown: do not ACK, retry or fail. Lease recovery will
 		// reschedule the job after expiry.
-		p.logger.Warn("queue execute transport failed", slog.String("job", claimed.JobUUID), slog.String("queue", claimed.Queue), slog.Any("error", err))
+		p.logger.Warn("queue execute transport failed", slog.String("job", claimed.UUID), slog.String("channel", claimed.Channel), slog.Any("error", err))
 		return
 	}
 	if response.Error != nil {
-		p.logger.Warn("queue execute rejected", slog.String("job", claimed.JobUUID), slog.String("code", response.Error.Code))
+		p.logger.Warn("queue execute rejected", slog.String("job", claimed.UUID), slog.String("code", response.Error.Code))
 		return
 	}
-	p.logger.Info("queue job finished", slog.String("job", claimed.JobUUID), slog.String("queue", claimed.Queue), slog.String("result", string(response.Result)))
+	p.logger.Info("queue job finished", slog.String("job", claimed.UUID), slog.String("channel", claimed.Channel), slog.String("result", string(response.Result)))
 }
 
 func (p *Pool) sem(queue string) chan struct{} {

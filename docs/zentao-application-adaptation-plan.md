@@ -86,7 +86,7 @@
 
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
-| Z-QUEUE-01 | P0 | 新队列 Schema | 安装/升级 SQL、innovation 方言 | 改造后的 `zt_queue`、`zt_queueexec`、`zt_servernode` 及索引 | 无 | 不沿用旧 cron 消费协议，不占用已有 `zt_job`；迁移可回滚且只保留最近一天数据 |
+| Z-QUEUE-01 | P0 | 新队列 Schema | 安装/升级 SQL、innovation 方言 | 改造后的 `zt_queue`、`zt_queueexec`、`zt_servernode` 及索引 | 无 | 不沿用旧 cron 消费协议，不占用已有 `zt_job`；旧数据不保留，升级前备份支持回滚 |
 | Z-QUEUE-02 | P0 | 冻结 Queue Service 契约 | lib/module | PHP 接口、状态机、错误分类、Payload Schema | 无，与 R-ARCH-04 联合设计 | 语义为 At-least-once，明确不承诺 Exactly-once |
 | Z-QUEUE-03 | P0 | 实现私有 Queue Bridge | 私有 PHP 入口、鉴权层 | 批量 Claim/Heartbeat/ACK/Retry/Cancel API | R-ARCH-04, Z-QUEUE-02 | 可通过 Fake Runtime 独立测试；仅本机 Runtime 可调用 |
 | Z-QUEUE-04 | P0 | 实现 Portable CAS 领取 | Queue DAO、数据库适配 | 候选查询、条件更新、租约和 fencing | Z-QUEUE-01 | 正确性不依赖 `SKIP LOCKED`；领取结束后立即释放事务 |
@@ -152,7 +152,7 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
 | Z-INSTALL-01 | P0 | 新安装适配 | `www/install.php`、安装 SQL | Runtime 环境检查和新表初始化 | Z-QUEUE-01, Z-CACHE-01 | Runtime/Full/外部数据库三种安装路径均可完成 |
-| Z-UPGRADE-01 | P0 | 增量升级和回滚边界 | upgrade、数据库迁移 | 幂等迁移、失败提示和恢复说明 | Z-INSTALL-01 | 数据库迁移失败时应用不进入半启用新协议状态 |
+| Z-UPGRADE-01 | P0 | 增量升级和回滚边界 | upgrade、数据库迁移 | 一次性迁移（升级前备份）、失败提示和恢复说明 | Z-INSTALL-01 | 数据库迁移失败时应用不进入半启用新协议状态 |
 | Z-MIGRATE-01 | P1 | 旧队列灰度迁移 | cron、Queue Service | 按 Handler 切换、回退和观察窗口 | Z-QUEUE-10, Z-UPGRADE-01 | 禁止无控制双消费；旧任务有明确排空或保留策略 |
 | Z-EDITION-01 | P0 | 版本包含关系验证 | 各版本/插件 | 开源、企业、旗舰、IPD 合并测试 | Z-REL-01 | 公共能力不被扩展覆盖破坏，各工作界面可启动 |
 | Z-DB-01 | P0 | 数据库契约矩阵 | DAO、innovation、tests | Queue/Cache/Upgrade SQL 契约测试 | 各数据任务 | MySQL、PostgreSQL为强制门槛；信创数据库结果逐项记录 |
@@ -187,7 +187,7 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 ## 14. 建议的迁移顺序
 
 1. 先完成 Classic mode、安装和健康检查兼容，不改变现有业务能力。
-2. 改造 `zt_queue` 为新队列表并新建 Queue Service；旧数据只迁移最近一天，其余丢弃。
+2. 改造 `zt_queue` 为新队列表并新建 Queue Service；旧 cron 队列数据不保留，直接删除重建。
 3. 选择邮件或 Webhook 等边界清晰、可幂等的任务完成首批迁移。
 4. 完成队列管理界面和故障恢复后，再迁移更多 Handler 与 Scheduler。
 5. 缓存先完成 Client 和数据库契约，再按实际性能数据接入少量热点。
@@ -335,9 +335,9 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
 - `zt_job` 已被 CI 模块占用（`zentaomax/db/standard/*.sql` 中建表），
   不能使用；命名已确认：`zt_queue`（原地改造）、`zt_queueexec`、
   `zt_servernode`。`TABLE_QUEUE` 沿用，新增 `TABLE_QUEUEEXEC`、
-  `TABLE_SERVERNODE`。旧数据迁移口径：只保留最近 24 小时内
-  `status='wait'` 的任务，`doing` 不迁移，其余丢弃；升级先
-  `RENAME TABLE zt_queue TO zt_queue_backup_<版本>` 保留回滚路径。
+  `TABLE_SERVERNODE`。旧数据不保留：升级直接 `DROP TABLE zt_queue`
+  并创建新结构，再创建 `zt_queueexec`/`zt_servernode`；
+  回滚依赖升级前数据库备份。
 - 改动点：新增 Queue Service/DAO、Portable CAS、租约与 fencing、持久化
   重试/死信、私有 Bridge 入口（loopback + 随机凭据）、旧 `zt_queue`
   一次性切换（旧数据仅保留最近一天）；新表 SQL 进入 `zentao.sql` + `db/update*.sql` +
@@ -357,7 +357,8 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
     时返回未启用，不阻断普通 PHP-FPM/Apache。
   - 独立健康入口（建议 `www/health.php` 或框架静态方法），输出
     `ok|degraded|failed` 与稳定错误码，不建立昂贵业务上下文。
-  - 安装 SQL 增加 Queue/Cache 新表；升级 SQL 幂等并保留回滚说明。
+  - 安装 SQL 增加 Queue/Cache 新表；升级 SQL 按现有 update 惯例一次性执行
+    并保留回滚说明（升级前备份）。
 
 ### 18.4 数据库方言（Z-DB-01）
 

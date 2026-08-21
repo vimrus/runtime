@@ -146,7 +146,7 @@ Scheduler 插入 zt_queue(status=wait)
 | Handler 结果 | 队列动作 |
 |---|---|
 | Success | ACK，状态转为 `succeeded` |
-| Retryable failure | 记录本次尝试，计算 `availableAt`，状态转为 `retrying` |
+| Retryable failure | 记录本次尝试，计算 `availableDate`，状态转为 `retrying` |
 | Permanent failure | 直接转为 `failed` |
 | Retry exhausted | 转为 `failed`，作为死信任务保留 |
 | Timeout | 请求取消，按任务策略 Retry 或 Failed |
@@ -158,7 +158,7 @@ Scheduler 插入 zt_queue(status=wait)
 同一个 Queue 内只提供以下尽力顺序：
 
 ```text
-priority DESC, availableAt ASC, id ASC
+priority DESC, availableDate ASC, id ASC
 ```
 
 并发、重试和 Worker 故障都可能改变最终完成顺序。需要同一业务对象串行处理时，
@@ -318,7 +318,7 @@ stateDiagram-v2
     Running --> Failed: permanent or exhausted
     Running --> Retrying: lease expired
     Running --> Canceled: cooperative cancel
-    Retrying --> Running: availableAt reached
+    Retrying --> Running: availableDate reached
     Retrying --> Canceled: cancel
     Retrying --> Failed: exhausted by reaper
     Failed --> Queued: manual retry as new attempt
@@ -330,9 +330,9 @@ stateDiagram-v2
 
 | 状态 | 含义 | 是否可领取 |
 |---|---|---|
-| `queued` | 等待首次执行 | `availableAt <= queue_now` 时可领取 |
+| `queued` | 等待首次执行 | `availableDate <= queue_now` 时可领取 |
 | `running` | 已被有效租约持有 | 否 |
-| `retrying` | 等待下次持久化重试 | `availableAt <= queue_now` 时可领取 |
+| `retrying` | 等待下次持久化重试 | `availableDate <= queue_now` 时可领取 |
 | `succeeded` | 已成功 ACK | 否 |
 | `failed` | 永久失败或超过最大尝试次数 | 否 |
 | `canceled` | 已取消 | 否 |
@@ -361,19 +361,19 @@ zt_servernode  -- 服务器节点注册/心跳/控制
 |---|---|---|
 | `id` | bigint | 自增主键，仅用于数据库排序 |
 | `uuid` | char(26) | 对外任务 ID，建议使用 ULID |
-| `queue` | varchar(64) | 队列名称，只允许配置中的已注册名称 |
+| `channel` | varchar(64) | 通道/工作流分区（mail/slow/default），对应 Go Worker 队列 |
+| `cron` | int unsigned | 派发来源 cronID，非 cron 派发为 0 |
 | `handler` | varchar(128) | PHP/Go Handler 标识，不是任意 URL 或命令 |
 | `payload` | text | JSON 文本，由应用层校验，不依赖数据库 JSON 函数 |
-| `metadata` | text | Trace、来源和兼容扩展元数据 |
 | `status` | varchar(16) | 任务状态 |
 | `priority` | smallint | 优先级，数值越大越优先 |
 | `attempts` | integer | 已开始的尝试次数 |
 | `maxAttempts` | integer | 最大尝试次数 |
-| `availableAt` | timestamp | 最早可领取时间，统一存储 UTC |
+| `availableDate` | datetime | 最早可领取时间（服务器时区） |
 | `leaseOwner` | varchar(128) nullable | `nodeID/instanceID/workerID` |
 | `leaseToken` | char(26) nullable | 每次领取生成的新 fencing token |
-| `leaseUntil` | timestamp nullable | 租约截止时间，使用数据库时间计算 |
-| `heartbeatAt` | timestamp nullable | 最近一次成功续租时间 |
+| `leaseEnd` | datetime nullable | 租约截止时间 |
+| `heartbeatTime` | datetime nullable | 最近一次成功续租时间 |
 | `timeoutSeconds` | integer | Handler 最大执行时间 |
 | `idempotencyKey` | varchar(191) nullable | 生产者提供的业务幂等键 |
 | `traceID` | varchar(64) nullable | 跨 PHP 和 Runtime 的 Trace ID |
@@ -381,11 +381,15 @@ zt_servernode  -- 服务器节点注册/心跳/控制
 | `lastErrorCode` | varchar(64) nullable | 结构化错误码 |
 | `lastError` | text nullable | 脱敏后的最近错误摘要 |
 | `createdBy` | varchar(64) | 用户、系统或来源服务 |
-| `createdAt` | timestamp | 创建时间 |
-| `startedAt` | timestamp nullable | 首次开始时间 |
-| `finishedAt` | timestamp nullable | 终态时间 |
-| `updatedAt` | timestamp | 最近更新时间 |
+| `createdDate` | datetime | 创建时间 |
+| `startedDate` | datetime nullable | 首次开始时间 |
+| `finishedDate` | datetime nullable | 终态时间 |
+| `editedDate` | datetime | 最近更新时间 |
 | `version` | integer | 管理操作的乐观锁版本 |
+
+数据库时间统一使用 `datetime` 并按服务器当前时区存储；Bridge 线上仍使用 UTC
+RFC 3339（微秒精度）。列名与 Bridge JSON 字段名保持一致（`uuid`、`channel`、
+`leaseEnd`、`heartbeatTime`），PHP 只做时间格式转换，不做字段名映射。
 
 ### 10.3 `zt_queueexec`
 
@@ -394,12 +398,12 @@ zt_servernode  -- 服务器节点注册/心跳/控制
 
 | 字段 | 说明 |
 |---|---|
-| `id` | Attempt 主键 |
-| `jobID` / `jobUUID` | 关联任务 |
+| `id` | 主键 |
+| `queueID` | 关联 `zt_queue.id` |
 | `attempt` | 第几次尝试 |
 | `nodeID` / `instanceID` / `workerID` | 执行位置 |
 | `leaseToken` | 本次尝试的 fencing token |
-| `startedAt` / `finishedAt` | 执行时间 |
+| `startedDate` / `finishedDate` | 执行时间 |
 | `result` | `success/retry/failed/timeout/lost/canceled` |
 | `errorCode` / `errorMessage` | 脱敏后的错误信息 |
 | `durationMs` | 执行耗时 |
@@ -414,25 +418,29 @@ zt_servernode  -- 服务器节点注册/心跳/控制
 和健康报告的依据。建议字段：
 
 ```text
-clusterID, nodeID, instanceID, tokenHash, heartbeatAt,
-state(active|paused|draining), startedAt, version, updatedAt
+nodeID, tokenHash, heartbeatTime,
+state(active|paused|draining), startedDate, version, editedDate
 ```
 
 `tokenHash` 只存 Bridge 随机凭据的 HMAC 哈希，不存明文。普通 Worker 通过条件
 更新 CAS 竞争不同任务，不需要选举“队列主节点”；Scheduler 等单例角色如需
-Leader Lease，可复用本表增加 `role/leaderUntil` 列，Go 不直接更新该表。
+Leader Lease，可复用本表增加 `role/leaderEnd` 列，Go 不直接更新该表。
 
 ### 10.5 索引
 
-候选索引如下，最终顺序必须在每一种支持数据库上检查执行计划并压测：
+当前机制必需的最小索引集如下（管理界面、指标和清理等后续功能上线时，
+按实际 SQL 再补充，不在建表阶段预建）：
+
+索引统一使用表外独立的 `CREATE [UNIQUE] INDEX` 语句创建（达梦等数据库不支持
+在 `CREATE TABLE` 内联声明除 `PRIMARY KEY` 以外的索引）。
 
 ```text
 UNIQUE(uuid)
-UNIQUE(queue, idempotencyKey)  -- idempotencyKey 为 NULL 时允许普通任务
-INDEX(queue, status, availableAt, priority, id)
-INDEX(status, leaseUntil, id)
-INDEX(status, finishedAt, id)
-INDEX(handler, status, createdAt)
+UNIQUE(channel, idempotencyKey)  -- idempotencyKey 为 NULL 时允许普通任务
+INDEX(channel, status, availableDate, priority, id)
+INDEX(status, leaseEnd, id)
+INDEX(job, attempt)              -- zt_queueexec
+UNIQUE(nodeID)                   -- zt_servernode
 ```
 
 不同数据库对复合索引、NULL 唯一约束、时间精度和降序索引的行为不同。通用逻辑不能
@@ -452,7 +460,7 @@ interface QueueService
     public function claim(ClaimRequest $request): array;
     public function heartbeat(array $leases): array;
     public function execute(Lease $lease): ExecutionResult;
-    public function requestCancel(string $jobUUID): bool;
+    public function requestCancel(string $uuid): bool;
     public function reapExpired(int $limit): ReapResult;
     public function stats(StatsRequest $request): QueueStats;
 }
@@ -461,7 +469,7 @@ interface QueueService
 该接口由禅道模块实现并使用当前请求中的 DAO/PDO 连接。数据库驱动仍由禅道框架根据
 `$config->db->driver` 动态加载。Go 只处理 Bridge DTO，不知道底层数据库类型。
 
-所有改变 `running` 状态的方法必须携带 `jobID/jobUUID + leaseToken`。只根据 Job ID
+所有改变 `running` 状态的方法必须携带 `uuid + leaseToken`。只根据 uuid
 更新会让租约过期的旧 Worker 覆盖新 Worker 的结果。
 
 ### 11.2 PHP Queue Bridge API
@@ -487,12 +495,12 @@ Claim 返回示意：
   "schema": 1,
   "leases": [
     {
-      "jobUUID": "01K...",
-      "queue": "mail",
+      "uuid": "01K...",
+      "channel": "mail",
       "handler": "mail.send",
       "attempt": 2,
       "leaseToken": "01K...",
-      "leaseUntil": "2026-08-17T09:01:00.000000Z",
+      "leaseEnd": "2026-08-17T09:01:00.000000Z",
       "timeoutSeconds": 60,
       "traceID": "..."
     }
@@ -508,24 +516,24 @@ Claim 不返回业务 Payload。Execute 根据 Job UUID 和 lease token 在 PHP 
 默认算法只依赖候选 SELECT、条件 UPDATE、事务和影响行数，适用于所有禅道支持数据库：
 
 ```text
-PHP Queue Service receives claim(queue set, batch size, worker identity)
-  -> read a candidate window ordered by priority/availableAt/id
+PHP Queue Service receives claim(channel set, batch size, worker identity)
+  -> read a candidate window ordered by priority/availableDate/id
   -> for each candidate:
        generate a unique lease token
        UPDATE zt_queue
           SET status       = 'running',
               leaseOwner   = worker identity,
               leaseToken   = generated token,
-              leaseUntil   = now + lease duration,
-              heartbeatAt  = now,
+              leaseEnd     = now + lease duration,
+              heartbeatTime = now,
               attempts     = attempts + 1,
               version      = version + 1,
-              startedAt    = first-start fallback,
-              updatedAt    = now
+              startedDate  = first-start fallback,
+              editedDate   = now
         WHERE id           = candidate id
           AND version      = candidate version
           AND status       IN ('queued', 'retrying')
-          AND availableAt  <= now
+          AND availableDate <= now
 
        if exactly one row changed:
          insert attempt row
@@ -572,12 +580,14 @@ final class QueueDriverCapabilities
 
 ### 11.5 时间与时钟
 
-数据库时间表达式在各后端并不完全一致。Portable CAS 默认由 PHP Queue Service 生成 UTC
-时间，并要求多节点使用可靠的系统时间同步。控制措施：
+数据库时间表达式在各后端并不完全一致。数据库列使用 `datetime` 按服务器当前
+时区存储；Portable CAS 由 PHP Queue Service 生成服务器时区时间（或使用数据库
+`CURRENT_TIMESTAMP`），在 Bridge 边界统一转换为 UTC RFC 3339（微秒精度）。
+要求多节点使用可靠的系统时间同步。控制措施：
 
 - Runtime readiness 检查系统时钟同步状态或暴露告警。
 - 租约长度显著大于允许的最大节点时钟误差。
-- 所有时间以 UTC 和固定微秒精度传递。
+- Bridge 线上所有时间以 UTC 和固定微秒精度传递；数据库内按服务器时区存储。
 - 支持可靠标准 `CURRENT_TIMESTAMP` 的 Driver 可以覆盖为数据库时间实现。
 - fencing token 和业务幂等仍是最终保护，不能只依赖时钟避免重复副作用。
 
@@ -587,7 +597,7 @@ Execute 在 PHP 中执行 Handler，并使用条件更新持久化结果：
 
 ```text
 UPDATE zt_queue
-   SET status='succeeded', finishedAt=now, version=version+1, ...
+   SET status='succeeded', finishedDate=now, version=version+1, ...
  WHERE id=? AND status='running' AND leaseToken=?
 ```
 
@@ -601,7 +611,7 @@ Retry、Failed 和 Canceled 使用相同 fencing 条件。PHP Handler 的业务�
 
 - 默认租约建议从 60 秒开始评估。
 - Go 每约 20 秒把当前节点的活动租约合并成一次 Heartbeat Bridge 请求。
-- PHP 逐条使用 `jobUUID + leaseToken + running` 条件续租。
+- PHP 逐条使用 `uuid + leaseToken + running` 条件续租。
 - 返回每条租约的 `extended/stale/not_found/error` 结果。
 - Go 对 stale 租约取消本地执行上下文，并拒绝把结果视为成功。
 - 批量请求必须设置条数和 Body 大小上限。
@@ -610,10 +620,10 @@ Retry、Failed 和 Canceled 使用相同 fencing 条件。PHP Handler 的业务�
 ### 11.8 Reaper
 
 每个节点都可以定期调用 Reap Bridge，不需要固定 Leader。PHP 先查询一批过期候选，再
-通过 `id + version + status + leaseToken + leaseUntil` 条件更新逐条争用回收权：
+通过 `id + version + status + leaseToken + leaseEnd` 条件更新逐条争用回收权：
 
 1. 关闭对应 Attempt，结果记录为 `lost` 或 `timeout`。
-2. 未超过 `maxAttempts` 时计算下一次 `availableAt`，状态转为 `retrying`。
+2. 未超过 `maxAttempts` 时计算下一次 `availableDate`，状态转为 `retrying`。
 3. 超过最大次数时状态转为 `failed`。
 4. 清空 lease owner/token/until。
 5. 返回回收数量和分类，供 Go 增加指标。
@@ -1138,32 +1148,33 @@ zentaopatch/innovation/
 - `zt_job` 已被 CI 模块占用，不能用作新队列表名。
 - 旧协议（`cron/type/command/execId` 消费循环）整体废弃；`zt_cron` 调度保留，
   入队与消费改为新 Queue Service。
-- 新旧状态语义差异通过一次性数据迁移解决，不做原地双语义并存。
-- 旧数据迁移口径：只迁移最近 24 小时内且 `status='wait'` 的任务；
-  `doing` 中的旧任务不迁移（旧消费者已停，按失败丢弃更安全）；其余丢弃。
-- 升级 SQL 先 `RENAME TABLE zt_queue TO zt_queue_backup_<版本>` 保留回滚
-  路径，确认稳定后再删除备份表。
+- 新旧状态语义差异通过直接重建表解决，不做原地双语义并存。
+- 旧数据不保留：升级直接 `DROP TABLE zt_queue` 并创建新结构，然后创建
+  `zt_queueexec` 与 `zt_servernode`。
+- 回滚依赖升级前的整库/表备份，不保留旧表数据。
 
 ### 22.2 一次性切换
 
 ```text
-Phase 0: 改造 zt_queue 结构并新建 zt_queueexec/zt_servernode；
-         迁移最近 24 小时 wait 数据，默认禁用
+Phase 0: 删除旧 zt_queue 并创建新结构，新建 zt_queueexec/zt_servernode，
+         默认禁用
 Phase 1: 实现 PHP Queue Service、Portable CAS 与 Bridge 7 端点，
          Runtime 集成冒烟（领取→执行→ACK→重试→reap）
 Phase 2: 改造 cron 入队（zt_cron 调度保留，任务走新队列），
          删除旧 consumeTasks/consumeTask 消费循环
 Phase 3: 上线管理界面、指标、Retry 和 Dead Letter
-Phase 4: 确认稳定后删除 zt_queue_backup_<版本> 与旧消费代码
+Phase 4: 确认稳定后删除旧消费代码
 ```
 
-同一业务任务不能同时被新旧 Consumer 执行。迁移 SQL 必须幂等：重复执行不重复
-迁移；禁止无去重能力的双写双消费。
+同一业务任务不能同时被新旧 Consumer 执行。升级 SQL 与现有 update 文件惯例
+一致，由升级流程执行一次（先 `zt_queue`，再建 `zt_queueexec`/
+`zt_servernode`），不要求可重复执行；升级前由 DBA 备份数据库，失败时中止
+升级并恢复。禁止无去重能力的双写双消费。
 
 ### 22.3 回滚
 
-- 升级 SQL 保留 `zt_queue_backup_<版本>` 供回滚；回滚时恢复旧表结构与旧
-  Consumer（若代码保留）或按备份受控重放。
+- 升级前由 DBA 备份数据库（整库或至少 `zt_queue` 表）；回滚时从备份恢复旧
+  表结构与旧 Consumer（若代码保留）或按备份受控重放。
 - 回滚不删除新表中已入队任务；提供暂停、导出和受控重放工具处理回滚期间任务。
 - 新表上线后旧 `zt_queue` 不再写入，不存在双写双消费窗口。
 
