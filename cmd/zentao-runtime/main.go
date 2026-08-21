@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -345,6 +347,19 @@ func serve(args []string) error {
 	queryEngine, err := newObservabilityQueryEngine(cfg)
 	if err != nil {
 		return err
+	}
+	if cfg.Queue.Enabled {
+		// The bridge credential is generated per Runtime start: it is exposed
+		// to PHP through the environment and used by the Go bridge client.
+		tokenBytes := make([]byte, 32)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			return fmt.Errorf("generate queue bridge token: %w", err)
+		}
+		queueToken := hex.EncodeToString(tokenBytes)
+		if err := os.Setenv("ZENTAO_QUEUE_TOKEN", queueToken); err != nil {
+			return fmt.Errorf("set queue bridge token: %w", err)
+		}
+		cfg.Queue.BridgeToken = queueToken
 	}
 	queueEngine, err := newQueueEngine(cfg, logger, nodeID)
 	if err != nil {
@@ -1011,6 +1026,14 @@ func (h *host) reload() control.Response {
 }
 
 func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int) *caddy.Config {
+	queueBridge := web.QueueBridgeOptions{}
+	if cfg.Queue.Enabled {
+		bridgeListen := "127.0.0.1:8081"
+		if parsed, err := url.Parse(cfg.Queue.BridgeBaseURL); err == nil && parsed.Host != "" {
+			bridgeListen = parsed.Host
+		}
+		queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen}
+	}
 	return web.Config(web.Options{
 		Root:              cfg.Web.Root,
 		Listen:            cfg.Web.Listen,
@@ -1020,6 +1043,7 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int) *
 		MaxHeaderBytes:    cfg.Web.MaxHeaderBytes,
 		AccessLogPath:     accessLogPath,
 		AccessLogKeepDays: accessLogKeepDays,
+		QueueBridge:       queueBridge,
 	})
 }
 

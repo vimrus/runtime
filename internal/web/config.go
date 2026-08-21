@@ -22,6 +22,14 @@ type Options struct {
 	MaxHeaderBytes    int
 	AccessLogPath     string
 	AccessLogKeepDays int
+	QueueBridge       QueueBridgeOptions
+}
+
+// QueueBridgeOptions configures the private loopback listener that exposes
+// the PHP Queue Bridge to the Runtime worker engine.
+type QueueBridgeOptions struct {
+	Enabled bool
+	Listen  string
 }
 
 // Config builds the smallest useful Classic-mode Caddy configuration.
@@ -79,6 +87,37 @@ func Config(options Options) *caddy.Config {
 		},
 	}
 
+	servers := map[string]*caddyhttp.Server{"zentao": server}
+	if options.QueueBridge.Enabled {
+		bridgeListen := options.QueueBridge.Listen
+		if bridgeListen == "" {
+			bridgeListen = "127.0.0.1:8081"
+		}
+		bridgeRoutes := caddyhttp.RouteList{}
+		for _, endpoint := range []string{"capabilities", "claim", "execute", "heartbeat", "reap", "stats", "control"} {
+			bridgeRoutes = append(bridgeRoutes, caddyhttp.Route{
+				MatcherSetsRaw: []caddy.ModuleMap{{
+					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/queue/v1/" + endpoint}, nil),
+				}},
+				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{
+					URI: "/index.php?m=cron&f=" + endpoint,
+				}, "handler", "rewrite", nil)},
+				Terminal: true,
+			})
+		}
+		bridgeSubroute := caddyhttp.Subroute{Routes: append(bridgeRoutes, phpRoute, fileRoute)}
+		bridgeServer := &caddyhttp.Server{
+			Listen:            []string{bridgeListen},
+			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
+			IdleTimeout:       caddy.Duration(options.IdleTimeout),
+			MaxHeaderBytes:    options.MaxHeaderBytes,
+			Routes: caddyhttp.RouteList{
+				{HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(bridgeSubroute, "handler", "subroute", nil)}},
+			},
+		}
+		servers["queuebridge"] = bridgeServer
+	}
+
 	persist := false
 	if options.AccessLogPath != "" {
 		server.Logs = &caddyhttp.ServerLogConfig{DefaultLoggerName: "access"}
@@ -89,7 +128,7 @@ func Config(options Options) *caddy.Config {
 			Config:   &caddy.ConfigSettings{Persist: &persist},
 		},
 		AppsRaw: caddy.ModuleMap{
-			"http": caddyconfig.JSON(caddyhttp.App{Servers: map[string]*caddyhttp.Server{"zentao": server}}, nil),
+			"http": caddyconfig.JSON(caddyhttp.App{Servers: servers}, nil),
 			"frankenphp": caddyconfig.JSON(frankencaddy.FrankenPHPApp{
 				NumThreads: options.Threads,
 				MaxThreads: options.Threads,
