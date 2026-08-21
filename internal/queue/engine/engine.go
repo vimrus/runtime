@@ -97,20 +97,34 @@ func (e *Engine) Start(ctx context.Context) error {
 	if e.started {
 		return nil
 	}
-	capabilities, err := e.bridge.Capabilities(ctx, bridge.CapabilitiesRequest{
-		Schema:     bridge.SchemaVersion,
-		NodeID:     e.config.NodeID,
-		InstanceID: e.config.InstanceID,
-	})
-	if err != nil {
-		e.lastBridge = health.StatusFailed
-		e.lastError = err.Error()
-		return fmt.Errorf("queue bridge capabilities: %w", err)
-	}
-	if capabilities.Error != nil {
-		e.lastBridge = health.StatusFailed
-		e.lastError = capabilities.Error.Message
-		return fmt.Errorf("queue bridge rejected capabilities: %s", capabilities.Error.Code)
+	// The loopback listener and the PHP application may still be warming up
+	// right after Caddy starts, so negotiate capabilities with a short retry.
+	var capabilities bridge.CapabilitiesResponse
+	var capabilitiesErr error
+	const capabilitiesAttempts = 10
+	for attempt := 1; attempt <= capabilitiesAttempts; attempt++ {
+		capabilities, capabilitiesErr = e.bridge.Capabilities(ctx, bridge.CapabilitiesRequest{
+			Schema:     bridge.SchemaVersion,
+			NodeID:     e.config.NodeID,
+			InstanceID: e.config.InstanceID,
+		})
+		if capabilitiesErr == nil && capabilities.Error == nil {
+			break
+		}
+		if attempt == capabilitiesAttempts {
+			e.lastBridge = health.StatusFailed
+			if capabilitiesErr == nil {
+				e.lastError = capabilities.Error.Message
+				return fmt.Errorf("queue bridge rejected capabilities: %s", capabilities.Error.Code)
+			}
+			e.lastError = capabilitiesErr.Error()
+			return fmt.Errorf("queue bridge capabilities: %w", capabilitiesErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 	e.lastBridge = health.StatusOK
 	runCtx, cancel := context.WithCancel(ctx)

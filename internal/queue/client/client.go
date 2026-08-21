@@ -51,8 +51,15 @@ func New(config Config) (*Client, error) {
 	if err := requireLoopback(parsed); err != nil {
 		return nil, err
 	}
+	// The Bridge path constants already carry the fixed
+	// /internal/runtime/queue/v1 prefix, so normalize the base URL to the
+	// loopback origin. Accepts both "http://127.0.0.1:8081" and the full
+	// prefix form from older configurations.
+	parsed.Path = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
 	return &Client{
-		base:    strings.TrimRight(config.BaseURL, "/"),
+		base:    strings.TrimRight(parsed.String(), "/"),
 		token:   config.Token,
 		timeout: config.RequestTimeout,
 		http:    &http.Client{Timeout: config.RequestTimeout},

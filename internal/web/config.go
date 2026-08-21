@@ -100,9 +100,8 @@ func Config(options Options) *caddy.Config {
 					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/queue/v1/" + endpoint}, nil),
 				}},
 				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{
-					URI: "/index.php?m=cron&f=" + endpoint,
+					URI: "/index.php/cron-" + endpoint,
 				}, "handler", "rewrite", nil)},
-				Terminal: true,
 			})
 		}
 		bridgeSubroute := caddyhttp.Subroute{Routes: append(bridgeRoutes, phpRoute, fileRoute)}
