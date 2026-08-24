@@ -32,8 +32,8 @@ for path in \
     [[ -d "${path}" ]] || { echo "missing directory: ${path}" >&2; exit 1; }
 done
 
-[[ -f "${tmpdir}/etc/systemd/system/zentao-runtime.service" ]] || { echo "missing runtime unit" >&2; exit 1; }
-grep -q "ExecStart=${prefix}/bin/zentao" "${tmpdir}/etc/systemd/system/zentao-runtime.service"
+[[ -f "${tmpdir}/etc/systemd/system/zentao.service" ]] || { echo "missing runtime unit" >&2; exit 1; }
+grep -q "ExecStart=${prefix}/bin/zentao" "${tmpdir}/etc/systemd/system/zentao.service"
 [[ -f "${tmpdir}/etc/logrotate.d/zentao" ]] || { echo "missing logrotate policy" >&2; exit 1; }
 
 echo "install dry run passed"

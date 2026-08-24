@@ -7,8 +7,8 @@ set -Eeuo pipefail
 
 PREFIX="${ZENTAO_PREFIX:-/opt/zentao}"
 
-systemctl disable --now zentao-runtime.service 2>/dev/null || true
-rm -f /etc/systemd/system/zentao-runtime.service /etc/systemd/system/zentao-scheduler.service
+systemctl disable --now zentao.service 2>/dev/null || true
+rm -f /etc/systemd/system/zentao.service /etc/systemd/system/zentao-runtime.service /etc/systemd/system/zentao-scheduler.service
 rm -f /etc/logrotate.d/zentao
 systemctl daemon-reload
 

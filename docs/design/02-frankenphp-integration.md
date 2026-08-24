@@ -331,7 +331,7 @@ Windows 可以使用目录指针文件代替符号链接，避免普通用户权
 
 ```text
 zentao-web.service
-zentao-runtime.service（内部 Queue Engine 负责 Scheduler 生命周期）
+zentao.service（内部 Queue Engine 负责 Scheduler 生命周期）
 zentao-mysql.service       # 仅 Full 版
 ```
 

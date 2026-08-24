@@ -40,7 +40,7 @@ Linux 可以使用 systemd 安装：
 
 ```bash
 sudo packaging/linux/install.sh --prefix /opt/zentao
-sudo systemctl status zentao-runtime
+sudo systemctl status zentao
 ```
 
 安装脚本默认创建 `zentao` 系统用户。配置样例见 [`config/runtime.example.json`](./config/runtime.example.json)。

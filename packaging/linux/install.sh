@@ -70,8 +70,8 @@ fi
 install -d -m 0755 "$(stage /etc/systemd/system)" "$(stage /etc/logrotate.d)"
 
 sed -e "s|/opt/zentao|${PREFIX}|g" \
-    "$(dirname "$0")/zentao-runtime.service" \
-    > "$(stage /etc/systemd/system)/zentao-runtime.service"
+    "$(dirname "$0")/zentao.service" \
+    > "$(stage /etc/systemd/system)/zentao.service"
 install -m 0644 "$(dirname "$0")/zentao.logrotate" "$(stage /etc/logrotate.d)/zentao"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
@@ -80,10 +80,10 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 
 systemctl daemon-reload
-systemctl enable zentao-runtime.service
+systemctl enable zentao.service
 if [[ "${START_SERVICE}" == "1" ]]; then
-    systemctl start zentao-runtime.service
+    systemctl start zentao.service
 fi
 
 echo "ZenTao Runtime installed: ${PREFIX}"
-echo "Manage with: systemctl status zentao-runtime"
+echo "Manage with: systemctl status zentao"
