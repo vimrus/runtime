@@ -127,13 +127,13 @@ func (c *Cleaner) removeNodeDir(ctx context.Context, path string, result *Result
 			return ctx.Err()
 		default:
 		}
-		if file.IsDir() {
-			continue
-		}
 		full := filepath.Join(path, file.Name())
-		fileInfo, err := file.Info()
+		fileInfo, err := os.Lstat(full)
 		if err != nil {
 			continue
+		}
+		if fileInfo.IsDir() || fileInfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to clean nested directory or symlink %q", full)
 		}
 		if err := os.Remove(full); err != nil {
 			return err
@@ -150,6 +150,8 @@ func (c *Cleaner) removeNodeDir(ctx context.Context, path string, result *Result
 	}
 	if err := os.Remove(path); err == nil {
 		result.DeletedDirs++
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
 }

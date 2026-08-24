@@ -20,26 +20,27 @@ zentao 是禅道面向 Windows、Linux 和 Docker 的新一代集成运行环境
 
 ## 当前阶段
 
-项目已实现 runtime-development-plan 阶段 0-5 的全部 Runtime 侧任务，并在
+项目已实现 runtime-development-plan 阶段 0-5 的主要 Runtime 侧任务，并在
 GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生
 构建矩阵（含 ionCube 与 DuckDB）。已交付：Control Plane、分层健康、
 Queue Engine、DuckDB/Parquet 可观测性、升级事务、Linux/Windows 服务集成、
 Runtime/Full 打包、签名供应链和 CI workflow。
 
 禅道侧尚未修改：适配计划已冻结联合契约（第 17 节）并定位具体改动点
-（第 18 节），待确认后按 `docs/zentao-application-adaptation-plan.md`
+（第 18 节），待确认后按 `docs/development/01-zentao-application-adaptation-plan.md`
 实施。正式安装器、代码签名、Docker 多架构镜像推送和再分发法务确认仍需
 发布环境与权限。
 
 开始开发前必须先阅读与任务相关的设计文档，不能绕过已经确认的架构边界：
 
-- `docs/frankenphp-integration-technical-plan.md`：总体集成方案和 ionCube ABI 兼容设计。
-- `docs/runtime-host-library-design.md`：Caddy、FrankenPHP 和 Runtime Host 详细设计。
-- `docs/github-actions-build-design.md`：Windows、Linux、Docker 构建与打包设计。
-- `docs/message-queue-design.md`：数据库消息队列和 PHP Queue Bridge 设计。
-- `docs/database-cache-design.md`：数据库显式缓存设计。
-- `docs/deployment-and-ha-design.md`：PHP Session 配置、NFS、外部负载均衡和双节点高可用设计。
-- `docs/duckdb-parquet-observability-design.md`：DuckDB、度量项、日志和共享 Parquet 数据集设计。
+- `docs/design/00-system-overview.md`：总体目标、组件边界、数据流和部署模型。
+- `docs/design/01-runtime-host.md`：Caddy、FrankenPHP 和 Runtime Host 设计。
+- `docs/design/02-frankenphp-integration.md`：PHP、Classic mode 和 ionCube 集成设计。
+- `docs/design/03-message-queue.md`：数据库消息队列和 PHP Queue Bridge 设计。
+- `docs/design/04-runtime-cache.md`：Runtime Cache Service 和客户端设计。
+- `docs/design/05-observability.md`：DuckDB、度量项、日志和共享 Parquet 数据集设计。
+- `docs/design/06-deployment-and-ha.md`：PHP Session、NFS、外部负载均衡和双节点高可用设计。
+- `docs/design/07-build-and-release.md`：Windows、Linux、Docker 构建与打包设计。
 
 所有新增设计文档必须放在 `docs/`，不要在仓库根目录或其他目录散落设计说明。
 
@@ -86,19 +87,14 @@ Runtime/Full 打包、签名供应链和 CI workflow。
 
 ### 缓存
 
-- 第一版缓存使用数据库中的独立缓存表。
-- 业务代码只能显式调用 `get`、`set` 和 `delete`。
-- 同一 PHP 请求内使用 Array L0，不能使用 APCu 保存跨请求缓存。
-- Cache Client 使用独立、懒加载的 PDO 连接和独立缓存账号，不复用业务 DAO 当前连接，不进入业务事务。
-- 缓存连接使用 autocommit、短超时和数据库侧连接配额；故障或配额耗尽时快速按未命中降级。
-- `zt_cache` 只保留 `keyHash`、`value`、`valueType`、`expiresAt` 四列，`keyHash` 是包含命名空间的 SHA-256 摘要主键。
-- 不拦截 SQL，不自动缓存普通 DAO 查询，不提供隐式回填。
-- 缓存故障按未命中处理，不能阻断业务。
-- MySQL 默认使用 InnoDB。
-- PostgreSQL 默认使用 UNLOGGED 普通表；主备切换后允许缓存为空。
-- 达梦默认使用普通行存储表和聚集主键。
-- 权限、锁、许可证和关键业务状态等强一致数据不能缓存。
-- Redis、Ristretto 和 bbolt 不属于第一版默认缓存后端。
+- Runtime 内嵌 Cache Service，首版使用有界内存后端，重启和节点切换后允许为空。
+- PHP/Runtime 组件只能显式调用 `get`、`set` 和 `delete`，通过本机私有、版本化 Cache Bridge 访问。
+- 同一 PHP 请求内可以使用 Array L0，但不能使用 APCu 保存跨请求业务缓存。
+- Go Runtime 不连接禅道业务数据库，不复制 PHP DAO、数据库 Driver 或缓存表。
+- Cache Service 负责 TTL、分片、LRU/过期淘汰、namespace 配额和故障降级。
+- 缓存故障、超时、容量拒绝和 Runtime 重启均按 Miss/业务回源处理，不能阻断业务。
+- 权限、锁、许可证、工作流状态和其他强一致数据不能缓存。
+- DuckDB 只保存缓存聚合指标，不保存完整缓存值。
 
 ### 部署与高可用
 
@@ -171,7 +167,7 @@ runtime/
 - Runtime 启动、重载、优雅停止和子进程管理。
 - MySQL、PostgreSQL 和信创数据库的 PHP DAO 契约。
 - 消息队列的并发领取、租约、重试、死信和 Worker 崩溃恢复。
-- 缓存的显式 `get/set/delete`、过期、降级和数据库性能。
+- Runtime Cache 的显式 `get/set/delete`、过期、容量、降级和 Bridge 性能。
 - DuckDB 三平台加载、共享 Parquet 原子发布、NFS 故障补发、查询资源限制和日志脱敏。
 
 没有执行某个平台或数据库测试时，必须在交付说明中明确列出未验证项和剩余风险。

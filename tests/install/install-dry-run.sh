@@ -11,7 +11,7 @@ trap 'rm -rf "${tmpdir}"' EXIT
 
 prefix="/opt/zentao"
 mkdir -p "${tmpdir}/opt/zentao/bin"
-cp "${repo_root}/dist/poc-linux-amd64/bin/zentao-runtime" "${tmpdir}/opt/zentao/bin/zentao-runtime" 2>/dev/null || \
+cp "${repo_root}/dist/runtime-linux-amd64/bin/zentao-runtime" "${tmpdir}/opt/zentao/bin/zentao-runtime" 2>/dev/null || \
     touch "${tmpdir}/opt/zentao/bin/zentao-runtime"
 
 ZENTAO_DRY_RUN=1 \
@@ -32,9 +32,7 @@ for path in \
     [[ -d "${path}" ]] || { echo "missing directory: ${path}" >&2; exit 1; }
 done
 
-for unit in zentao-runtime.service zentao-scheduler.service; do
-    [[ -f "${tmpdir}/etc/systemd/system/${unit}" ]] || { echo "missing unit: ${unit}" >&2; exit 1; }
-done
+[[ -f "${tmpdir}/etc/systemd/system/zentao-runtime.service" ]] || { echo "missing runtime unit" >&2; exit 1; }
 grep -q "ExecStart=${prefix}/bin/zentao-runtime" "${tmpdir}/etc/systemd/system/zentao-runtime.service"
 [[ -f "${tmpdir}/etc/logrotate.d/zentao" ]] || { echo "missing logrotate policy" >&2; exit 1; }
 

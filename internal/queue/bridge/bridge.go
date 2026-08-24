@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 const (
-	SchemaVersion    = 1
-	MaxRequestBytes  = 64 * 1024
-	MaxResponseBytes = 64 * 1024
-	MaxBatchSize     = 128
+	SchemaVersion     = 1
+	MaxRequestBytes   = 64 * 1024
+	MaxResponseBytes  = 64 * 1024
+	MaxBatchSize      = 128
+	MaxTimeoutSeconds = 24 * 60 * 60
 )
 
 const (
@@ -101,11 +103,11 @@ func (r ClaimRequest) Validate() error {
 	if err := validateIdentity(r.Schema, r.NodeID, r.InstanceID); err != nil {
 		return err
 	}
-	if r.WorkerID == "" || len(r.Channels) == 0 || len(r.Channels) > MaxBatchSize || r.Limit < 1 || r.Limit > MaxBatchSize || r.LeaseSeconds < 1 {
+	if !validIdentifier(r.WorkerID) || len(r.Channels) == 0 || len(r.Channels) > MaxBatchSize || r.Limit < 1 || r.Limit > MaxBatchSize || r.LeaseSeconds < 1 || r.LeaseSeconds > MaxTimeoutSeconds {
 		return fmt.Errorf("invalid claim request")
 	}
 	for _, queue := range r.Channels {
-		if strings.TrimSpace(queue) == "" {
+		if !validIdentifier(queue) {
 			return fmt.Errorf("invalid claim queue")
 		}
 	}
@@ -124,8 +126,11 @@ type Lease struct {
 }
 
 func (l Lease) Validate() error {
-	if l.UUID == "" || l.Channel == "" || l.Handler == "" || l.Attempt < 1 || l.LeaseToken == "" || l.LeaseEnd == "" || l.TimeoutSeconds < 1 || l.TraceID == "" {
+	if l.UUID == "" || l.Channel == "" || l.Handler == "" || l.Attempt < 1 || l.LeaseToken == "" || l.LeaseEnd == "" || l.TimeoutSeconds < 1 || l.TimeoutSeconds > MaxTimeoutSeconds || l.TraceID == "" {
 		return fmt.Errorf("invalid lease")
+	}
+	if _, err := time.Parse(time.RFC3339Nano, l.LeaseEnd); err != nil {
+		return fmt.Errorf("invalid lease end")
 	}
 	return nil
 }
@@ -433,10 +438,23 @@ func validateIdentity(schema int, nodeID, instanceID string) error {
 	if schema != SchemaVersion {
 		return fmt.Errorf("unsupported queue bridge schema %d", schema)
 	}
-	if nodeID == "" || instanceID == "" {
+	if !validIdentifier(nodeID) || !validIdentifier(instanceID) {
 		return fmt.Errorf("nodeID and instanceID are required")
 	}
 	return nil
+}
+
+func validIdentifier(value string) bool {
+	if value == "" || len(value) > 128 || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == ':' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 func validateResponseSchema(schema int, bridgeError *Error) error {
 	if schema != SchemaVersion {

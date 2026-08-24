@@ -7,7 +7,7 @@
 | 状态 | 契约已冻结、改动点已定位；禅道代码实施待确认后执行 |
 | 日期 | 2026-08-18 |
 | 责任代码库 | `zentaopms`、`zentaoext`、`zentaomax`、`zentaoipd`、`zentaopatch` |
-| Runtime 计划 | [zentao 集成环境开发计划](./runtime-development-plan.md) |
+| Runtime 计划 | [zentao 集成环境开发计划](./00-runtime-development-plan.md) |
 | PHP 基线 | PHP 8.4 |
 | 数据库基线 | MySQL，并保持 PostgreSQL及信创数据库兼容 |
 
@@ -19,7 +19,7 @@
 
 - 在 FrankenPHP Classic mode 下正确安装、运行和升级。
 - 使用新的可靠数据库任务队列，并由 Runtime 统一调度 Worker。
-- 通过显式 `get/set/delete` 使用数据库缓存。
+- 通过 Runtime Cache Bridge 的显式 `get/set/delete` 使用 Runtime 缓存。
 - 遵循 `php.ini` 的 Session 配置，支持单机文件及多节点 NFS/Redis Session。
 - 在多节点下使用共享 NFS 附件目录。
 - 向 Runtime 输出受控、脱敏的日志和度量事件。
@@ -54,7 +54,7 @@
 - NFS、Redis、数据库集群及外部负载均衡的部署与高可用建设。
 - 将业务数据库驱动或业务 SQL 移植到 Go。
 
-这些工作归入[zentao 集成环境开发计划](./runtime-development-plan.md)或客户基础设施范围。
+这些工作归入[zentao 集成环境开发计划](./00-runtime-development-plan.md)或客户基础设施范围。
 
 ## 5. 任务编号与开发约束
 
@@ -111,18 +111,17 @@
 | Z-QUEUE-12 | P1 | 队列清理与保留 | Queue Service/Scheduler | 完成任务和 Attempt 的分批归档清理 | Z-QUEUE-05 | 清理使用有界批次，不长时间锁表或造成复制突增 |
 | Z-QUEUE-13 | P1 | 队列指标 | Queue Service、OBS Client | 积压、最老任务、延迟、重试和死信指标 | Z-OBS-01, Z-QUEUE-05 | 指标失败不改变任务状态，标签基数受控 |
 
-## 8. 阶段 2：数据库显式缓存
+## 8. 阶段 2：Runtime 缓存接入
 
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
-| Z-CACHE-01 | P0 | 缓存表迁移 | 安装/升级 SQL、innovation | 四字段缓存表及数据库物理实现 | 无 | MySQL InnoDB、PostgreSQL UNLOGGED、达梦行存储实现符合设计 |
-| Z-CACHE-02 | P0 | Cache Client | framework/lib | `get/set/delete`、Array L0、编码和键摘要 | Z-CACHE-01 | 只接受显式操作，不拦截 DAO，不提供自动 `remember()` |
-| Z-CACHE-03 | P0 | 独立连接与降级 | DAO/数据库配置 | 懒加载独立 PDO、短超时、配额和错误隔离 | Z-CACHE-02 | 连接或查询失败按 Miss 处理，不加入业务事务 |
-| Z-CACHE-04 | P1 | 过期清理 | Scheduler/Cache Service | 分批清理和容量指标 | Z-CACHE-02 | 清理不扫描业务表，不在读取路径写命中时间 |
-| Z-CACHE-05 | P1 | 首批热点接入 | 经性能分析选定的模块 | 显式缓存键、TTL 和失效点 | Z-CACHE-03 | 仅缓存生成成本明显高于主键点查的数据，业务正确性不依赖缓存 |
-| Z-CACHE-06 | P1 | 性能与故障验证 | tests | MySQL/PostgreSQL/达梦基准和故障注入 | Z-CACHE-03 | 达到详细设计门槛；慢缓存连接不拖住普通 DAO 连接 |
+| Z-CACHE-01 | P0 | Runtime Cache Bridge 客户端 | framework/lib | `get/set/delete`、Array L0、编码和键摘要 | R-CACHE-01 | 只接受显式操作，不拦截 DAO，不提供自动 `remember()` |
+| Z-CACHE-02 | P0 | PHP 运行时适配 | framework/lib、应用配置 | 本机鉴权、超时、版本协商和错误降级 | Z-CACHE-01 | Runtime 不可用时按 Miss 处理，不连接禅道数据库 |
+| Z-CACHE-03 | P1 | Namespace 注册与失效 | framework、业务模块 | 稳定 namespace、TTL、显式失效点和容量标签 | Z-CACHE-01 | 不缓存权限、锁、许可证和关键状态 |
+| Z-CACHE-04 | P1 | 首批热点接入 | 经性能分析选定的模块 | 显式缓存键、TTL 和失效点 | Z-CACHE-02/03 | 仅缓存生成成本明显高于缓存访问的数据 |
+| Z-CACHE-05 | P1 | 性能与故障验证 | tests、Runtime 联合测试 | 命中、过期、容量、服务重启、节点切换和故障注入 | Z-CACHE-02 | 缓存故障不改变业务结果，慢缓存不拖住 PHP 请求 |
 
-缓存接入必须逐个场景评审。大 ID 集合和非索引 `IN` 查询不应通过缓存掩盖，应另行采用 `JOIN/EXISTS`、临时表或数据库方言化的 Large ID Set 方案。
+缓存接入必须逐个场景评审。Runtime Cache 不替代 DAO 优化；大 ID 集合和非索引 `IN` 查询应另行采用 `JOIN/EXISTS`、临时表或数据库方言化的 Large ID Set 方案。
 
 ## 9. 阶段 3：Session、附件与部署适配
 
@@ -151,11 +150,11 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
-| Z-INSTALL-01 | P0 | 新安装适配 | `www/install.php`、安装 SQL | Runtime 环境检查和新表初始化 | Z-QUEUE-01, Z-CACHE-01 | Runtime/Full/外部数据库三种安装路径均可完成 |
+| Z-INSTALL-01 | P0 | 新安装适配 | `www/install.php`、Runtime 配置 | Runtime 环境检查和 Cache Bridge 初始化配置 | Z-QUEUE-01, Z-CACHE-01 | Runtime/Full/外部数据库三种安装路径均可完成 |
 | Z-UPGRADE-01 | P0 | 增量升级和回滚边界 | upgrade、数据库迁移 | 一次性迁移（升级前备份）、失败提示和恢复说明 | Z-INSTALL-01 | 数据库迁移失败时应用不进入半启用新协议状态 |
 | Z-MIGRATE-01 | P1 | 旧队列灰度迁移 | cron、Queue Service | 按 Handler 切换、回退和观察窗口 | Z-QUEUE-10, Z-UPGRADE-01 | 禁止无控制双消费；旧任务有明确排空或保留策略 |
 | Z-EDITION-01 | P0 | 版本包含关系验证 | 各版本/插件 | 开源、企业、旗舰、IPD 合并测试 | Z-REL-01 | 公共能力不被扩展覆盖破坏，各工作界面可启动 |
-| Z-DB-01 | P0 | 数据库契约矩阵 | DAO、innovation、tests | Queue/Cache/Upgrade SQL 契约测试 | 各数据任务 | MySQL、PostgreSQL为强制门槛；信创数据库结果逐项记录 |
+| Z-DB-01 | P0 | 数据库契约矩阵 | DAO、innovation、tests | Queue/Upgrade SQL 契约测试 | 各数据任务 | MySQL、PostgreSQL为强制门槛；信创数据库结果逐项记录 |
 | Z-E2E-01 | P0 | 联合端到端测试 | tests | 安装、登录、队列、缓存、Session、附件、升级测试 | Runtime RC | Windows/Linux/Docker 规定矩阵和付费版 ionCube 用例通过 |
 
 ## 12. 推荐的首批代码入口
@@ -179,6 +178,7 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 | Z-HEALTH-01 | R-HEALTH-01 | 分层健康状态和故障归属 |
 | Z-QUEUE-02/03 | R-ARCH-04, R-QUEUE-01 | Bridge Schema、鉴权和兼容协商 |
 | Z-QUEUE-04/05 | R-QUEUE-02/03 | 双节点领取、心跳、崩溃恢复和迟到结果拒绝 |
+| Z-CACHE-01/02 | R-CACHE-01/02 | Runtime Cache Bridge v1、PHP Client、降级和共享夹具 |
 | Z-SCHED-01 | R-SCHED-01 | 注册任务的可靠触发与取消 |
 | Z-OBS-01/02 | R-ARCH-05, R-OBS-02 | 有界事件发送和 Parquet 发布 |
 | Z-REL-01 | R-CI-03 | 各版本应用制品输入和安装测试 |
@@ -190,7 +190,7 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 2. 改造 `zt_queue` 为新队列表并新建 Queue Service；旧 cron 队列数据不保留，直接删除重建。
 3. 选择邮件或 Webhook 等边界清晰、可幂等的任务完成首批迁移。
 4. 完成队列管理界面和故障恢复后，再迁移更多 Handler 与 Scheduler。
-5. 缓存先完成 Client 和数据库契约，再按实际性能数据接入少量热点。
+5. 缓存先完成 Runtime Cache Bridge Client 和契约测试，再按实际性能数据接入少量热点。
 6. Session 和附件在多节点发布前完成 NFS/Redis 联合验证。
 7. 日志和度量先接 Runtime 自身，再逐步增加低频业务事件。
 8. 最后完成各付费版本、IPD 工作界面和信创数据库回归。
@@ -250,7 +250,7 @@ PHP 侧自行改名或绕过。
 - `X-Zentao-Queue-Schema: 1` 请求头与根对象 `schema: 1` 双重校验。
 - 请求/响应 64 KiB 上限、批量 128 上限、未知字段拒绝、错误对象
   `{code,message,retryable}`，错误码集合见
-  `docs/queue-bridge-v1-contract.md`。
+  `docs/design/contracts/queue-bridge-v1.md`。
 
 ### 17.3 可观测性事件信封
 

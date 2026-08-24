@@ -61,10 +61,10 @@ func TestManagerExtendsAndCancelsStaleLeases(t *testing.T) {
 	if _, ok := cancelled.Load("job-2"); !ok {
 		t.Fatal("stale lease was not cancelled")
 	}
-	if _, ok := cancelled.Load("job-1"); ok {
-		t.Fatal("extended lease must not be cancelled")
+	if _, ok := cancelled.Load("job-1"); !ok {
+		t.Fatal("shutdown must cancel the remaining active lease")
 	}
-	if manager.Count() != 1 {
-		t.Fatalf("active leases = %d, want 1", manager.Count())
+	if manager.Count() != 0 {
+		t.Fatalf("active leases = %d, want 0 after shutdown", manager.Count())
 	}
 }

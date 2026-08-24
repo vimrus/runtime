@@ -6,11 +6,11 @@
 |---|---|
 | 状态 | 已实施（workflow 落地，三平台原生矩阵通过） |
 | 日期 | 2026-08-18 |
-| 关联方案 | [禅道 FrankenPHP 集成环境技术方案](./frankenphp-integration-technical-plan.md) |
+| 关联方案 | [禅道 FrankenPHP 集成方案](./02-frankenphp-integration.md) |
 | CI 平台 | GitHub Actions |
 | Runner 范围 | GitHub-hosted Runner |
 | 目标平台 | Windows x86_64、Linux amd64、Linux arm64、Docker amd64/arm64 |
-| Runtime Host | [自研 Caddy + FrankenPHP Library Host](./runtime-host-library-design.md) |
+| Runtime Host | [自研 Caddy + FrankenPHP Library Host](./01-runtime-host.md) |
 
 ## 2. 设计目标
 
@@ -779,8 +779,7 @@ ghcr.io/<org>/zentao:latest             # 仅稳定正式版更新
 Compose 包含：
 
 ```text
-web        zentao-runtime，内含 Caddy + FrankenPHP Classic mode
-scheduler  相同镜像，不同启动命令
+web        zentao-runtime，内含 Caddy + FrankenPHP Classic mode 和内部 Scheduler
 mysql      固定 MySQL 镜像，可选 profile
 ```
 
@@ -1210,7 +1209,7 @@ links to test reports and SBOM
 
 ## 28. 实施状态（2026-08-19）
 
-本设计已落地为 `.github/workflows/` 下的 `ci.yml`、`poc-linux-amd64.yml`、
+本设计已落地为 `.github/workflows/` 下的 `ci.yml`、`native-linux-amd64.yml`、
 `native-builds.yml`、`application-matrix.yml` 和 `release.yml`，并已在
 GitHub-hosted Runner 上验证：
 

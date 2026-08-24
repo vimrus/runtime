@@ -8,7 +8,7 @@ Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-se
 
 ## 2. 配置文件
 
-默认路径是 `/opt/zentao/config/runtime.json`。可复制 [配置样例](../config/runtime.example.json)，配置格式为严格 JSON，未知字段和不支持的 `schemaVersion` 会阻止启动。
+默认路径是 `/opt/zentao/config/runtime.json`。可复制 [配置样例](../../../config/runtime.example.json)，配置格式为严格 JSON，未知字段和不支持的 `schemaVersion` 会阻止启动。
 
 ```json
 {
@@ -153,7 +153,7 @@ app-root 以及未来的数据库、Session、NFS 探针），组件状态为
 必须至少一个；Bridge Token 通过 `ZENTAO_QUEUE_TOKEN` 或
 `queue.bridgeToken` 提供，每次部署轮换，不写入日志和审计。Queue 启动时先
 执行 `capabilities` 协商，失败只标记 Queue 组件降级，不影响 Web Ready。
-批量 Claim、Heartbeat、Reap 和租约参数见 `docs/message-queue-design.md`。
+批量 Claim、Heartbeat、Reap 和租约参数见 [`design/03-message-queue.md`](../03-message-queue.md)。
 
 ## 7. 可观测性
 
@@ -210,7 +210,7 @@ Runtime 自身结构化日志写入 `runtime-<nodeID>.jsonl`，按
 `jsonlConvertInterval` 轮转为 `runtime-<nodeID>.jsonl-<时间戳>.log`。
 两者均通过 `convert-jsonl` 或自动调度转换为 Parquet（见第 7 节）。
 
-## 5. Reload 边界
+## 9. Reload 边界
 
 `web.readHeaderTimeout`、`web.idleTimeout` 和 `web.maxHeaderBytes` 可以通过 Caddy Library 热加载。候选配置会先严格解析和校验，Caddy 拒绝候选配置时实例保持旧配置并进入 `degraded`。
 

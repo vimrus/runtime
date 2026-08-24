@@ -95,6 +95,42 @@ func TestPoolClaimsExecutesAndDrains(t *testing.T) {
 	}
 }
 
+func TestNewPoolRejectsDuplicateQueues(t *testing.T) {
+	queueBridge := &fakeBridge{}
+	manager := lease.NewManager("node-a", "instance-a", "worker-a", queueBridge, time.Minute, 1)
+	_, err := NewPool(queueBridge, manager, Config{
+		NodeID: "node-a", InstanceID: "instance-a", WorkerID: "worker-a", ClaimBatch: 1,
+		Channels: []QueueConfig{{Name: "mail"}, {Name: "mail"}},
+	}, slog.Default())
+	if err == nil {
+		t.Fatal("duplicate queues must be rejected")
+	}
+}
+
+func TestPoolCanRestartAfterStop(t *testing.T) {
+	queueBridge := &fakeBridge{}
+	manager := lease.NewManager("node-a", "instance-a", "worker-a", queueBridge, time.Minute, 1)
+	p, err := NewPool(queueBridge, manager, Config{
+		NodeID: "node-a", InstanceID: "instance-a", WorkerID: "worker-a", ClaimBatch: 1,
+		DrainTimeout: time.Second, Channels: []QueueConfig{{Name: "mail", MinPoll: time.Millisecond, MaxPoll: time.Millisecond}},
+	}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p.Run(ctx)
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	p.Run(ctx2)
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+}
+
 type testWriter struct{}
 
 func (testWriter) Write(data []byte) (int, error) { return len(data), nil }

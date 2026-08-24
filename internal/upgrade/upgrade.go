@@ -105,6 +105,12 @@ func Begin(layout Layout) (*Transaction, error) {
 		}
 		previous = ""
 	}
+	if previous != "" {
+		resolvedPrevious, resolveErr := filepath.EvalSymlinks(previous)
+		if resolveErr != nil || !isWithin(resolvedPrevious, filepath.Clean(layout.AppsDir)) {
+			return nil, errors.New("active application pointer resolves outside the applications directory")
+		}
+	}
 	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	backupDir := filepath.Join(layout.BackupsDir, "upgrade-"+stamp)
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
@@ -143,7 +149,11 @@ func (t *Transaction) Stage(release string) error {
 	if !isWithin(release, t.layout.AppsDir) {
 		return errors.New("release must live inside the applications directory")
 	}
-	info, err := os.Stat(filepath.Join(release, "www"))
+	resolved, err := filepath.EvalSymlinks(release)
+	if err != nil || !isWithin(resolved, t.layout.AppsDir) {
+		return errors.New("release resolves outside the applications directory")
+	}
+	info, err := os.Stat(filepath.Join(resolved, "www"))
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("release %s does not contain a valid www directory: %w", release, err)
 	}
@@ -241,6 +251,9 @@ func readPointer(path string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
 		return filepath.Clean(target), nil
 	}
 	data, err := os.ReadFile(path)
@@ -251,19 +264,10 @@ func readPointer(path string) (string, error) {
 	if value == "" {
 		return "", errors.New("application pointer file is empty")
 	}
+	if !filepath.IsAbs(value) {
+		value = filepath.Join(filepath.Dir(path), value)
+	}
 	return filepath.Clean(value), nil
-}
-
-func swapPointer(path, target string) error {
-	temp := path + ".tmp-" + fmt.Sprint(os.Getpid())
-	if err := os.Symlink(target, temp); err != nil {
-		return fmt.Errorf("create pointer: %w", err)
-	}
-	if err := os.Rename(temp, path); err != nil {
-		_ = os.Remove(temp)
-		return fmt.Errorf("swap pointer: %w", err)
-	}
-	return nil
 }
 
 func writeFile(path string, data []byte) error {
@@ -271,7 +275,13 @@ func writeFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	_, err = file.Write(data)
-	return err
+	if _, err = file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err = file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }

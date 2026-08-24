@@ -69,3 +69,28 @@ func TestStatusTracksExecution(t *testing.T) {
 		t.Fatalf("unexpected status: %#v", status)
 	}
 }
+
+func TestRunCanRestartAfterContextCancellation(t *testing.T) {
+	manager := New(1, slog.Default())
+	if err := manager.Register(Job{Name: "job", Interval: time.Hour, Run: func(context.Context) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	first, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { manager.Run(first); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("first scheduler run did not stop")
+	}
+	second, cancelSecond := context.WithCancel(context.Background())
+	done = make(chan struct{})
+	go func() { manager.Run(second); close(done) }()
+	cancelSecond()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler could not restart")
+	}
+}

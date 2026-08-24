@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,6 +53,9 @@ type Supervisor struct {
 	mu              sync.Mutex
 	state           State
 	cmd             *exec.Cmd
+	initFile        string
+	processDone     chan struct{}
+	processErr      error
 	log             *os.File
 	lastError       string
 	platformCleanup func()
@@ -99,6 +103,14 @@ func (s *Supervisor) Initialize(ctx context.Context) error {
 		if err := os.WriteFile(s.config.SecretsFile, []byte(password+"\n"), 0o600); err != nil {
 			return err
 		}
+		s.initFile = filepath.Join(s.config.DataDir, ".zentao-init.sql")
+		statement := fmt.Sprintf("ALTER USER 'root'@'localhost' IDENTIFIED BY '%s';\n", strings.ReplaceAll(password, "'", "''"))
+		if err := os.WriteFile(s.initFile, []byte(statement), 0o600); err != nil {
+			_ = os.Remove(s.config.SecretsFile)
+			_ = os.Remove(s.initFile)
+			s.initFile = ""
+			return err
+		}
 	}
 	args := append([]string{
 		"--no-defaults",
@@ -110,9 +122,26 @@ func (s *Supervisor) Initialize(ctx context.Context) error {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(marker)
+		if s.config.SecretsFile != "" {
+			_ = os.Remove(s.config.SecretsFile)
+		}
+		if s.initFile != "" {
+			_ = os.Remove(s.initFile)
+			s.initFile = ""
+		}
 		return fmt.Errorf("mysql initialize failed: %w: %s", err, truncate(string(output), 512))
 	}
-	return os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
+	if err := os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600); err != nil {
+		if s.config.SecretsFile != "" {
+			_ = os.Remove(s.config.SecretsFile)
+		}
+		if s.initFile != "" {
+			_ = os.Remove(s.initFile)
+			s.initFile = ""
+		}
+		return err
+	}
+	return nil
 }
 
 // Start launches mysqld and waits for its socket to appear.
@@ -146,6 +175,9 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		"--bind-address=127.0.0.1",
 		"--log-error=" + s.config.LogPath,
 	}
+	if s.initFile != "" {
+		args = append(args, "--init-file="+s.initFile)
+	}
 	args = append(args, s.config.RuntimeArgs...)
 	command := exec.Command(s.config.Binary, args...)
 	command.Stdout = logFile
@@ -157,16 +189,45 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return fmt.Errorf("start mysql: %w", err)
 	}
+	processDone := make(chan struct{})
+	go func() {
+		err := command.Wait()
+		s.mu.Lock()
+		s.processErr = err
+		close(processDone)
+		if s.cmd == command && (s.state == StateRunning || s.state == StateStarting) {
+			wasRunning := s.state == StateRunning
+			s.state = StateFailed
+			if err != nil {
+				s.lastError = err.Error()
+			}
+			if wasRunning {
+				if s.log != nil {
+					_ = s.log.Close()
+					s.log = nil
+				}
+				if s.platformCleanup != nil {
+					s.platformCleanup()
+					s.platformCleanup = nil
+				}
+				s.cmd = nil
+				s.processDone = nil
+			}
+		}
+		s.mu.Unlock()
+	}()
 	cleanup, err := afterStart(command)
 	if err != nil {
 		_ = stopProcess(command)
-		_ = command.Wait()
+		<-processDone
 		logFile.Close()
 		s.state = StateFailed
 		s.mu.Unlock()
 		return fmt.Errorf("assign mysql to job object: %w", err)
 	}
 	s.cmd = command
+	s.processDone = processDone
+	s.processErr = nil
 	s.log = logFile
 	s.platformCleanup = cleanup
 	s.state = StateStarting
@@ -176,28 +237,80 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
+			_ = stopProcess(command)
+			<-processDone
+			logFile.Close()
+			if cleanup != nil {
+				cleanup()
+			}
 			s.mu.Lock()
+			s.cmd = nil
 			s.state = StateFailed
 			s.mu.Unlock()
 			return ctx.Err()
 		default:
 		}
+		// Check process completion before trusting a socket path, which may
+		// be stale from an earlier run or created just before a crash.
+		select {
+		case <-processDone:
+			logFile.Close()
+			if cleanup != nil {
+				cleanup()
+			}
+			s.mu.Lock()
+			s.cmd = nil
+			s.processDone = nil
+			s.state = StateFailed
+			err := s.processErr
+			s.mu.Unlock()
+			return fmt.Errorf("mysql exited during startup: %w", err)
+		default:
+		}
 		if _, err := os.Stat(s.config.SocketPath); err == nil {
+			select {
+			case <-processDone:
+				continue
+			default:
+			}
+			if s.initFile != "" {
+				_ = os.Remove(s.initFile)
+				s.initFile = ""
+			}
 			s.mu.Lock()
 			s.state = StateRunning
 			s.mu.Unlock()
 			return nil
 		}
-		if command.ProcessState != nil && command.ProcessState.Exited() {
+		select {
+		case <-processDone:
+			logFile.Close()
+			if cleanup != nil {
+				cleanup()
+			}
 			s.mu.Lock()
+			s.cmd = nil
 			s.state = StateFailed
 			s.mu.Unlock()
-			return fmt.Errorf("mysql exited during startup")
+			s.mu.Lock()
+			err := s.processErr
+			s.mu.Unlock()
+			return fmt.Errorf("mysql exited during startup: %w", err)
+		default:
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	s.mu.Lock()
 	s.state = StateFailed
+	s.mu.Unlock()
+	_ = stopProcess(command)
+	<-processDone
+	logFile.Close()
+	if cleanup != nil {
+		cleanup()
+	}
+	s.mu.Lock()
+	s.cmd = nil
 	s.mu.Unlock()
 	return fmt.Errorf("mysql startup exceeded %s", s.config.StartupTimeout)
 }
@@ -207,6 +320,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 func (s *Supervisor) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	command := s.cmd
+	done := s.processDone
 	if s.state != StateRunning && s.state != StateStarting {
 		s.state = StateStopped
 		s.mu.Unlock()
@@ -221,19 +335,44 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 	if err := stopProcess(command); err != nil {
 		return err
 	}
-	done := make(chan struct{})
-	go func() {
-		_ = command.Wait()
-		close(done)
-	}()
+	if done == nil {
+		return errors.New("mysql process wait handle is unavailable")
+	}
 	select {
 	case <-done:
 	case <-time.After(s.config.StopTimeout):
 		killProcessGroup(command)
 		<-done
-		s.setState(StateFailed, "mysql stop timed out and was killed")
+		s.mu.Lock()
+		s.state = StateFailed
+		if s.log != nil {
+			_ = s.log.Close()
+			s.log = nil
+		}
+		if s.platformCleanup != nil {
+			s.platformCleanup()
+			s.platformCleanup = nil
+		}
+		s.cmd = nil
+		s.processDone = nil
+		s.mu.Unlock()
 		return errors.New("mysql stop timed out and was killed")
 	case <-ctx.Done():
+		killProcessGroup(command)
+		<-done
+		s.mu.Lock()
+		s.state = StateFailed
+		if s.log != nil {
+			_ = s.log.Close()
+			s.log = nil
+		}
+		if s.platformCleanup != nil {
+			s.platformCleanup()
+			s.platformCleanup = nil
+		}
+		s.cmd = nil
+		s.processDone = nil
+		s.mu.Unlock()
 		return ctx.Err()
 	}
 	s.mu.Lock()
@@ -247,6 +386,7 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 		s.platformCleanup = nil
 	}
 	s.cmd = nil
+	s.processDone = nil
 	s.mu.Unlock()
 	return nil
 }

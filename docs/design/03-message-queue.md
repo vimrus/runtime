@@ -12,8 +12,8 @@
 | 数据库范围 | 禅道已支持的 MySQL、PostgreSQL 及信创数据库 |
 | 消费语义 | At-least-once |
 | 部署模式 | 单机、多节点 |
-| 关联设计 | [Caddy + FrankenPHP Library Runtime Host 详细设计](./runtime-host-library-design.md) |
-| 集成方案 | [禅道 FrankenPHP 集成环境技术方案](./frankenphp-integration-technical-plan.md) |
+| 关联设计 | [Caddy + FrankenPHP Library Runtime Host 设计](./01-runtime-host.md) |
+| 集成方案 | [禅道 FrankenPHP 集成方案](./02-frankenphp-integration.md) |
 
 ## 2. 核心结论
 
@@ -958,7 +958,7 @@ duration_ms
 
 只记录 lease token 的摘要。Payload、Cookie、授权头和内部凭据默认不记录。
 
-队列聚合指标和结构化日志进入 Runtime 可观测性管线，由 DuckDB 批量写入本地或共享 NFS Parquet 数据集。队列状态、租约和 Job Payload 仍以业务数据库为事实来源，不能依赖 Parquet 恢复队列。详细协议参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+队列聚合指标和结构化日志进入 Runtime 可观测性管线，由 DuckDB 批量写入本地或共享 NFS Parquet 数据集。队列状态、租约和 Job Payload 仍以业务数据库为事实来源，不能依赖 Parquet 恢复队列。详细协议参见 [DuckDB 与共享 Parquet 可观测性设计](./05-observability.md)。
 
 ### 17.3 健康状态
 
@@ -1337,5 +1337,5 @@ PHP Handler Contract 的基础上增加 Redis、NATS 或其他传输，而不重
   Scheduler 注册表已实现并接入 Host；`runtime.json` 的 `queue` 配置段已
   冻结默认值。
 - PHP Queue Service、DAO、管理界面与首批 Handler 迁移属于
-  `docs/zentao-application-adaptation-plan.md`，尚未实施；真实 MySQL/
+  `docs/development/01-zentao-application-adaptation-plan.md`，尚未实施；真实 MySQL/
   PostgreSQL 上的并发与崩溃恢复契约测试在禅道侧实施后执行。

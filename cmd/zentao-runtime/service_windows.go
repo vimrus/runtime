@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"time"
 
@@ -23,8 +25,38 @@ func runServiceCommand(args []string) error {
 	errc := make(chan error, 1)
 	go func() { errc <- serve(serveArgs) }()
 	return windows.Run(windows.Service{
-		Name:        *name,
-		Start:       func(context.Context) error { return nil },
+		Name: *name,
+		Start: func(ctx context.Context) error {
+			deadline := time.NewTimer(30 * time.Second)
+			defer deadline.Stop()
+			ticker := time.NewTicker(200 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case serveErr := <-errc:
+					if serveErr == nil {
+						return errors.New("runtime exited before becoming ready")
+					}
+					return serveErr
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-deadline.C:
+					return errors.New("runtime did not become ready within 30s")
+				case <-ticker.C:
+					probeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+					response, err := control.Call(probeCtx, `\\.\pipe\zentao-runtime`, control.Request{Operation: "health"})
+					cancel()
+					if err == nil && response.OK {
+						var health struct {
+							Ready bool `json:"ready"`
+						}
+						if json.Unmarshal(response.Result, &health) == nil && health.Ready {
+							return nil
+						}
+					}
+				}
+			}
+		},
 		StopTimeout: 45 * time.Second,
 		Stop: func(ctx context.Context) error {
 			response, err := control.Call(ctx, `\\.\pipe\zentao-runtime`, control.Request{Operation: "stop"})

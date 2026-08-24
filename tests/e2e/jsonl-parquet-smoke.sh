@@ -10,7 +10,7 @@
 set -Eeuo pipefail
 
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${repo_root}/scripts/poc/common.sh"
+source "${repo_root}/scripts/build/common.sh"
 
 readonly app_input="${1:-}"
 readonly work="$(mktemp -d)"
@@ -87,7 +87,7 @@ docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${work}/app:/shared:rw" \
     --volume "${work}/runtime.json:/tmp/runtime.json:ro" \
-    "${POC_IMAGE}" \
+    "${RUNTIME_IMAGE}" \
     -c 'mkdir -p /shared/logs /shared/observability /shared/spool && exec zentao-runtime serve --config /tmp/runtime.json --install-root /shared/app' >/dev/null
 
 wait_ready
@@ -102,7 +102,7 @@ if ! docker wait "${container}" >/dev/null 2>&1; then
     exit 1
 fi
 
-node_id="$(docker run --rm --entrypoint cat --volume "${work}/app:/shared:rw" "${POC_IMAGE}" /shared/app/data/node-id)"
+node_id="$(docker run --rm --entrypoint cat --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" /shared/app/data/node-id)"
 if [[ -z "${node_id}" ]]; then
     echo "node id was not persisted" >&2
     exit 1
@@ -116,7 +116,7 @@ for source in access runtime; do
         stamp="$(date -u +%Y%m%dT%H%M%S.000000000Z)"
         segment="${source}-${node_id}.jsonl-${stamp}.log"
     fi
-    docker run --rm --entrypoint sh --volume "${work}/app:/shared:rw" "${POC_IMAGE}" \
+    docker run --rm --entrypoint sh --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" \
         -c "if [ -s '/shared/logs/${source}-${node_id}.jsonl' ]; then mv '/shared/logs/${source}-${node_id}.jsonl' '/shared/logs/${segment}'; fi"
 done
 

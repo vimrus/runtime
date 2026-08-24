@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const SchemaVersion = 1
@@ -74,8 +76,13 @@ func Normalize(event Event) (Event, error) {
 	event.EventTime = event.EventTime.UTC()
 	event.IngestTime = time.Now().UTC()
 	if len(event.Message) > maxMessageLength {
-		event.Message = event.Message[:maxMessageLength]
+		cut := maxMessageLength
+		for cut > 0 && !utf8.ValidString(event.Message[:cut]) {
+			cut--
+		}
+		event.Message = event.Message[:cut]
 	}
+	event.Message = redactText(event.Message)
 	if len(event.Fields) > maxFields {
 		event.Fields = firstKeys(event.Fields, maxFields)
 	}
@@ -85,6 +92,12 @@ func Normalize(event Event) (Event, error) {
 	event.Fields = redactMap(event.Fields)
 	event.Labels = redactMap(event.Labels)
 	return event, nil
+}
+
+var authTextPattern = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[^\s]+`)
+
+func redactText(value string) string {
+	return authTextPattern.ReplaceAllString(value, "$1 [REDACTED]")
 }
 
 func redactMap(values map[string]string) map[string]string {

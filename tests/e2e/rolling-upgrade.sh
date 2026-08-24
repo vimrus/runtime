@@ -8,10 +8,10 @@
 set -Eeuo pipefail
 
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${repo_root}/scripts/poc/common.sh"
+source "${repo_root}/scripts/build/common.sh"
 
-if ! docker image inspect "${POC_IMAGE}" >/dev/null 2>&1; then
-    build_poc_image
+if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
+    build_runtime_image
 fi
 
 readonly tmpdir="$(mktemp -d)"
@@ -19,7 +19,7 @@ readonly container_a="zentao-roll-a-${RANDOM}-$$"
 readonly container_b="zentao-roll-b-${RANDOM}-$$"
 cleanup() {
     docker rm --force "${container_a}" "${container_b}" >/dev/null 2>&1 || true
-    docker run --rm --entrypoint sh --volume "${tmpdir}:/shared:rw" "${POC_IMAGE}" -c 'find /shared -mindepth 1 -delete' >/dev/null 2>&1 || true
+    docker run --rm --entrypoint sh --volume "${tmpdir}:/shared:rw" "${RUNTIME_IMAGE}" -c 'find /shared -mindepth 1 -delete' >/dev/null 2>&1 || true
     rmdir "${tmpdir}" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -51,7 +51,7 @@ start_node() {
     docker run --detach --name "${name}" \
         --entrypoint sh \
         --volume "${tmpdir}:/shared:rw" \
-        "${POC_IMAGE}" \
+        "${RUNTIME_IMAGE}" \
         -c "exec zentao-runtime serve --config ${config} --install-root ${install_root}" >/dev/null
 }
 

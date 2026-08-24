@@ -110,9 +110,14 @@ func (r *Registry) probe(ctx context.Context, deep bool) Snapshot {
 	anyDegraded := false
 	checked := 0
 	for _, item := range items {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		result := item.check(ctx)
-		cancel()
+		var result Result
+		if item.check == nil {
+			result = Result{Name: item.name, Kind: item.kind, Status: StatusFailed, Message: "health probe is not configured"}
+		} else {
+			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			result = item.check(probeCtx)
+			cancel()
+		}
 		now := time.Now().UTC()
 		if result.CheckedAt.IsZero() {
 			result.CheckedAt = now
@@ -126,11 +131,11 @@ func (r *Registry) probe(ctx context.Context, deep bool) Snapshot {
 		switch result.Status {
 		case StatusFailed:
 			anyFailed = true
-			if item.required {
-				requiredFailed = true
-			}
 		case StatusDegraded:
 			anyDegraded = true
+		}
+		if item.required && result.Status != StatusOK {
+			requiredFailed = true
 		}
 	}
 	return Snapshot{
@@ -159,4 +164,4 @@ func (s Snapshot) Ready() bool { return !s.RequiredFailed }
 // Live is true when the Runtime event loop is still functioning. It is
 // derived by the host lifecycle rather than component probes; this helper
 // treats any non-failed snapshot as live for callers that only have probes.
-func (s Snapshot) Live() bool { return !s.AnyFailed || s.AnyDegraded }
+func (s Snapshot) Live() bool { return !s.AnyFailed }

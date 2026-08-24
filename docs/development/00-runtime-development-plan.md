@@ -9,7 +9,7 @@
 | 责任仓库 | `vimrus/runtime` |
 | 产品名称 | `zentao` |
 | Runtime 程序 | `zentao-runtime` |
-| 应用侧计划 | [禅道代码适配开发计划](./zentao-application-adaptation-plan.md) |
+| 应用侧计划 | [禅道代码适配开发计划](./01-zentao-application-adaptation-plan.md) |
 
 ## 2. 计划目标
 
@@ -33,20 +33,20 @@
 5. Go Runtime 不访问禅道业务数据库、不保存数据库凭据、不打包业务数据库 Driver。
 6. 队列数据操作由 PHP Queue Service 完成；Go 负责 Worker Pool、并发、超时、心跳和生命周期。
 7. Session 由 PHP `php.ini` 配置；Runtime 只校验并诊断，不实现 Session 存储。
-8. 缓存由禅道 PHP 代码显式访问数据库缓存表，Runtime 不实现缓存服务。
+8. 缓存由 Runtime 提供有界 Cache Service，禅道 PHP 代码通过本机私有 Bridge 显式访问。
 9. DuckDB 嵌入 Runtime，用于受控生成和查询日志、指标 Parquet；多节点不共享可写 `.duckdb` 文件。
 10. Linux 双节点可使用 Keepalived VIP 和内嵌 Caddy Gateway；数据库、NFS 和 Redis 的高可用属于外部基础设施。
 
 ## 4. 不属于本计划的工作
 
 - 禅道 PHP Queue Service、DAO、任务 Handler 和队列管理页面。
-- 缓存表、Cache Client 及业务模块缓存接入。
+- Runtime Cache Service 已属于 Runtime 设计范围；禅道侧负责 PHP Cache Client、namespace 注册和业务模块接入。
 - 禅道 Session Handler、附件逻辑和业务健康检查实现。
 - 禅道数据库迁移脚本及各数据库 SQL 方言。
 - 禅道应用各版本的业务兼容修改。
 - MySQL、NFS、Redis 或外部负载均衡集群本身的高可用建设。
 
-以上工作归入[禅道代码适配开发计划](./zentao-application-adaptation-plan.md)或客户基础设施范围。
+以上工作归入[禅道代码适配开发计划](./01-zentao-application-adaptation-plan.md)或客户基础设施范围。
 
 ## 5. 任务编号与优先级
 
@@ -111,6 +111,8 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
 | R-QUEUE-03 | P0 | 租约维护 | 批量 Heartbeat、fencing token 透传和过期处理 | R-QUEUE-02, Z-QUEUE-03 | Worker 崩溃后任务可恢复；迟到 ACK 不能覆盖新租约 |
 | R-QUEUE-04 | P1 | Wakeup 与兜底轮询 | 自适应轮询、抖动和退避 | R-QUEUE-02 | 空队列不高频打数据库；唤醒丢失后仍能最终消费 |
 | R-SCHED-01 | P1 | Scheduler 编排 | 受控触发、并发限制、超时和状态报告 | R-HOST-03, R-ARCH-04 | 使用 Fake 注册表可测试；不执行未注册的任意系统命令 |
+| R-CACHE-01 | P0 | Runtime Cache Service | 有界内存后端、TTL、分片、淘汰、namespace 配额和生命周期 | R-HOST-03, R-ARCH-02 | 缓存重启可丢失；容量或服务故障不影响 Web/Queue |
+| R-CACHE-02 | P0 | Runtime Cache Bridge v1 | 本机鉴权、`get/set/delete`、版本协商、批量限制和 Fake | R-CACHE-01, R-ARCH-03 | 公共 Web 不可达；协议错误和超时按 miss/失败降级 |
 | R-OBS-01 | P1 | DuckDB Library 集成 | 三平台链接、扩展锁定和资源限制 | R-ARCH-01 | 运行时不下载扩展，不开放任意 SQL 或任意路径 |
 | R-OBS-02 | P1 | Parquet 发布器 | 本地 spool、批处理、校验、原子 rename | R-OBS-01 | NFS 故障不阻断业务，恢复后可按稳定 Batch ID 补发 |
 | R-OBS-03 | P1 | 受控查询与保留 | 固定查询模板、分区裁剪、节点自清理 | R-OBS-02 | 查询有内存/CPU/超时限制，只清理本节点拥有的数据 |
@@ -151,6 +153,7 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
 | R-HEALTH-01 | Z-HEALTH-01 | Runtime 与应用分层健康状态 |
 | R-ARCH-05 | Z-OBS-01 | PHP 到 Runtime 的日志/指标事件契约 |
 | R-SCHED-01 | Z-SCHED-01 | 已注册 Scheduler Job 的触发与执行协议 |
+| R-CACHE-02 | Z-CACHE-01/02 | Runtime Cache Bridge v1、PHP Client 和共享夹具 |
 | R-CI-03 | Z-REL-01 | 各版本平台无关应用制品和安装测试 |
 | R-CI-04 | Z-UPGRADE-01 | 数据库迁移、应用升级和 Runtime 回滚联合测试 |
 
@@ -239,6 +242,6 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
   用 MSVC 自行编译 COFF `.lib`（`scripts/windows/build-duckdb.ps1`），
   R-OBS-01 的 Windows 链接已通过源码构建验证并启用。
 - 禅道版本联合测试（R-CI-03/R-CI-04）依赖 `Z-REL-01` 应用制品与禅道侧
-  适配实施，见 [禅道代码适配开发计划](./zentao-application-adaptation-plan.md)。
+  适配实施，见 [禅道代码适配开发计划](./01-zentao-application-adaptation-plan.md)。
 - 未执行的平台或数据库测试（例如真实付费版 ionCube 代码、双节点 NFS
   故障注入）在发布说明中明确列为限制，不以“理论兼容”替代验证。

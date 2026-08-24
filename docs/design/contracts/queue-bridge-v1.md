@@ -35,7 +35,7 @@ Go Runtime 不连接数据库、不导入数据库 Driver、不保存数据库�
 | `/stats` | `StatsRequest` | `StatsResponse` | 获取低频队列快照 |
 | `/control` | `ControlRequest` | `ControlResponse` | 暂停、恢复、取消和人工重试 |
 
-完整 Go 定义是 [bridge.go](../internal/queue/bridge/bridge.go) 的唯一实现来源；PHP 实现和跨仓夹具必须与其字段一致。
+完整 Go 定义是 [bridge.go](../../../internal/queue/bridge/bridge.go) 的唯一实现来源；PHP 实现和跨仓夹具必须与其字段一致。
 
 ## 4. 租约与 fencing
 

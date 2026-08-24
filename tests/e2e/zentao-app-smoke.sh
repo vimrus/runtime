@@ -15,7 +15,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${repo_root}/scripts/poc/common.sh"
+source "${repo_root}/scripts/build/common.sh"
 
 readonly app_input="$1"
 readonly work="$(mktemp -d)"
@@ -45,7 +45,7 @@ docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${work}/app:/shared:rw" \
     --volume "${work}/runtime.json:/tmp/runtime.json:ro" \
-    "${POC_IMAGE}" \
+    "${RUNTIME_IMAGE}" \
     -c 'exec zentao-runtime serve --config /tmp/runtime.json --install-root /shared/app' >/dev/null
 
 ready=0

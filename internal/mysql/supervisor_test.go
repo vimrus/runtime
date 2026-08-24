@@ -30,6 +30,22 @@ while true; do sleep 1; done
 	}
 }
 
+func writeFailingInitializer(t *testing.T, path string) {
+	t.Helper()
+	script := "#!/bin/sh\nfor arg in \"$@\"; do [ \"$arg\" = \"--initialize-insecure\" ] && exit 1; done\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeExitingMysqld(t *testing.T, path string) {
+	t.Helper()
+	script := "#!/bin/sh\nfor arg in \"$@\"; do\n  case \"$arg\" in --socket=*) socket=\"${arg#--socket=}\" ;; esac\ndone\ntouch \"$socket\"\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInitializeCreatesSecretsAndRefusesReinit(t *testing.T) {
 	root := t.TempDir()
 	binary := filepath.Join(root, "mysqld")
@@ -50,6 +66,25 @@ func TestInitializeCreatesSecretsAndRefusesReinit(t *testing.T) {
 	}
 	if err := supervisor.Initialize(context.Background()); err == nil {
 		t.Fatal("second initialize must be refused")
+	}
+}
+
+func TestInitializeFailureCleansGeneratedCredentials(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "mysqld")
+	writeFailingInitializer(t, binary)
+	supervisor, err := New(Config{Binary: binary, DataDir: filepath.Join(root, "data"), SocketPath: filepath.Join(root, "mysql.sock"), Port: 3306, LogPath: filepath.Join(root, "logs", "mysql.log"), SecretsFile: filepath.Join(root, "secrets", "mysql-root")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisor.Initialize(context.Background()); err == nil {
+		t.Fatal("initialize must fail")
+	}
+	if _, err := os.Stat(supervisor.config.SecretsFile); !os.IsNotExist(err) {
+		t.Fatalf("secret remains after failed initialization: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(supervisor.config.DataDir, ".zentao-init.sql")); !os.IsNotExist(err) {
+		t.Fatalf("init file remains after failed initialization: %v", err)
 	}
 }
 
@@ -79,6 +114,25 @@ func TestStartStopLifecycle(t *testing.T) {
 	}
 	if supervisor.Status().State != StateStopped {
 		t.Fatalf("state = %s, want stopped", supervisor.Status().State)
+	}
+}
+
+func TestStartRejectsProcessThatExitsAfterSocketCreation(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "mysqld")
+	writeExitingMysqld(t, binary)
+	supervisor, err := New(Config{
+		Binary: binary, DataDir: filepath.Join(root, "data"), SocketPath: filepath.Join(root, "mysql.sock"),
+		Port: 13307, LogPath: filepath.Join(root, "logs", "mysql.log"), StartupTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisor.Start(context.Background()); err == nil {
+		t.Fatal("start must fail when mysqld exits during startup")
+	}
+	if state := supervisor.Status().State; state != StateFailed {
+		t.Fatalf("state = %s, want failed", state)
 	}
 }
 

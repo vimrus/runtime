@@ -62,7 +62,12 @@ func New(config Config) (*Client, error) {
 		base:    strings.TrimRight(parsed.String(), "/"),
 		token:   config.Token,
 		timeout: config.RequestTimeout,
-		http:    &http.Client{Timeout: config.RequestTimeout},
+		http: &http.Client{
+			Timeout: config.RequestTimeout,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}, nil
 }
 
@@ -144,6 +149,9 @@ func (c *Client) post(ctx context.Context, path string, request bridge.Request, 
 	httpRequest.Header.Set(schemaHeader, fmt.Sprintf("%d", bridge.SchemaVersion))
 	httpResponse, err := c.http.Do(httpRequest)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		return bridge.Error{Code: bridge.ErrorUnavailable, Message: "queue bridge transport failed", Retryable: true}
 	}
 	defer httpResponse.Body.Close()

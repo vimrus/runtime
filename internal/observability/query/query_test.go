@@ -51,3 +51,22 @@ func TestBuildMetricsTemplateFiltersByName(t *testing.T) {
 		t.Fatalf("metric filter missing: %s %v", template, params)
 	}
 }
+
+func TestBuildDefaultsZeroTimeRange(t *testing.T) {
+	config := Config{DatasetRoot: "/data", MaxDays: 2, MaxRows: 10, Threads: 1, Timeout: time.Second}
+	_, params, _, err := Build(config, Options{Kind: observability.KindLogs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(params) != 2 {
+		t.Fatalf("params = %v, want start and end", params)
+	}
+	start, ok := params[0].(time.Time)
+	if !ok {
+		t.Fatalf("start type = %T", params[0])
+	}
+	end, ok := params[1].(time.Time)
+	if !ok || end.Before(start) || end.Sub(start) != 24*time.Hour {
+		t.Fatalf("unexpected range: %v - %v", start, end)
+	}
+}

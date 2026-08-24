@@ -48,8 +48,8 @@ RUN test "$(go version | awk '{sub(/^go/, "", $3); print $3}')" = "${GO_VERSION}
 
 WORKDIR /build
 COPY patches/php/8.4/0001-ioncube-zend-signal-abi-shim.patch /build/php-ioncube.patch
-COPY packaging/poc/expected-ioncube-symbols.txt /build/expected-ioncube-symbols.txt
-COPY packaging/poc/expected-ioncube-symbols-${LOADER_ARCH}.txt /build/expected-ioncube-symbols-loader.txt
+COPY packaging/runtime/expected-ioncube-symbols.txt /build/expected-ioncube-symbols.txt
+COPY packaging/runtime/expected-ioncube-symbols-${LOADER_ARCH}.txt /build/expected-ioncube-symbols-loader.txt
 
 RUN curl --fail --location --retry 3 --output php.tar.xz "${PHP_URL}" \
     && echo "${PHP_SHA256}  php.tar.xz" | sha256sum --check --strict \
@@ -99,7 +99,7 @@ RUN mkdir -p /opt/zentao/php/lib/ioncube \
     && sed '/^$/d' /build/expected-ioncube-symbols-loader.txt > /tmp/expected-loader-symbols.txt \
     && diff -u /tmp/expected-loader-symbols.txt /tmp/ioncube-loader-symbols.txt
 
-COPY packaging/poc/php.ini /opt/zentao/config/php.ini
+COPY packaging/runtime/php.ini /opt/zentao/config/php.ini
 RUN mkdir -p /opt/zentao/config/conf.d /opt/zentao/bin \
     && test "$(/opt/zentao/php/bin/php-config --vernum)" -ge 80400 \
     && nm -D /opt/zentao/php/lib/libphp.so \
@@ -127,7 +127,7 @@ RUN export CGO_CFLAGS="$(/opt/zentao/php/bin/php-config --includes)" \
     && export CGO_LDFLAGS="-L/opt/zentao/php/lib -Wl,-rpath,/opt/zentao/php/lib -lphp $(/opt/zentao/php/bin/php-config --ldflags) $(/opt/zentao/php/bin/php-config --libs)" \
     && go build \
         -tags "duckdb nobadger nomysql nopgx nowatcher nobrotli nomercure" \
-        -ldflags "-s -w -X main.runtimeVersion=poc -X main.frankenPHPVersion=${FRANKENPHP_VERSION} -X main.caddyVersion=${CADDY_VERSION}" \
+        -ldflags "-s -w -X main.runtimeVersion=runtime -X main.frankenPHPVersion=${FRANKENPHP_VERSION} -X main.caddyVersion=${CADDY_VERSION}" \
         -o /opt/zentao/bin/zentao-runtime \
         ./cmd/zentao-runtime
 

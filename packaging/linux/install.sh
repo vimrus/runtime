@@ -51,7 +51,7 @@ stage() {
 }
 
 if [[ "${DRY_RUN}" != "1" ]]; then
-    id zentao >/dev/null 2>&1 || useradd --system --home-dir "${PREFIX}" --shell /usr/sbin/nologin zentao
+    id zentao >/dev/null 2>&1 || useradd --system --user-group --home-dir "${PREFIX}" --shell /usr/sbin/nologin zentao
 fi
 
 prefix_stage="$(stage "${PREFIX}")"
@@ -62,14 +62,16 @@ install -d -m 0750 "${prefix_stage}/config" \
     "${prefix_stage}/observability" \
     "${prefix_stage}/backups"
 install -d -m 0700 "$(stage /run/zentao)"
+if [[ "${DRY_RUN}" != "1" ]]; then
+    chown -R zentao:zentao "${prefix_stage}/config" "${prefix_stage}/data" \
+        "${prefix_stage}/logs" "${prefix_stage}/spool" "${prefix_stage}/observability" \
+        "${prefix_stage}/backups" "$(stage /run/zentao)"
+fi
 install -d -m 0755 "$(stage /etc/systemd/system)" "$(stage /etc/logrotate.d)"
 
 sed -e "s|/opt/zentao|${PREFIX}|g" \
     "$(dirname "$0")/zentao-runtime.service" \
     > "$(stage /etc/systemd/system)/zentao-runtime.service"
-sed -e "s|/opt/zentao|${PREFIX}|g" \
-    "$(dirname "$0")/zentao-scheduler.service" \
-    > "$(stage /etc/systemd/system)/zentao-scheduler.service"
 install -m 0644 "$(dirname "$0")/zentao.logrotate" "$(stage /etc/logrotate.d)/zentao"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
@@ -78,10 +80,10 @@ if [[ "${DRY_RUN}" == "1" ]]; then
 fi
 
 systemctl daemon-reload
-systemctl enable zentao-runtime.service zentao-scheduler.service
+systemctl enable zentao-runtime.service
 if [[ "${START_SERVICE}" == "1" ]]; then
     systemctl start zentao-runtime.service
 fi
 
 echo "ZenTao Runtime installed: ${PREFIX}"
-echo "Manage with: systemctl status zentao-runtime zentao-scheduler"
+echo "Manage with: systemctl status zentao-runtime"

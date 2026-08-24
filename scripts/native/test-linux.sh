@@ -10,15 +10,15 @@ if [[ $# -ne 1 ]] || [[ "$1" != "amd64" && "$1" != "arm64" ]]; then
     exit 2
 fi
 
-export POC_ARCH="$1"
+export RUNTIME_ARCH="$1"
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${repo_root}/scripts/poc/common.sh"
+source "${repo_root}/scripts/build/common.sh"
 
-if ! docker image inspect "${POC_IMAGE}" >/dev/null 2>&1; then
-    build_poc_image
+if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
+    build_runtime_image
 fi
 
-readonly container="zentao-runtime-native-${POC_ARCH}-${RANDOM}-$$"
+readonly container="zentao-runtime-native-${RUNTIME_ARCH}-${RANDOM}-$$"
 readonly synthetic_dir="$(mktemp -d)"
 cleanup() {
     docker rm --force "${container}" >/dev/null 2>&1 || true
@@ -31,7 +31,7 @@ docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${repo_root}/tests/fixtures/php:/app:ro" \
     --volume "${repo_root}/tests/fixtures/runtime:/runtime-config:ro" \
-    "${POC_IMAGE}" \
+    "${RUNTIME_IMAGE}" \
     -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao-runtime serve --config /tmp/runtime.json' >/dev/null
 
 for _ in $(seq 1 30); do
@@ -54,4 +54,4 @@ mkdir -p "${synthetic_dir}/open"
 "${repo_root}/tests/e2e/access-log-smoke.sh" "${synthetic_dir}/open"
 "${repo_root}/tests/e2e/jsonl-parquet-smoke.sh"
 
-echo "Linux ${POC_ARCH} smoke tests passed"
+echo "Linux ${RUNTIME_ARCH} smoke tests passed"

@@ -138,7 +138,7 @@ Copy-Item (Join-Path $vcpkgRoot "installed\x64-windows\bin\*.dll") (Join-Path $S
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Staging "config\conf.d"), (Join-Path $Staging "licenses") | Out-Null
 Copy-Item (Join-Path $RepoRoot "config\runtime.example.json") (Join-Path $Staging "config\runtime.example.json")
-Copy-Item (Join-Path $RepoRoot "packaging\poc\php.ini") (Join-Path $Staging "config\php.ini")
+Copy-Item (Join-Path $RepoRoot "packaging\runtime\php.ini") (Join-Path $Staging "config\php.ini")
 
 & (Join-Path $Staging "runtime\php.exe") -v | Out-Null
 $ioncubeDll = (Resolve-Path (Join-Path $Staging "runtime\ioncube_loader_win_8.4.dll")).Path

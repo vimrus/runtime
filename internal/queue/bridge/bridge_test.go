@@ -28,6 +28,13 @@ func TestExecuteRequiresFencingToken(t *testing.T) {
 	}
 }
 
+func TestClaimRejectsExcessiveLeaseDuration(t *testing.T) {
+	err := (ClaimRequest{Schema: SchemaVersion, NodeID: "n", InstanceID: "i", WorkerID: "w", Channels: []string{"mail"}, Limit: 1, LeaseSeconds: MaxTimeoutSeconds + 1}).Validate()
+	if err == nil {
+		t.Fatal("claim lease duration above the protocol maximum must fail")
+	}
+}
+
 func TestHeartbeatAllowsPartialFailures(t *testing.T) {
 	response := HeartbeatResponse{Schema: SchemaVersion, Results: []HeartbeatResult{
 		{UUID: "job-1", Attempt: 1, Status: LeaseExtended, LeaseEnd: "2026-08-18T00:01:00Z"},

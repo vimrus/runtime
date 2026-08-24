@@ -1,7 +1,6 @@
 # ZenTao Runtime Compose template.
 #
 # Web container: zentao-runtime with embedded Caddy + FrankenPHP Classic.
-# Scheduler (optional profile): same image, scheduler command.
 # MySQL (optional profile): separate pinned MySQL 8.4 container.
 #
 # For external PostgreSQL or MySQL, do not start the mysql service and
@@ -11,7 +10,7 @@ services:
     image: ghcr.io/vimrus/zentao:dev
     build:
       context: ../..
-      dockerfile: packaging/poc/Dockerfile
+      dockerfile: packaging/runtime/Dockerfile
       target: runtime
     command: ["serve", "--config", "/opt/zentao/config/runtime.json"]
     environment:
@@ -19,8 +18,19 @@ services:
       ZENTAO_RUNTIME_LISTEN: "0.0.0.0:8080"
       ZENTAO_RUNTIME_CONTROL_SOCKET: /run/zentao/runtime.sock
       ZENTAO_RUNTIME_PID_FILE: /run/zentao/runtime.pid
+      ZT_DB_DRIVER: "${ZT_DB_DRIVER:-mysql}"
+      ZT_DB_HOST: "${ZT_DB_HOST:-mysql}"
+      ZT_DB_PORT: "${ZT_DB_PORT:-3306}"
+      ZT_DB_NAME: "${ZT_DB_NAME:-zentao}"
+      ZT_DB_USER: "${ZT_DB_USER:-zentao}"
+      ZT_DB_PASSWORD: "${ZT_DB_PASSWORD:-zentao}"
+      ZT_DB_PREFIX: "${ZT_DB_PREFIX:-zt_}"
     ports:
       - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+        required: false
     volumes:
       - zentao-app:/opt/zentao/app
       - zentao-data:/opt/zentao/data
@@ -37,27 +47,15 @@ services:
     restart: unless-stopped
     stop_grace_period: 45s
 
-  scheduler:
-    image: ghcr.io/vimrus/zentao:dev
-    profiles: ["scheduler"]
-    command: ["scheduler", "--config", "/opt/zentao/config/runtime.json"]
-    depends_on:
-      web:
-        condition: service_healthy
-    volumes:
-      - zentao-app:/opt/zentao/app
-      - zentao-config:/opt/zentao/config
-      - zentao-data:/opt/zentao/data
-      - zentao-spool:/opt/zentao/spool/observability
-    restart: unless-stopped
-
   mysql:
     # Pin to an immutable MySQL 8.4 LTS digest before production use.
-    image: mysql:8.4@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    image: "${MYSQL_IMAGE:-mysql:8.4}"
     profiles: ["full"]
     environment:
       MYSQL_DATABASE: zentao
-      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_USER: "${ZT_DB_USER:-zentao}"
+      MYSQL_PASSWORD: "${ZT_DB_PASSWORD:-zentao}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-zentao-root}"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:

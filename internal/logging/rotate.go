@@ -82,18 +82,20 @@ func (r *RotatingFile) rotate() error {
 	r.file = file
 	r.size = 0
 	r.lastRoll = time.Now().UTC()
-	r.pruneByDays()
+	if err := r.pruneByDays(); err != nil {
+		return err
+	}
 	return r.prune(backup)
 }
 
-func (r *RotatingFile) pruneByDays() {
+func (r *RotatingFile) pruneByDays() error {
 	if r.keepDays <= 0 {
-		return
+		return nil
 	}
 	cutoff := time.Now().UTC().Add(-time.Duration(r.keepDays) * 24 * time.Hour)
 	entries, err := os.ReadDir(filepath.Dir(r.path))
 	if err != nil {
-		return
+		return err
 	}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -102,9 +104,12 @@ func (r *RotatingFile) pruneByDays() {
 		}
 		stamp, err := rotationStamp(filepath.Join(filepath.Dir(r.path), name))
 		if err != nil || stamp.Before(cutoff) {
-			_ = os.Remove(filepath.Join(filepath.Dir(r.path), name))
+			if removeErr := os.Remove(filepath.Join(filepath.Dir(r.path), name)); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return removeErr
+			}
 		}
 	}
+	return nil
 }
 
 // Prune removes rotated segments older than KeepDays without waiting for the
@@ -112,7 +117,7 @@ func (r *RotatingFile) pruneByDays() {
 func (r *RotatingFile) Prune() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.pruneByDays()
+	_ = r.pruneByDays()
 }
 
 func (r *RotatingFile) prune(_ string) error {
@@ -144,7 +149,9 @@ func (r *RotatingFile) prune(_ string) error {
 	for len(rotated) > r.maxBackups {
 		oldest := rotated[0]
 		rotated = rotated[1:]
-		_ = os.Remove(oldest)
+		if err := os.Remove(oldest); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }

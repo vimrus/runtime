@@ -30,6 +30,7 @@ type Options struct {
 type QueueBridgeOptions struct {
 	Enabled bool
 	Listen  string
+	Token   string
 }
 
 // Config builds the smallest useful Classic-mode Caddy configuration.
@@ -111,7 +112,10 @@ func Config(options Options) *caddy.Config {
 			IdleTimeout:       caddy.Duration(options.IdleTimeout),
 			MaxHeaderBytes:    options.MaxHeaderBytes,
 			Routes: caddyhttp.RouteList{
-				{HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(bridgeSubroute, "handler", "subroute", nil)}},
+				{HandlersRaw: []json.RawMessage{
+					caddyconfig.JSONModuleObject(QueueAuth{Token: options.QueueBridge.Token}, "handler", "zentao_queue_auth", nil),
+					caddyconfig.JSONModuleObject(bridgeSubroute, "handler", "subroute", nil),
+				}},
 			},
 		}
 		servers["queuebridge"] = bridgeServer

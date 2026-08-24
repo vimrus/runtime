@@ -71,6 +71,12 @@ func NewPool(queueBridge Bridge, leases *lease.Manager, config Config, logger *s
 	}
 	sems := make(map[string]chan struct{}, len(config.Channels))
 	for _, queue := range config.Channels {
+		if queue.Name == "" {
+			return nil, fmt.Errorf("queue name is required")
+		}
+		if _, exists := sems[queue.Name]; exists {
+			return nil, fmt.Errorf("duplicate queue worker %q", queue.Name)
+		}
 		if queue.Concurrency <= 0 {
 			queue.Concurrency = 1
 		}
@@ -91,7 +97,7 @@ func NewPool(queueBridge Bridge, leases *lease.Manager, config Config, logger *s
 		config: config,
 		logger: logger,
 		sems:   sems,
-		wake:   make(chan struct{}, 1),
+		wake:   make(chan struct{}, len(config.Channels)),
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
 	}, nil
@@ -100,9 +106,12 @@ func NewPool(queueBridge Bridge, leases *lease.Manager, config Config, logger *s
 // Wake requests an immediate claim cycle for all queues. It is best-effort:
 // a lost wakeup only delays consumption until the next poll interval.
 func (p *Pool) Wake() {
-	select {
-	case p.wake <- struct{}{}:
-	default:
+	for range p.config.Channels {
+		select {
+		case p.wake <- struct{}{}:
+		default:
+			return
+		}
 	}
 }
 
@@ -114,6 +123,11 @@ func (p *Pool) Run(ctx context.Context) {
 		p.mu.Unlock()
 		return
 	}
+	// A Pool can be stopped and started again during runtime reload. Recreate
+	// lifecycle channels because closed channels cannot be reused.
+	p.stop = make(chan struct{})
+	p.done = make(chan struct{})
+	p.stopOnce = sync.Once{}
 	p.running = true
 	p.mu.Unlock()
 
@@ -124,9 +138,15 @@ func (p *Pool) Run(ctx context.Context) {
 			p.claimLoop(ctx, queue)
 		}(queue)
 	}
+	done := p.done
 	go func() {
 		p.wg.Wait()
-		close(p.done)
+		p.mu.Lock()
+		if p.done == done {
+			p.running = false
+			close(done)
+		}
+		p.mu.Unlock()
 	}()
 }
 
@@ -156,13 +176,28 @@ func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
 			continue
 		default:
 		}
+		sem := p.sem(queue.Name)
+		if sem == nil {
+			return
+		}
+		available := cap(sem) - len(sem)
+		if available <= 0 {
+			if !sleepCtx(ctx, interval) {
+				return
+			}
+			continue
+		}
+		limit := p.config.ClaimBatch
+		if limit > available {
+			limit = available
+		}
 		request := bridge.ClaimRequest{
 			Schema:       bridge.SchemaVersion,
 			NodeID:       p.config.NodeID,
 			InstanceID:   p.config.InstanceID,
 			WorkerID:     p.config.WorkerID,
 			Channels:     []string{queue.Name},
-			Limit:        p.config.ClaimBatch,
+			Limit:        limit,
 			LeaseSeconds: p.config.LeaseSeconds,
 		}
 		response, err := p.bridge.Claim(ctx, request)
@@ -192,10 +227,6 @@ func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
 		interval = queue.MinPoll
 		for _, claimed := range response.Leases {
 			sem := p.sem(queue.Name)
-			if sem == nil {
-				p.logger.Warn("lease references unknown queue", slog.String("channel", claimed.Channel), slog.String("job", claimed.UUID))
-				continue
-			}
 			select {
 			case <-ctx.Done():
 				return

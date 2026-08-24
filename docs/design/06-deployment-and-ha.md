@@ -14,7 +14,7 @@
 | 指标/日志 | DuckDB + NFS 共享分区式 Parquet 数据集 |
 | 自建入口 | Keepalived 浮动 VIP + 内嵌 Caddy Gateway |
 | 优先入口 | 客户已有云、硬件或托管负载均衡 |
-| 关联设计 | [Runtime Host 详细设计](./runtime-host-library-design.md)、[数据库显式缓存设计](./database-cache-design.md)、[DuckDB/Parquet 可观测性设计](./duckdb-parquet-observability-design.md) |
+| 关联设计 | [Runtime Host 设计](./01-runtime-host.md)、[Runtime 缓存设计](./04-runtime-cache.md)、[DuckDB/Parquet 可观测性设计](./05-observability.md) |
 
 ## 2. 核心结论
 
@@ -384,7 +384,7 @@ Linux/Docker 多节点正式支持 NFS。Windows 的 NFS Client、服务账号�
 - 附件与 Parquet 可以使用同一 NFS 的独立目录，也可以使用独立 Export，但必须设置独立容量配额和健康状态。
 - NFS 故障时批次进入节点本地有界 spool；可观测性降级不阻止 Web Ready，也不能回退到同名本地伪共享目录。
 
-详细协议参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+详细协议参见 [DuckDB 与共享 Parquet 可观测性设计](./05-observability.md)。
 
 ## 12. 分节点配置与一致性
 

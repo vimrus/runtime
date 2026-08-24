@@ -17,6 +17,7 @@ import (
 type Engine struct {
 	threads     int
 	memoryLimit string
+	querySlots  chan struct{}
 }
 
 func NewEngine(threads int, memoryLimit string) (*Engine, error) {
@@ -26,7 +27,11 @@ func NewEngine(threads int, memoryLimit string) (*Engine, error) {
 	if memoryLimit == "" {
 		memoryLimit = "256MB"
 	}
-	return &Engine{threads: threads, memoryLimit: memoryLimit}, nil
+	concurrency := threads
+	if concurrency > 4 {
+		concurrency = 4
+	}
+	return &Engine{threads: threads, memoryLimit: memoryLimit, querySlots: make(chan struct{}, concurrency)}, nil
 }
 
 func (e *Engine) Query(ctx context.Context, template string, _ int, params []any) ([]query.Row, error) {
@@ -35,6 +40,12 @@ func (e *Engine) Query(ctx context.Context, template string, _ int, params []any
 	}
 	if err := rejectUnsafe(strings.Join(toStrings(params), " ")); err != nil {
 		return nil, err
+	}
+	select {
+	case e.querySlots <- struct{}{}:
+		defer func() { <-e.querySlots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 	db, err := sql.Open("duckdb", ":memory:")
 	if err != nil {

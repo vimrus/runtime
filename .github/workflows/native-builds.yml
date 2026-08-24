@@ -48,14 +48,14 @@ jobs:
       - name: Assemble package
         run: |
           mkdir -p dist/package
-          scripts/package/generate-manifest.sh dist/poc-linux-${{ matrix.arch }}
-          scripts/package/generate-sbom.sh dist/poc-linux-${{ matrix.arch }}
-          scripts/package/assemble-runtime.sh dist/poc-linux-${{ matrix.arch }} zentao-runtime-linux-${{ matrix.arch }} dist/package
+          scripts/package/generate-manifest.sh dist/runtime-linux-${{ matrix.arch }}
+          scripts/package/generate-sbom.sh dist/runtime-linux-${{ matrix.arch }}
+          scripts/package/assemble-runtime.sh dist/runtime-linux-${{ matrix.arch }} zentao-runtime-linux-${{ matrix.arch }} dist/package
           scripts/package/verify-package.sh dist/package/zentao-runtime-linux-${{ matrix.arch }}.tar.zst
 
       - name: Assemble Full package
         run: |
-          scripts/package/assemble-full.sh dist/poc-linux-${{ matrix.arch }} linux-${{ matrix.arch }} zentao-full-linux-${{ matrix.arch }} dist/package
+          scripts/package/assemble-full.sh dist/runtime-linux-${{ matrix.arch }} linux-${{ matrix.arch }} zentao-full-linux-${{ matrix.arch }} dist/package
 
       - name: Upload Linux ${{ matrix.arch }} package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

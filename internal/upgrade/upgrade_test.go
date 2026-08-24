@@ -168,3 +168,23 @@ func TestUpgradeDoesNotOverwriteUserConfigurationOrData(t *testing.T) {
 		t.Fatalf("data was overwritten: %q %v", dataAfter, err)
 	}
 }
+
+func TestReadPointerResolvesRelativeSymlink(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "app")
+	if err := os.MkdirAll(filepath.Join(app, "releases", "v1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(app, "current")
+	if err := os.Symlink("releases/v1", path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readPointer(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(app, "releases", "v1")
+	if got != want {
+		t.Fatalf("pointer = %q, want %q", got, want)
+	}
+}

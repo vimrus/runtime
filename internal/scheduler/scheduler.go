@@ -83,6 +83,11 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 	m.running = true
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.running = false
+		m.mu.Unlock()
+	}()
 
 	var wg sync.WaitGroup
 	for _, name := range m.jobNames() {

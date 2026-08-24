@@ -1,105 +1,244 @@
 # ZenTao Runtime
 
-ZenTao Runtime 是禅道新一代集成运行环境。项目计划将 Caddy 和 FrankenPHP 作为 Go Library 嵌入自研 `zentao-runtime`，使用 PHP 8.4 ZTS Classic mode 运行禅道，并面向 Windows、Linux 和 Docker 提供一致的安装、运行和构建能力。
+ZenTao Runtime（可执行文件：`zentao-runtime`）是禅道的统一运行环境。它把 Web 服务、PHP 8.4、进程生命周期、健康检查、日志、诊断、升级和可选的队列/观测能力组合成一个可交付产品，支持单机部署，也支持 Linux 双节点接入现有负载均衡。
 
-当前仓库已实现 runtime-development-plan 的阶段 0-5 全部 Runtime 侧任务，并已在 GitHub-hosted Runner 上通过 Linux amd64、Linux arm64、Windows x86_64 原生构建矩阵（三平台均含 DuckDB 与 ionCube）。禅道业务适配按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施，当前只读定位了改动点，尚未修改禅道代码。
+## 产品形态
 
-## 已确认的技术边界
+| 形态 | 内容 | 适用场景 |
+| --- | --- | --- |
+| Runtime | Runtime、PHP、FrankenPHP/Caddy 和应用目录 | 已有 MySQL/PostgreSQL 等数据库的单机或集群 |
+| Full | Runtime + MySQL 8.4 | 快速交付的单机环境；生产环境仍应规划数据库备份 |
+| Docker | Web 容器，可选 MySQL Compose profile | Docker 或已有数据库的容器部署 |
 
-- Caddy 和 FrankenPHP 均作为 Go Library 集成。
-- FrankenPHP 使用 Classic mode，不使用 Worker mode。
-- PHP 基线为 PHP 8.4 ZTS，付费版本支持 ionCube Loader。
-- Linux PHP 使用最小 `zend_signal` ABI Shim 兼容 ionCube。
-- Go Runtime 不直接连接禅道数据库，数据库访问由 PHP DAO 负责。
-- 消息队列使用数据库持久化、PHP Queue Service 和 Go Worker Pool。
-- 缓存使用请求内 Array L0 和独立数据库连接显式 `get/set/delete`，不引入默认外部缓存服务。
-- Session 遵循 PHP `php.ini`：单机默认使用本地文件，多节点由部署方配置共享 NFS 文件或外部 Redis；附件在多节点下使用 NFS。
-- DuckDB 作为 Go Library 生成和查询指标/日志 Parquet；多节点共享 NFS Parquet 数据集，每个节点只发布自身不可变 part 文件。
-- 双 Linux 节点可使用 Keepalived 浮动 VIP 和内嵌 Caddy Gateway；已有外部负载均衡时优先接入。
-- GitHub Actions 使用目标平台原生 Runner 构建 Windows、Linux 和 Docker 交付物。
+Runtime 不直接访问禅道业务数据库。数据库连接由 PHP 应用和禅道 DAO 负责；启用队列或观测功能时，相关能力通过 Runtime 提供的本机服务使用。
 
-## 设计文档
+## 快速开始
 
-- [zentao 集成环境开发计划](./docs/runtime-development-plan.md)
-- [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md)
-- [FrankenPHP 集成环境技术方案](./docs/frankenphp-integration-technical-plan.md)
-- [Runtime Host 详细设计](./docs/runtime-host-library-design.md)
-- [GitHub Actions 构建与打包详细设计](./docs/github-actions-build-design.md)
-- [消息队列详细设计](./docs/message-queue-design.md)
-- [数据库显式缓存详细设计](./docs/database-cache-design.md)
-- [多节点部署与高可用详细设计](./docs/deployment-and-ha-design.md)
-- [DuckDB 与共享 Parquet 可观测性详细设计](./docs/duckdb-parquet-observability-design.md)
-- [Runtime Alpha 配置与 Control Plane 契约](./docs/runtime-alpha-control-contract.md)
+### 已有 Runtime 安装目录
 
-## 本地构建与验证
-
-本地构建需要 Docker、BuildKit 和 `jq`：
+准备应用发布目录和配置后启动：
 
 ```bash
-scripts/poc/build-linux-amd64.sh
-scripts/poc/test-linux-amd64.sh
+zentao-runtime serve --config /opt/zentao/config/runtime.json
 ```
 
-中国大陆网络环境下构建脚本默认使用 `https://goproxy.cn,direct`。可通过环境变量覆盖，例如：
+常见运行目录：
+
+```text
+/opt/zentao/
+  bin/zentao-runtime       Runtime 程序
+  app/current/www          当前禅道应用
+  app/releases/            应用版本
+  config/runtime.json      Runtime 配置
+  data/                    附件、节点标识等持久化数据
+  logs/                    Runtime、访问和 PHP 日志
+  observability/           Parquet 数据集
+  spool/observability/     观测故障时的本地 spool
+```
+
+Linux 可以使用 systemd 安装：
 
 ```bash
-GOPROXY=https://proxy.golang.org,direct scripts/poc/build-linux-amd64.sh
+sudo packaging/linux/install.sh --prefix /opt/zentao
+sudo systemctl status zentao-runtime
 ```
 
-本地构建默认使用 USTC Debian 镜像源；可以通过 `DEBIAN_MIRROR` 和 `DEBIAN_SECURITY_MIRROR` 覆盖。GitHub Actions 明确使用 Debian 官方源。
+安装脚本默认创建 `zentao` 系统用户。配置样例见 [`config/runtime.example.json`](./config/runtime.example.json)。
 
-如需额外验证本机 PHP 8.4 加密版 IPD 代码，显式传入源码目录：
+### Docker Compose
+
+仅启动 Web（连接外部数据库）：
 
 ```bash
-ZENTAO_POC_APP_DIR=/home/z/zentaoipd scripts/poc/test-linux-amd64.sh
+docker compose -f packaging/docker/compose.yaml up -d web
 ```
 
-IPD 付费代码不会复制到镜像、测试夹具、构建制品或公开仓库。GitHub-hosted Runner 只验证公开 PHP 夹具和 ionCube Loader 加载；真实加密代码测试应在有权访问该源码的本地或私有 Runner 上执行。
+启动 Web 和 Compose 内的 MySQL：
 
-PoC 运行镜像使用锁定 digest 的 Debian bookworm-slim，并在编译后删除 `phpdbg`、PHP 头文件及扩展构建工具。启用 DuckDB 后，Linux amd64 解压制品约 `233 MB`（`zentao-runtime` 约 `109 MB`）；构建和测试会断言这些开发文件未进入交付物。
+```bash
+docker compose -f packaging/docker/compose.yaml --profile full up -d
+```
 
-Runtime Alpha 已增加版本化 `runtime.json`、Linux Unix Socket Control Plane、生命周期状态、分层健康检查、结构化日志/审计、升级事务、Queue Engine、DuckDB/Parquet 可观测性和诊断 CLI。配置样例在 [config/runtime.example.json](./config/runtime.example.json)，详细协议见 [Runtime Alpha 契约](./docs/runtime-alpha-control-contract.md)。
+使用外部数据库时，通过 `ZT_DB_DRIVER`、`ZT_DB_HOST`、`ZT_DB_PORT`、`ZT_DB_NAME`、`ZT_DB_USER`、`ZT_DB_PASSWORD` 和 `ZT_DB_PREFIX` 配置 PHP 应用。不要把生产密码提交到 Compose 文件或仓库。
 
-## 已实现能力
+### 集成环境
 
-- 版本锁定清单 `versions.lock.json`：PHP 8.4.24、FrankenPHP v1.12.7、Caddy v2.11.4、DuckDB 1.5.5/Go Binding、phpredis 6.3.0、ionCube（Linux amd64/arm64、Windows x64）、MySQL 8.4.11 三平台归档（含校验和）与许可证。
-- 本地 Control Plane：`status/start/stop/reload/health/diagnose/version`，Linux Unix Socket `0600` + `SO_PEERCRED` 鉴权，审计日志 JSON Lines；Windows Named Pipe ACL 与 `run-service` 入口。
-- CLI 扩展：`upgrade prepare/apply/rollback/status`、`logs/metrics`、`flush-observability/clean-observability`、`convert-jsonl`、`collect-logs` 诊断包、`php-cli`（与 Web 共用 PHP/ionCube）。
-- 分层健康检查：`/_runtime/liveness|readiness` 动态反映 Host 状态，`health --deep` 返回 runtime/php/app 组件结果。
-- 结构化日志：`slog` JSON、敏感字段脱敏、按小时轮转；Runtime 日志写入 `logs/runtime-<nodeID>.jsonl`，按节点区分文件。
-- 自动请求日志：每次请求自动写入 `logs/access-<nodeID>.jsonl`（JSON）：`request.uri`（URL）、`duration`（响应时间，秒）、`status`（状态码）、`size`、`method`、`remote_ip`；Caddy 错误与 PHP 错误分别进入同一 access 文件（`http.log.error`）和 `logs/php-error.log`，默认不记录 Cookie/Authorization。
-- 升级事务：Runtime/Application/Config/Data 目录分离，`app/current` 指针原子切换、备份与回滚状态机。
-- Queue Engine：PHP Queue Bridge 客户端（loopback-only + 随机凭据）、有界 Worker Pool（队列级并发、超时、取消、排空）、租约心跳与 fencing、Wakeup + 自适应轮询、Scheduler 注册表。
-- 可观测性：DuckDB Go Library 已编入默认 Linux 构建；事件信封与脱敏、节点分区 Batch/Spool/原子发布 Parquet、运行中自动补发、崩溃恢复、受控查询模板与节点自清理；日志采用“近期 JSONL 追加 + 每小时同步 Parquet”，access/runtime 按节点文件名区分，JSONL 默认保留 7 天（见 `docs/duckdb-parquet-observability-design.md` §7.5）；CLI 提供 `logs`、`metrics`、`flush-observability`、`clean-observability`、`convert-jsonl`、`collect-logs`。
-- 平台与打包：systemd unit 与安装/卸载脚本、logrotate、Keepalived + Caddy Gateway 模板、Docker Compose（web/scheduler/mysql）、Runtime/Full 包组装、manifest/SBOM/校验和/大小报告；MySQL Supervisor 已用真实 MySQL 8.4.11 二进制完成初始化/启动/优雅停止验证。
-- 安全边界：构建产物校验不嵌入任何数据库 Driver（`verify-no-db-driver.sh`）；Windows 子进程挂入 Job Object（KILL_ON_JOB_CLOSE），Host 异常退出不会遗留孤儿进程。
-- 供应链：`sign-artifacts.sh` / `verify-signature.sh` / `verify-supply-chain.sh` 实现 GPG 签名与端到端校验（checksum + manifest + SBOM + 大小报告 + 签名），release workflow 已接入；受保护 release 另含 provenance attestation 与 release draft。
-- CI：PR lint/单测/文档检查、Linux amd64/arm64 原生构建矩阵、Windows x64 构建脚本、受保护 release workflow。
-- 验收测试：进程崩溃恢复、双节点滚动升级（A 保持 v1 服务期间升级 B，再升级 A）、Docker Compose 冒烟（healthcheck + Classic PHP）、安装 dry-run、升级事务 prepare/apply/rollback、应用版本合并测试均已通过。
-- 禅道应用制品接入：由外部发布流程提供平台无关应用包（`www/` 根目录），runtime 通过 `scripts/ci/stage-app-package.sh` 解包到 `app/releases/<version>` 并切换 `app/current`，`tests/e2e/zentao-app-smoke.sh` 负责联合冒烟。
-- 应用包约定目录：`app-packages/{open,biz,max,ipd}/zentaopms.zip`（已加入 `.gitignore`，可用 `ZENTAO_APP_PACKAGES_DIR` 覆盖），查找用 `scripts/ci/find-app-package.sh <edition>`。
-- 集成环境生成：`scripts/package/build-integrated-env.sh <open|biz|max|ipd> <output>` 生成自包含可运行目录（runtime + PHP + 应用包 + 配置模板 + `run.sh`/`compose.yaml`/`db-init.sh`），无需安装向导。
-- Windows 集成环境：`--platform windows` 生成 Windows 布局（`runtime\zentao-runtime.exe` + PHP 依赖 DLL + `run.cmd`），并已在 `windows-2025` Runner 上完成启动与 ionCube 验证。
+有应用包和 Runtime 制品时，可以生成一个自包含目录：
 
-## 原生构建矩阵（已验证）
+```bash
+scripts/package/build-integrated-env.sh open /tmp/zentao-open
+/tmp/zentao-open/run.sh
+```
 
-`native-builds.yml` 在 GitHub-hosted Runner 上完整通过：
+版本参数支持 `open`、`biz`、`max` 和 `ipd`。应用包默认从 `app-packages/` 查找，也可以通过 `ZENTAO_APP_PACKAGES_DIR` 指定目录。
 
-| 平台 | Runner | 结果 |
-|---|---|---|
-| Linux amd64 | `ubuntu-24.04` | 构建 + 冒烟 + Runtime/Full 包 ✓ |
-| Linux arm64 | `ubuntu-24.04-arm` | 构建 + 冒烟 + Runtime/Full 包 ✓ |
-| Windows x86_64 | `windows-2025` | 构建 + ionCube 校验 + Runtime/Full 包 ✓ |
+## 子命令
 
-本轮产物（GitHub Actions artifacts）：`zentao-runtime-linux-amd64`（约 67.5 MB）、`zentao-runtime-linux-arm64`（约 62.9 MB）、`zentao-runtime-windows-x64`（约 33.1 MB），以及对应的三个 Full 包（约 914.8 / 902.2 / 187.4 MB）。每个包均含 manifest、SBOM、SHA256 与大小报告。
+运行 `zentao-runtime` 不带参数会显示命令概览。控制类命令默认使用配置中的控制 socket；可以用 `--control-socket` 覆盖。
 
-## 尚未完成
+### 服务与生命周期
 
-- 禅道业务适配（队列 PHP Service、缓存 Client、Session 共享、可观测性事件发送）按 [禅道代码适配开发计划](./docs/zentao-application-adaptation-plan.md) 实施；改动点已定位到第 18 节。应用制品由外部流程提供，runtime 侧接入工具已就绪，待提供真实包后执行安装/登录/队列联合测试。
-- 正式安装器（Windows Inno Setup/WiX、Linux deb/rpm）、正式代码签名、Docker 多架构镜像推送（GHCR）与 MySQL/ionCube 再分发法务确认需要发布环境和权限。
-- Windows DuckDB/Parquet：官方 Windows 预编译库是 MinGW GNU 归档（`.a`），
-  与当前 clang/lld + MSVC PHP 工具链不兼容；Windows 构建改为从
-  `versions.lock.json` 锁定的 DuckDB 源码用 MSVC 自行编译 COFF `.lib`
-  （`scripts/windows/build-duckdb.ps1`），已启用 observability/Parquet。
-  运行环境需安装 VC++ 2015-2022 Redistributable（PHP 8.4 Windows 版同样
-  依赖该运行库）。
+```text
+serve [flags]       启动 Runtime（主服务入口）
+start [flags]       serve 的别名
+status [flags]      查看生命周期、Web 和组件状态
+stop [flags]        请求优雅停止
+reload [flags]      重新加载可热更新配置
+health [flags]      查看健康状态
+diagnose [flags]    查看深度健康信息、版本和配置摘要
+version             输出版本和构建能力
+```
+
+常用选项：
+
+```text
+serve:
+  --config            Runtime 配置文件
+  --root              覆盖 PHP 文档根目录
+  --listen            覆盖 Web 监听地址
+  --pid-file          覆盖 PID 文件
+  --control-socket    覆盖控制 socket/Named Pipe
+  --threads           覆盖 PHP 线程数
+  --install-root      应用、数据和升级目录根路径
+
+status/stop/reload/health/diagnose:
+  --control-socket    控制 socket（Windows 为 Named Pipe）
+  --pid-file          控制端不可用时的 status/stop PID 文件回退路径
+health/diagnose:
+  --deep              执行共享存储、观测等深度检查
+```
+
+健康 HTTP 端点：
+
+```text
+/_runtime/healthz       综合健康状态
+/_runtime/liveness      进程存活状态
+/_runtime/readiness     是否可以接收业务流量
+```
+
+### 升级
+
+升级使用应用版本目录和 `app/current` 指针，不覆盖 `config/` 和 `data/`：
+
+```bash
+zentao-runtime upgrade --action status
+zentao-runtime upgrade --action prepare --release /opt/zentao/app/releases/2026.08.24
+zentao-runtime upgrade --action apply
+zentao-runtime upgrade --action rollback
+```
+
+`prepare` 的 `--release` 必须是 `AppsDir` 下包含 `www/` 的绝对路径。升级前请保留备份目录，并在应用层完成登录、静态资源和关键业务验证。
+
+### 日志、指标和诊断
+
+```bash
+zentao-runtime logs --since 30m
+zentao-runtime logs --since 2h --level error --limit 200
+zentao-runtime metrics --since 1h --metric-name http.requests
+zentao-runtime flush-observability
+zentao-runtime clean-observability
+zentao-runtime convert-jsonl
+zentao-runtime collect-logs
+```
+
+查询选项：`--since` 使用 Go duration，`--until` 使用 RFC3339 时间，另有 `--node`、`--level`、`--metric-name`、`--limit` 和 `--control-socket`。`collect-logs` 返回诊断压缩包路径；诊断包只包含本地日志和摘要，不包含业务数据库内容、请求正文或凭据。
+
+### PHP CLI 和 Windows 服务
+
+```bash
+zentao-runtime php-cli -- -r 'echo PHP_VERSION, PHP_EOL;'
+```
+
+`php-cli` 使用与 Web 相同的 PHP、扩展和 ionCube 配置，也可以指定 `--php /path/to/php`。
+
+Windows 服务入口：
+
+```powershell
+zentao-runtime.exe run-service --name ZenTaoRuntime --config 'C:\Program Files\ZenTao\config\runtime.json'
+```
+
+## 配置和安全
+
+- 使用 [`config/runtime.example.json`](./config/runtime.example.json) 生成 `runtime.json`，并按实际安装路径修改绝对路径。
+- 控制 socket/Named Pipe 是管理入口，不应暴露到公网；Linux 默认使用 `0600` 和同用户鉴权。
+- 队列 Bridge 仅允许本机回环地址，并使用每次 Runtime 启动生成的随机 token。
+- Runtime 日志和审计日志会对密码、token、Cookie、Authorization 等敏感字段脱敏。
+- 多节点部署需要部署方提供共享 Session/附件存储、数据库高可用和负载均衡；Runtime 不替代这些基础设施。
+
+## 从源码编译
+
+正式构建会固定 PHP、FrankenPHP、Caddy、DuckDB、MySQL 和 ionCube 版本，并生成 manifest、SBOM、校验和和大小报告。构建脚本需要 Docker/BuildKit、Git、`jq`；Linux 构建还需要能够运行 Docker 的环境。
+
+### Linux amd64 / arm64
+
+推荐在目标架构的 Linux Runner 上执行：
+
+```bash
+scripts/native/build-linux.sh amd64
+scripts/native/build-linux.sh arm64
+```
+
+产物位于 `dist/runtime-linux-amd64/` 或 `dist/runtime-linux-arm64/`。构建脚本会使用
+`packaging/runtime/Dockerfile` 生成 Runtime 制品并执行制品校验。
+
+如需覆盖 Go 代理或 Debian 镜像源：
+
+```bash
+GOPROXY=https://goproxy.cn,direct \
+DEBIAN_MIRROR=http://deb.debian.org/debian \
+scripts/native/build-linux.sh amd64
+```
+
+### Windows x86_64
+
+在 Windows 原生环境执行 PowerShell，要求 Go、Visual Studio LLVM/Clang、Windows PHP 8.4 开发包、vcpkg 和网络下载依赖可用：
+
+```powershell
+Set-Location C:\path\to\runtime
+.\scripts\windows\build.ps1
+```
+
+默认输出 `dist/runtime-windows-x64/`。脚本会校验锁定归档，编译 MSVC/COFF DuckDB，构建 `runtime\zentao-runtime.exe`，复制 PHP/扩展/ionCube，并执行 PHP 和 Parquet 冒烟验证。仅在已有 DuckDB 缓存时才使用：
+
+```powershell
+.\scripts\windows\build.ps1 -SkipDuckDB
+```
+
+### Docker 镜像和 Compose
+
+直接校验 Compose 配置：
+
+```bash
+docker compose -f packaging/docker/compose.yaml config
+docker compose -f packaging/docker/compose.yaml --profile full config
+```
+
+构建本地 Web 镜像（脚本会从 `versions.lock.json` 读取全部构建参数）：
+
+```bash
+RUNTIME_ARCH=amd64 bash -c 'source scripts/build/common.sh; build_runtime_image'
+# 生成 zentao-runtime:runtime-linux-amd64
+```
+
+Docker 交付以 Linux amd64/arm64 原生 Runner 为基线；正式发布还应执行包校验、SBOM、签名和 Compose 冒烟测试。
+
+macOS 不是 Runtime 的正式交付目标；在 macOS 上请使用 Docker/BuildKit 构建 Linux 制品，或在 Linux 原生 Runner 上构建和验证。
+
+### Runtime / Full 安装包
+
+Runtime staging 目录准备完成后：
+
+```bash
+scripts/package/assemble-runtime.sh <staging-dir> zentao-runtime-linux-amd64 dist/packages
+scripts/package/assemble-full.sh <staging-dir> linux-amd64 zentao-full-linux-amd64 dist/packages
+```
+
+支持的 Full 平台参数为 `linux-amd64`、`linux-arm64` 和 `windows-x64`。脚本会从 `versions.lock.json` 下载并校验 MySQL 归档。
+
+## 文档入口
+
+- 产品/部署设计：[docs/design/](./docs/design/)
+- 开发与验证：[docs/development/](./docs/development/)
+- 文档索引：[docs/README.md](./docs/README.md)
+
+README 只描述产品使用和交付方式；设计决策、协议细节、开发任务和发布门槛请查看上述文档。

@@ -328,7 +328,11 @@ func (c *Converter) loadState() (map[string]SegmentState, error) {
 	}
 	state := make(map[string]SegmentState)
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, err
+		corrupt := c.statePath + ".corrupt"
+		if renameErr := os.Rename(c.statePath, corrupt); renameErr != nil {
+			return nil, fmt.Errorf("decode jsonl state: %w (quarantine failed: %v)", err, renameErr)
+		}
+		return state, nil
 	}
 	return state, nil
 }
@@ -338,5 +342,28 @@ func (c *Converter) saveState(state map[string]SegmentState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(c.statePath, data, 0o600)
+	temp := c.statePath + ".tmp"
+	file, err := os.OpenFile(temp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temp)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(temp)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(temp)
+		return err
+	}
+	if err := os.Rename(temp, c.statePath); err != nil {
+		_ = os.Remove(temp)
+		return err
+	}
+	return nil
 }

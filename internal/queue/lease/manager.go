@@ -59,7 +59,10 @@ func NewManager(nodeID, instanceID, workerID string, heartbeat Heartbeater, inte
 func (m *Manager) Add(lease bridge.Lease, cancel context.CancelFunc) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	until, _ := time.Parse(time.RFC3339Nano, lease.LeaseEnd)
+	until, err := time.Parse(time.RFC3339Nano, lease.LeaseEnd)
+	if err != nil || until.IsZero() {
+		return
+	}
 	m.leases[lease.UUID] = &Lease{
 		UUID:           lease.UUID,
 		Channel:        lease.Channel,
@@ -99,6 +102,7 @@ func (m *Manager) Active() []bridge.LeaseRef {
 // erroring lease cancels the local worker for that job so it cannot continue
 // after losing its fencing token.
 func (m *Manager) Run(ctx context.Context) {
+	defer m.cancelAll()
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
 	for {
@@ -108,6 +112,17 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ticker.C:
 			m.heartbeatOnce(ctx)
 		}
+	}
+}
+
+func (m *Manager) cancelAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for uuid, lease := range m.leases {
+		if lease.cancel != nil {
+			lease.cancel()
+		}
+		delete(m.leases, uuid)
 	}
 }
 

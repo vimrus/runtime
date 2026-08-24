@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -645,13 +646,30 @@ func (c Config) Validate() error {
 		if c.Queue.BridgeBaseURL == "" {
 			return fmt.Errorf("queue.bridgeBaseURL is required when queue is enabled")
 		}
+		bridgeURL, err := url.Parse(c.Queue.BridgeBaseURL)
+		if err != nil || bridgeURL.Scheme != "http" || bridgeURL.User != nil {
+			return fmt.Errorf("queue.bridgeBaseURL must be an unauthenticated http URL")
+		}
+		host := bridgeURL.Hostname()
+		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+			return fmt.Errorf("queue.bridgeBaseURL must use a loopback address")
+		}
+		port, err := strconv.Atoi(bridgeURL.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return fmt.Errorf("queue.bridgeBaseURL must include a valid port")
+		}
 		if len(c.Queue.Workers) == 0 {
 			return fmt.Errorf("queue.workers must not be empty when queue is enabled")
 		}
+		workerNames := make(map[string]struct{}, len(c.Queue.Workers))
 		for _, worker := range c.Queue.Workers {
 			if worker.Name == "" || worker.Concurrency < 1 {
 				return fmt.Errorf("queue workers require a name and positive concurrency")
 			}
+			if _, exists := workerNames[worker.Name]; exists {
+				return fmt.Errorf("queue worker %q is configured more than once", worker.Name)
+			}
+			workerNames[worker.Name] = struct{}{}
 		}
 		if c.Queue.ClaimBatch < 1 || c.Queue.LeaseSeconds < 1 || c.Queue.ReapBatch < 1 {
 			return fmt.Errorf("queue batch sizes and lease must be positive")
@@ -702,7 +720,8 @@ func RestartRequired(current, candidate Config) bool {
 	if candidate.Runtime.NodeID == "" {
 		candidate.Runtime.NodeID = current.Runtime.NodeID
 	}
-	return current.Web.Root != candidate.Web.Root ||
+	return current.Runtime.DrainTimeout != candidate.Runtime.DrainTimeout ||
+		current.Web.Root != candidate.Web.Root ||
 		current.Web.Listen != candidate.Web.Listen ||
 		current.Web.Threads != candidate.Web.Threads ||
 		current.Runtime.ControlSocket != candidate.Runtime.ControlSocket ||
@@ -719,14 +738,35 @@ func RestartRequired(current, candidate Config) bool {
 		current.Queue.RequestTimeout != candidate.Queue.RequestTimeout ||
 		current.Queue.ClaimBatch != candidate.Queue.ClaimBatch ||
 		current.Queue.LeaseSeconds != candidate.Queue.LeaseSeconds ||
+		current.Queue.HeartbeatInterval != candidate.Queue.HeartbeatInterval ||
+		current.Queue.ReapInterval != candidate.Queue.ReapInterval ||
+		current.Queue.ReapBatch != candidate.Queue.ReapBatch ||
 		current.Queue.DrainTimeout != candidate.Queue.DrainTimeout ||
+		!equalWorkers(current.Queue.Workers, candidate.Queue.Workers) ||
 		current.Observability.Enabled != candidate.Observability.Enabled ||
 		current.Observability.DatasetRoot != candidate.Observability.DatasetRoot ||
 		current.Observability.SpoolPath != candidate.Observability.SpoolPath ||
 		current.Observability.FlushInterval != candidate.Observability.FlushInterval ||
+		current.Observability.MaxSpoolBytes != candidate.Observability.MaxSpoolBytes ||
+		current.Observability.MaxBatchRows != candidate.Observability.MaxBatchRows ||
+		current.Observability.MaxBatchBytes != candidate.Observability.MaxBatchBytes ||
+		current.Observability.MetricsDays != candidate.Observability.MetricsDays ||
+		current.Observability.LogDays != candidate.Observability.LogDays ||
 		current.Observability.JSONLConvertInterval != candidate.Observability.JSONLConvertInterval ||
 		current.Observability.JSONLKeepDays != candidate.Observability.JSONLKeepDays ||
 		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources)
+}
+
+func equalWorkers(left, right []QueueWorker) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func equalStrings(left, right []string) bool {

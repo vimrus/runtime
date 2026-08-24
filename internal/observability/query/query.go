@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/vimrus/runtime/internal/observability"
@@ -45,6 +46,9 @@ func (c Config) validate() error {
 	if c.MaxDays <= 0 {
 		return errors.New("maxDays must be positive")
 	}
+	if c.MaxDays > 3650 {
+		return errors.New("maxDays must not exceed 3650")
+	}
 	if c.MaxRows <= 0 {
 		return errors.New("maxRows must be positive")
 	}
@@ -66,6 +70,12 @@ func Build(config Config, options Options) (string, []any, int, error) {
 	if options.Kind != observability.KindLogs && options.Kind != observability.KindMetrics {
 		return "", nil, 0, errors.New("query kind must be logs or metrics")
 	}
+	if options.End.IsZero() {
+		options.End = time.Now().UTC()
+	}
+	if options.Start.IsZero() {
+		options.Start = options.End.Add(-24 * time.Hour)
+	}
 	if options.Start.After(options.End) {
 		return "", nil, 0, errors.New("query start must not be after end")
 	}
@@ -76,14 +86,9 @@ func Build(config Config, options Options) (string, []any, int, error) {
 	if limit <= 0 || limit > config.MaxRows {
 		limit = config.MaxRows
 	}
-	if options.End.IsZero() {
-		options.End = time.Now().UTC()
-	}
-	if options.Start.IsZero() {
-		options.Start = options.End.Add(-24 * time.Hour)
-	}
 
 	root := config.DatasetRoot + "/" + string(options.Kind) + "/schema=v1"
+	root = strings.ReplaceAll(root, "'", "''")
 	params := []any{options.Start.UTC(), options.End.UTC()}
 	where := "eventTime >= ? AND eventTime < ?"
 	if options.Node != "" {

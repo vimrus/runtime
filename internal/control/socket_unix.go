@@ -81,8 +81,17 @@ func (s *Server) accept() {
 			case <-s.done:
 				return
 			default:
-				continue
 			}
+			// Avoid a tight loop when the listener reports a transient
+			// resource or system error.
+			timer := time.NewTimer(50 * time.Millisecond)
+			select {
+			case <-s.done:
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			continue
 		}
 		go s.handle(connection)
 	}
@@ -115,6 +124,11 @@ func (s *Server) handle(connection *net.UnixConn) {
 		s.respond(connection, peer, "invalid_request", started, Failure("invalid_request", "invalid control request"))
 		return
 	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		s.respond(connection, peer, request.Operation, started, Failure("invalid_request", "request must contain exactly one JSON object"))
+		return
+	}
 	if request.Version != ProtocolVersion {
 		s.respond(connection, peer, request.Operation, started, Failure("unsupported_version", "unsupported control protocol version"))
 		return
@@ -123,7 +137,8 @@ func (s *Server) handle(connection *net.UnixConn) {
 		s.respond(connection, peer, request.Operation, started, Failure("forbidden", "control plane caller is not authorized"))
 		return
 	}
-	ctx := withPeer(context.Background(), peer)
+	ctx, cancel := context.WithTimeout(withPeer(context.Background(), peer), 5*time.Second)
+	defer cancel()
 	response := s.handler.HandleControl(ctx, request)
 	s.respond(connection, peer, request.Operation, started, response)
 }
@@ -159,6 +174,9 @@ func Call(ctx context.Context, path string, request Request) (Response, error) {
 		return Response{}, fmt.Errorf("connect control socket: %w", err)
 	}
 	defer connection.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = connection.SetDeadline(deadline)
+	}
 	request.Version = ProtocolVersion
 	data, err := json.Marshal(request)
 	if err != nil {

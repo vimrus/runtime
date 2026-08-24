@@ -45,3 +45,26 @@ func TestProbeCachesLastResult(t *testing.T) {
 		t.Fatalf("cached component missing: %#v", component)
 	}
 }
+
+func TestRequiredNonOKBlocksReadiness(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register("degraded", KindDependency, true, false, func(context.Context) Result {
+		return Result{Name: "degraded", Kind: KindDependency, Status: StatusDegraded}
+	})
+	registry.Register("unknown", KindDependency, true, false, func(context.Context) Result {
+		return Result{Name: "unknown", Kind: KindDependency, Status: StatusUnknown}
+	})
+	result := registry.Probe(context.Background())
+	if result.Ready() || !result.RequiredFailed {
+		t.Fatalf("required non-OK probes must block readiness: %#v", result)
+	}
+}
+
+func TestSnapshotLiveFailsWhenAnyComponentFails(t *testing.T) {
+	if (Snapshot{AnyFailed: true, AnyDegraded: true}).Live() {
+		t.Fatal("a failed component must make the snapshot non-live")
+	}
+	if !(Snapshot{AnyDegraded: true}).Live() {
+		t.Fatal("degraded-only snapshot should remain live")
+	}
+}

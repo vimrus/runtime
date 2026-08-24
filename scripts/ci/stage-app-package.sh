@@ -34,9 +34,29 @@ mkdir -p "${tmpdir}/app"
 case "${input}" in
     *.tar.zst|*.tar.gz|*.tgz|*.tar.xz|*.tar|*.zip)
         case "${input}" in
-            *.zip) unzip -q "${input}" -d "${tmpdir}/app" ;;
-            *)     tar -xf "${input}" -C "${tmpdir}/app" ;;
+            *.zip)
+                while IFS= read -r entry; do
+                    [[ "${entry}" != /* && "${entry}" != ../* && "${entry}" != */../* && "${entry}" != ".." && "${entry}" != *\\* && "${entry}" != [A-Za-z]:* ]] || {
+                        echo "archive contains an unsafe path: ${entry}" >&2
+                        exit 1
+                    }
+                done < <(unzip -Z1 "${input}")
+                unzip -q "${input}" -d "${tmpdir}/app"
+                ;;
+            *)
+                while IFS= read -r entry; do
+                    [[ "${entry}" != /* && "${entry}" != ../* && "${entry}" != */../* && "${entry}" != ".." && "${entry}" != *\\* && "${entry}" != [A-Za-z]:* ]] || {
+                        echo "archive contains an unsafe path: ${entry}" >&2
+                        exit 1
+                    }
+                done < <(tar -tf "${input}")
+                tar -xf "${input}" -C "${tmpdir}/app"
+                ;;
         esac
+        if find "${tmpdir}/app" -type l -print -quit | grep -q .; then
+            echo "application archive must not contain symbolic links" >&2
+            exit 1
+        fi
         if [[ -d "${tmpdir}/app/www" ]]; then
             app_root="${tmpdir}/app"
         else
@@ -50,6 +70,11 @@ case "${input}" in
         app_root="$(cd "$(dirname "${input}")" && pwd)/$(basename "${input}")"
         ;;
 esac
+
+if [[ -L "${app_root}" ]] || find "${app_root}" -type l -print -quit | grep -q .; then
+    echo "application input must not contain symbolic links" >&2
+    exit 1
+fi
 
 if [[ ! -f "${app_root}/www/index.php" ]]; then
     echo "application package is missing www/index.php: ${app_root}" >&2

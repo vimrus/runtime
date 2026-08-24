@@ -12,7 +12,7 @@
 #   build-integrated-env.sh <open|biz|max|ipd> <output-dir> [--platform linux|windows]
 #
 # Env overrides:
-#   ZENTAO_RUNTIME_STAGE       default: <repo>/dist/poc-linux-amd64
+#   ZENTAO_RUNTIME_STAGE       default: <repo>/dist/runtime-linux-amd64
 #   ZENTAO_APP_PACKAGES_DIR    default: <repo>/app-packages
 
 set -Eeuo pipefail
@@ -37,7 +37,7 @@ esac
 if [[ "${platform}" == "windows" ]]; then
     readonly runtime_stage="${ZENTAO_RUNTIME_STAGE:-${repo_root}/dist/runtime-windows-x64}"
 else
-    readonly runtime_stage="${ZENTAO_RUNTIME_STAGE:-${repo_root}/dist/poc-linux-amd64}"
+    readonly runtime_stage="${ZENTAO_RUNTIME_STAGE:-${repo_root}/dist/runtime-linux-amd64}"
 fi
 
 case "${edition}" in
@@ -64,7 +64,7 @@ else
 fi
 if [[ "${binary_ok}" != "1" ]]; then
     echo "runtime stage is missing ${runtime_binary}: ${runtime_stage}" >&2
-    echo "build it first with scripts/poc/build-linux-amd64.sh or scripts/windows/build.ps1" >&2
+    echo "build it first with scripts/native/build-linux.sh amd64 or scripts/windows/build.ps1" >&2
     exit 1
 fi
 
@@ -290,7 +290,7 @@ chmod +x "${output_dir}/run.sh"
 cat > "${output_dir}/compose.yaml" <<'EOF'
 services:
   web:
-    image: zentao-runtime:poc-linux-amd64
+    image: zentao-runtime:runtime-linux-amd64
     entrypoint: ["sh", "-c"]
     command:
       - /opt/zentao/bin/render-config.sh /opt/zentao && exec /opt/zentao/bin/zentao-runtime serve --config /opt/zentao/config/runtime.json --install-root /opt/zentao
@@ -298,7 +298,7 @@ services:
       IN_CONTAINER: "true"
       ZT_INSTALLED: "true"
       ZT_DB_DRIVER: "${ZT_DB_DRIVER:-mysql}"
-      ZT_DB_HOST: "${ZT_DB_HOST:-127.0.0.1}"
+      ZT_DB_HOST: "${ZT_DB_HOST:-mysql}"
       ZT_DB_PORT: "${ZT_DB_PORT:-3306}"
       ZT_DB_NAME: "${ZT_DB_NAME:-zentao}"
       ZT_DB_USER: "${ZT_DB_USER:-zentao}"

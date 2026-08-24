@@ -69,8 +69,29 @@ func TestNormalizeFillsEnvelopeAndRedacts(t *testing.T) {
 	}
 }
 
+func TestNormalizeRedactsCredentialsInMessage(t *testing.T) {
+	event, err := Normalize(Event{ClusterID: "c", NodeID: "n", BootID: "b", Source: "php", Kind: KindLogs, Message: "Authorization Bearer abc123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(event.Message, "abc123") {
+		t.Fatalf("credential remained in message: %q", event.Message)
+	}
+}
+
+func TestPublisherRejectsNilWriter(t *testing.T) {
+	root := t.TempDir()
+	_, err := NewPublisher(Config{DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"), NodeID: "n", ClusterID: "c", BootID: "b"}, nil)
+	if err == nil {
+		t.Fatal("publisher must reject a nil parquet writer")
+	}
+}
+
 func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	writer := &recordingWriter{}
 	publisher, err := NewPublisher(Config{
 		DatasetRoot:   filepath.Join(root, "dataset"),
@@ -108,6 +129,12 @@ func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("spool not emptied, found %d files", len(entries))
 	}
+	publisher.mu.Lock()
+	spoolIndexEntries := len(publisher.spool)
+	publisher.mu.Unlock()
+	if spoolIndexEntries != 0 {
+		t.Fatalf("spool index retained %d published entries", spoolIndexEntries)
+	}
 
 	// Simulate a crash between spool and rename: create a spool record whose
 	// final file does not exist.
@@ -144,6 +171,9 @@ func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 
 func TestPublisherDoesNotExposeTempFilesAsParquet(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	writer := &recordingWriter{}
 	publisher, err := NewPublisher(Config{
 		DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"),
@@ -167,6 +197,9 @@ func TestPublisherDoesNotExposeTempFilesAsParquet(t *testing.T) {
 
 func TestPublisherRepublishesSpoolAfterRecovery(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	delegate := &recordingWriter{}
 	flaky := &flakyWriter{failures: 1, delegate: delegate}
 	publisher, err := NewPublisher(Config{
@@ -197,5 +230,56 @@ func TestPublisherRepublishesSpoolAfterRecovery(t *testing.T) {
 	}
 	if len(spoolEntries) != 0 {
 		t.Fatalf("spool must be empty after recovery, found %d entries", len(spoolEntries))
+	}
+}
+
+func TestPublisherDoesNotCreateMissingDatasetRoot(t *testing.T) {
+	root := t.TempDir()
+	dataset := filepath.Join(root, "dataset")
+	publisher, err := NewPublisher(Config{DatasetRoot: dataset, SpoolPath: filepath.Join(root, "spool"), NodeID: "n", ClusterID: "c", BootID: "b"}, &recordingWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dataset); !os.IsNotExist(err) {
+		t.Fatalf("dataset root was created: %v", err)
+	}
+	if err := publisher.Add(context.Background(), Event{ClusterID: "c", NodeID: "n", BootID: "b", Source: "runtime", Kind: KindLogs, Message: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Flush(context.Background(), KindLogs); err == nil {
+		t.Fatal("publish must fail while dataset root is unavailable")
+	}
+	if _, err := os.Stat(filepath.Join(root, "spool")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublisherQuarantinesCorruptSpool(t *testing.T) {
+	root := t.TempDir()
+	dataset := filepath.Join(root, "dataset")
+	if err := os.Mkdir(dataset, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	spool := filepath.Join(root, "spool")
+	if err := os.Mkdir(spool, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(spool, "logs-bad.json")
+	if err := os.WriteFile(bad, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(Config{DatasetRoot: dataset, SpoolPath: spool, NodeID: "n", ClusterID: "c", BootID: "b"}, &recordingWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(bad); !os.IsNotExist(err) {
+		t.Fatalf("corrupt spool remains: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(spool, "quarantine"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("quarantine entries = %d, err=%v", len(entries), err)
 	}
 }

@@ -102,7 +102,7 @@ Docker 中 FrankenPHP 与 MySQL 必须使用不同容器。默认 Compose 可以
 
 Classic mode 表示每次 HTTP 请求都重新初始化和释放禅道 PHP 请求上下文。`zentao-runtime`、Caddy、FrankenPHP PHP main thread 和 ZTS thread pool 仍然常驻，但不会像 worker mode 一样复用禅道应用对象和请求级全局状态。
 
-Runtime Host 的详细架构参见 [Caddy + FrankenPHP Library Runtime Host 详细设计](./runtime-host-library-design.md)。
+Runtime Host 的详细架构参见 [Caddy + FrankenPHP Library Runtime Host 设计](./01-runtime-host.md)。
 
 ## 6. PHP ionCube ABI 补丁
 
@@ -210,7 +210,7 @@ Docker Runtime 使用 Debian 基础镜像和多阶段构建：
 1. Builder 阶段编译 patched PHP、扩展和 `zentao-runtime` Host。
 2. Runtime 阶段只复制运行所需共享库、扩展、配置和禅道应用。
 3. Web 容器只运行 `zentao-runtime`，由其在进程内启动 Caddy 和 FrankenPHP。
-4. Scheduler 使用相同应用镜像、不同启动命令。
+4. Scheduler 由 Runtime 内部 Queue Engine 管理，与 Web 使用同一 Runtime 生命周期。
 5. MySQL 使用独立的官方固定版本镜像。
 
 镜像禁止使用浮动 `latest` tag 作为发布依赖，基础镜像应固定 digest。
@@ -331,7 +331,7 @@ Windows 可以使用目录指针文件代替符号链接，避免普通用户权
 
 ```text
 zentao-web.service
-zentao-scheduler.service
+zentao-runtime.service（内部 Queue Engine 负责 Scheduler 生命周期）
 zentao-mysql.service       # 仅 Full 版
 ```
 
@@ -411,7 +411,7 @@ CI 必须分别执行 MySQL 和 PostgreSQL 的以下测试：
 - 使用共享 NFS 或 Redis Session 时，Caddy Gateway 使用 `least_conn`，不依赖 Session Sticky，也不自动重试非幂等请求。
 - 数据库、NFS 和外部 Redis 高可用由客户基础设施负责。
 
-详细设计参见 [zentao 多节点部署与高可用详细设计](./deployment-and-ha-design.md)。
+详细设计参见 [zentao 多节点部署与高可用设计](./06-deployment-and-ha.md)。
 
 ### 12.4 DuckDB 与 Parquet 可观测性
 
@@ -421,7 +421,7 @@ CI 必须分别执行 MySQL 和 PostgreSQL 的以下测试：
 - NFS 不可用时写有界本地 spool，可观测性故障不阻断业务请求。
 - 查询必须按时间和节点裁剪，并限制线程、内存、临时空间、返回行数和超时。
 
-详细设计参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+详细设计参见 [DuckDB 与共享 Parquet 可观测性设计](./05-observability.md)。
 
 ## 13. 安全要求
 

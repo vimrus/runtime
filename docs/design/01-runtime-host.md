@@ -10,9 +10,9 @@
 | HTTP Server | Caddy Go Library |
 | PHP Runtime | FrankenPHP Go Library / Caddy Module |
 | PHP 模式 | Classic mode |
-| 关联文档 | [集成环境技术方案](./frankenphp-integration-technical-plan.md) |
-| 构建设计 | [GitHub Actions 构建与打包详细设计](./github-actions-build-design.md) |
-| 可观测性设计 | [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md) |
+| 关联文档 | [FrankenPHP 集成方案](./02-frankenphp-integration.md) |
+| 构建设计 | [构建与发布设计](./07-build-and-release.md) |
+| 可观测性设计 | [DuckDB 与共享 Parquet 可观测性设计](./05-observability.md) |
 
 ## 2. 架构决策
 
@@ -561,7 +561,7 @@ Host 使用 Go `slog` 或兼容接口输出结构化日志。Caddy 和 FrankenPH
 
 指标在写入 Parquet 前按时间窗口聚合。多节点不共享 `.duckdb` 文件，而是在 NFS 上共享 Hive 分区 Parquet 数据集；每个节点只发布自己的不可变 part 文件。查询使用服务端固定数据根目录和字段 allowlist，不接受公共任意 SQL。
 
-详细设计参见 [DuckDB 与共享 Parquet 可观测性详细设计](./duckdb-parquet-observability-design.md)。
+详细设计参见 [DuckDB 与共享 Parquet 可观测性设计](./05-observability.md)。
 
 ## 17. 安全边界
 

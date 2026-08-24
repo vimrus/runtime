@@ -65,7 +65,9 @@ func (a *FileAuditor) Record(entry AuditEntry) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	_, _ = a.file.Write(append(data, '\n'))
+	if _, err := a.file.Write(append(data, '\n')); err == nil {
+		_ = a.file.Sync()
+	}
 }
 
 func (a *FileAuditor) Close() error {

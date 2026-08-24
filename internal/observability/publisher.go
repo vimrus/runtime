@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,16 +39,20 @@ type Publisher struct {
 	config Config
 	writer ParquetWriter
 
-	mu       sync.Mutex
-	buffer   map[Kind][]Event
-	sequence uint64
-	spool    map[string]int64 // spool file -> bytes
-	dropped  atomic.Uint64
+	mu        sync.Mutex
+	publishMu sync.Mutex
+	buffer    map[Kind][]Event
+	sequence  uint64
+	spool     map[string]int64 // spool file -> bytes
+	dropped   atomic.Uint64
 }
 
 func NewPublisher(config Config, writer ParquetWriter) (*Publisher, error) {
 	if config.DatasetRoot == "" || config.SpoolPath == "" || config.NodeID == "" || config.ClusterID == "" || config.BootID == "" {
 		return nil, errors.New("datasetRoot, spoolPath, nodeID, clusterID and bootID are required")
+	}
+	if writer == nil {
+		return nil, errors.New("parquet writer is required")
 	}
 	if config.MaxBatchRows <= 0 {
 		config.MaxBatchRows = 10000
@@ -61,10 +66,15 @@ func NewPublisher(config Config, writer ParquetWriter) (*Publisher, error) {
 	if config.FlushInterval <= 0 {
 		config.FlushInterval = 60 * time.Second
 	}
-	for _, path := range []string{config.DatasetRoot, config.SpoolPath} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			return nil, fmt.Errorf("create %s: %w", path, err)
+	if err := os.MkdirAll(config.SpoolPath, 0o700); err != nil {
+		return nil, fmt.Errorf("create spool path: %w", err)
+	}
+	if info, err := os.Stat(config.DatasetRoot); err == nil {
+		if !info.IsDir() {
+			return nil, fmt.Errorf("dataset root is not a directory: %s", config.DatasetRoot)
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("inspect dataset root: %w", err)
 	}
 	publisher := &Publisher{
 		config: config,
@@ -144,13 +154,20 @@ func (p *Publisher) Run(ctx context.Context) {
 // Healthy verifies that the local spool remains writable, which is the only
 // hard local dependency of the observability pipeline.
 func (p *Publisher) Healthy() error {
-	probe := filepath.Join(p.config.SpoolPath, ".probe-"+randomID())
-	file, err := os.Create(probe)
-	if err != nil {
-		return err
+	for _, root := range []string{p.config.SpoolPath, p.config.DatasetRoot} {
+		probe := filepath.Join(root, ".probe-"+randomID())
+		file, err := os.OpenFile(probe, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(probe)
+			return err
+		}
+		if err := os.Remove(probe); err != nil {
+			return err
+		}
 	}
-	_ = file.Close()
-	_ = os.Remove(probe)
 	return nil
 }
 
@@ -184,6 +201,8 @@ func (p *Publisher) publish(ctx context.Context, kind Kind, events []Event) erro
 }
 
 func (p *Publisher) publishPartition(ctx context.Context, kind Kind, partition Partition, events []Event, batchID string) error {
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
 	if batchID == "" {
 		p.mu.Lock()
 		p.sequence++
@@ -203,6 +222,12 @@ func (p *Publisher) publishPartition(ctx context.Context, kind Kind, partition P
 		SpoolPath: spoolPath,
 		SealedAt:  time.Now().UTC(),
 	}
+	if info, err := os.Stat(p.config.DatasetRoot); err != nil || !info.IsDir() {
+		if err == nil {
+			err = errors.New("dataset root is not a directory")
+		}
+		return fmt.Errorf("dataset root unavailable: %w", err)
+	}
 	if err := p.persistSpool(record, events); err != nil {
 		p.dropped.Add(uint64(len(events)))
 		return err
@@ -218,13 +243,21 @@ func (p *Publisher) publishPartition(ctx context.Context, kind Kind, partition P
 		// Already published (idempotent retry): treat as committed.
 		_ = os.Remove(tempPath)
 		_ = os.Remove(spoolPath)
+		p.removeSpool(spoolPath)
 		return nil
 	}
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return fmt.Errorf("publish parquet batch %s: %w", batchID, err)
 	}
 	_ = os.Remove(spoolPath)
+	p.removeSpool(spoolPath)
 	return nil
+}
+
+func (p *Publisher) removeSpool(path string) {
+	p.mu.Lock()
+	delete(p.spool, path)
+	p.mu.Unlock()
 }
 
 func (p *Publisher) persistSpool(record BatchRecord, events []Event) error {
@@ -241,7 +274,7 @@ func (p *Publisher) persistSpool(record BatchRecord, events []Event) error {
 	if total > p.config.MaxSpoolBytes {
 		return fmt.Errorf("observability spool quota exceeded: %d bytes", total)
 	}
-	file, err := os.OpenFile(record.SpoolPath, os.O_CREATE|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(record.SpoolPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -288,29 +321,61 @@ func (p *Publisher) Recover(ctx context.Context) error {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
+				p.removeSpool(path)
 				continue
 			}
 			return err
 		}
 		var file spoolFile
 		if err := json.Unmarshal(data, &file); err != nil {
+			quarantine := filepath.Join(p.config.SpoolPath, "quarantine")
+			if mkdirErr := os.MkdirAll(quarantine, 0o700); mkdirErr != nil {
+				return mkdirErr
+			}
+			if renameErr := os.Rename(path, filepath.Join(quarantine, filepath.Base(path)+".corrupt")); renameErr != nil {
+				return renameErr
+			}
+			p.removeSpool(path)
+			continue
+		}
+		if file.Record.BatchID == "" || (file.Record.Kind != KindLogs && file.Record.Kind != KindMetrics) ||
+			!validPartition(file.Record.Partition) ||
+			file.Record.FinalPath != file.Record.Partition.FinalPath(p.config.DatasetRoot, file.Record.Kind, file.Record.BatchID) ||
+			filepath.Clean(file.Record.SpoolPath) != filepath.Clean(path) {
+			quarantine := filepath.Join(p.config.SpoolPath, "quarantine")
+			if mkdirErr := os.MkdirAll(quarantine, 0o700); mkdirErr != nil {
+				return mkdirErr
+			}
+			if renameErr := os.Rename(path, filepath.Join(quarantine, filepath.Base(path)+".invalid")); renameErr != nil {
+				return renameErr
+			}
+			p.removeSpool(path)
 			continue
 		}
 		if _, err := os.Stat(file.Record.FinalPath); err == nil {
-			_ = os.Remove(path)
-			p.mu.Lock()
-			delete(p.spool, path)
-			p.mu.Unlock()
+			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				return removeErr
+			}
+			p.removeSpool(path)
 			continue
 		}
 		if err := p.publishPartition(ctx, file.Record.Kind, file.Record.Partition, file.Events, file.Record.BatchID); err != nil {
 			return err
 		}
-		p.mu.Lock()
-		delete(p.spool, path)
-		p.mu.Unlock()
+		p.removeSpool(path)
 	}
 	return nil
+}
+
+func validPartition(partition Partition) bool {
+	if len(partition.Date) != len("2006-01-02") || len(partition.Hour) != 2 || partition.NodeID == "" || strings.ContainsAny(partition.NodeID, `/\\`) {
+		return false
+	}
+	if _, err := time.Parse("2006-01-02", partition.Date); err != nil {
+		return false
+	}
+	hour, err := strconv.Atoi(partition.Hour)
+	return err == nil && hour >= 0 && hour <= 23
 }
 
 type spoolFile struct {

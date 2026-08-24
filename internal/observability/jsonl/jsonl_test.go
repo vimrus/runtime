@@ -69,6 +69,9 @@ func TestParseMalformedAndUnrelatedLines(t *testing.T) {
 
 func TestConvertOnceProcessesOwnNodeSegmentsIdempotently(t *testing.T) {
 	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	logsDir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(logsDir, 0o700); err != nil {
 		t.Fatal(err)

@@ -2,11 +2,11 @@
 
 set -Eeuo pipefail
 
-export POC_ARCH=amd64
+export RUNTIME_ARCH=amd64
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
-if ! docker image inspect "${POC_IMAGE}" >/dev/null 2>&1; then
-    build_poc_image
+if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
+    build_runtime_image
 fi
 
 readonly container="zentao-runtime-poc-${RANDOM}-$$"
@@ -19,7 +19,7 @@ docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${REPO_ROOT}/tests/fixtures/php:/app:ro" \
     --volume "${REPO_ROOT}/tests/fixtures/runtime:/runtime-config:ro" \
-    "${POC_IMAGE}" \
+    "${RUNTIME_IMAGE}" \
     -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao-runtime serve --config /tmp/runtime.json' >/dev/null
 
 for _ in $(seq 1 30); do
@@ -92,14 +92,15 @@ for removed in \
     fi
 done
 
-if [[ -n "${ZENTAO_POC_APP_DIR:-}" ]]; then
-    if [[ ! -f "${ZENTAO_POC_APP_DIR}/extension/ipd/budget/model.php" ]]; then
-        echo "invalid ZENTAO_POC_APP_DIR: encrypted IPD probe is missing" >&2
+if [[ -n "${ZENTAO_APP_DIR:-${ZENTAO_POC_APP_DIR:-}}" ]]; then
+    runtime_app_dir="${ZENTAO_APP_DIR:-${ZENTAO_POC_APP_DIR}}"
+    if [[ ! -f "${runtime_app_dir}/extension/ipd/budget/model.php" ]]; then
+        echo "invalid ZENTAO_APP_DIR: encrypted IPD probe is missing" >&2
         exit 1
     fi
     docker run --rm --entrypoint /opt/zentao/php/bin/php \
-        --volume "${ZENTAO_POC_APP_DIR}:/zentaoipd:ro" \
-        "${POC_IMAGE}" \
+        --volume "${runtime_app_dir}:/zentaoipd:ro" \
+        "${RUNTIME_IMAGE}" \
         -l /zentaoipd/extension/ipd/budget/model.php \
         | grep -F 'No syntax errors detected'
 fi
@@ -107,4 +108,4 @@ fi
 docker exec "${container}" zentao-runtime stop --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.result == "stopping"' >/dev/null
 
-echo "Linux amd64 PoC tests passed"
+echo "Linux amd64 Runtime tests passed"

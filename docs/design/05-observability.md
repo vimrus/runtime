@@ -12,7 +12,7 @@
 | 多节点存储 | NFSv4.1 共享 Parquet 数据集；JSONL 可本地或共享目录按节点分文件 |
 | 写入模型 | 日志按节点/小时 JSONL 追加，每小时同步为不可变 Parquet part；指标内存聚合后批量发布 |
 | 共享 `.duckdb` | 禁止 |
-| 关联设计 | [Runtime Host 详细设计](./runtime-host-library-design.md)、[多节点部署设计](./deployment-and-ha-design.md)、[GitHub Actions 构建设计](./github-actions-build-design.md) |
+| 关联设计 | [Runtime Host 设计](./01-runtime-host.md)、[多节点部署设计](./06-deployment-and-ha.md)、[构建与发布设计](./07-build-and-release.md) |
 
 ## 2. 核心结论
 

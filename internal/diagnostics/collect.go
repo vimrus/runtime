@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -50,6 +49,10 @@ func (c *Collector) Collect() (string, error) {
 		}
 		return file.Close()
 	}
+	cleanup := func() {
+		_ = file.Close()
+		_ = os.Remove(output)
+	}
 
 	summary := map[string]any{"collectedAt": stamp}
 	if c.Summary != nil {
@@ -57,7 +60,7 @@ func (c *Collector) Collect() (string, error) {
 		summary["collectedAt"] = stamp
 	}
 	if err := writeJSONEntry(tarWriter, "summary.json", summary); err != nil {
-		_ = closeBundle()
+		cleanup()
 		return "", err
 	}
 
@@ -65,11 +68,12 @@ func (c *Collector) Collect() (string, error) {
 	sort.Strings(paths)
 	for _, path := range paths {
 		if err := appendFile(tarWriter, path); err != nil {
-			_ = closeBundle()
+			cleanup()
 			return "", err
 		}
 	}
 	if err := closeBundle(); err != nil {
+		_ = os.Remove(output)
 		return "", err
 	}
 	return output, nil
@@ -89,7 +93,7 @@ func writeJSONEntry(writer *tar.Writer, name string, value any) error {
 }
 
 func appendFile(writer *tar.Writer, path string) error {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -107,8 +111,13 @@ func appendFile(writer *tar.Writer, path string) error {
 		return err
 	}
 	defer file.Close()
-	name := strings.TrimPrefix(path, string(filepath.Separator))
-	name = strings.ReplaceAll(name, "\\", "/")
+	// Diagnostic archives contain files, never caller-controlled directory
+	// names. Using the basename prevents absolute or traversal paths from
+	// becoming dangerous extraction targets.
+	name := filepath.Base(path)
+	if name == "." || name == string(filepath.Separator) || name == ".." {
+		return fmt.Errorf("invalid diagnostic path: %s", path)
+	}
 	header := &tar.Header{Name: name, Mode: 0o600, Size: info.Size(), ModTime: info.ModTime().UTC()}
 	if err := writer.WriteHeader(header); err != nil {
 		return err

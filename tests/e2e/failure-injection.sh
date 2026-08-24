@@ -9,10 +9,10 @@
 set -Eeuo pipefail
 
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "${repo_root}/scripts/poc/common.sh"
+source "${repo_root}/scripts/build/common.sh"
 
-if ! docker image inspect "${POC_IMAGE}" >/dev/null 2>&1; then
-    build_poc_image
+if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
+    build_runtime_image
 fi
 
 readonly container="zentao-e2e-${RANDOM}-$$"
@@ -25,7 +25,7 @@ docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${repo_root}/tests/fixtures/php:/app:ro" \
     --volume "${repo_root}/tests/fixtures/runtime:/runtime-config:ro" \
-    "${POC_IMAGE}" \
+    "${RUNTIME_IMAGE}" \
     -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao-runtime serve --config /tmp/runtime.json' >/dev/null
 
 wait_ready() {

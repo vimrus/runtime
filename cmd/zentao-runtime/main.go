@@ -113,7 +113,7 @@ func convertJSONLCommand(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
-	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: "convert-jsonl"})
+	response, err := callControl(*controlSocket, control.Request{Operation: "convert-jsonl"})
 	if err != nil {
 		return err
 	}
@@ -129,7 +129,7 @@ func collectLogsCommand(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
-	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: "collect-logs"})
+	response, err := callControl(*controlSocket, control.Request{Operation: "collect-logs"})
 	if err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func cleanObservabilityCommand(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
-	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: "observability-clean"})
+	response, err := callControl(*controlSocket, control.Request{Operation: "observability-clean"})
 	if err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func flushObservabilityCommand(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
-	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: "observability-flush"})
+	response, err := callControl(*controlSocket, control.Request{Operation: "observability-flush"})
 	if err != nil {
 		return err
 	}
@@ -236,7 +236,7 @@ func observabilityCommand(operation string, args []string) error {
 	if err != nil {
 		return err
 	}
-	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: operation, Payload: data})
+	response, err := callControl(*controlSocket, control.Request{Operation: operation, Payload: data})
 	if err != nil {
 		return err
 	}
@@ -258,7 +258,7 @@ func upgradeCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: "upgrade", Action: *action, Payload: payload})
+	response, err := callControl(*controlSocket, control.Request{Operation: "upgrade", Action: *action, Payload: payload})
 	if err != nil {
 		return err
 	}
@@ -280,6 +280,10 @@ func serve(args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
+	installRootPath, err := filepath.Abs(*installRoot)
+	if err != nil {
+		return fmt.Errorf("resolve install root: %w", err)
+	}
 
 	cfg, err := loadServeConfig(*configPath, *root, *listen, *pidFile, *controlSocket, *threads)
 	if err != nil {
@@ -293,14 +297,14 @@ func serve(args []string) error {
 		return fmt.Errorf("document root %q is not a directory", cfg.Web.Root)
 	}
 
-	nodeID, err := resolveNodeID(cfg, *installRoot)
+	nodeID, err := resolveNodeID(cfg, installRootPath)
 	if err != nil {
 		return err
 	}
 	cfg.Runtime.NodeID = nodeID
 	logsDir := filepath.Dir(cfg.Runtime.LogPath)
 	if cfg.Runtime.LogPath == "" {
-		logsDir = "/opt/zentao/logs"
+		logsDir = filepath.Join(installRootPath, "logs")
 	}
 	effectiveLogPath := filepath.Join(logsDir, "runtime-"+nodeID+".jsonl")
 	effectiveAuditLog := cfg.Runtime.AuditLog
@@ -368,7 +372,7 @@ func serve(args []string) error {
 	if queueEngine != nil {
 		registry.Register("queue", health.KindDependency, false, false, func(context.Context) health.Result { return queueEngine.Health() })
 	}
-	upgradeController, err := upgrade.NewController(*installRoot)
+	upgradeController, err := upgrade.NewController(installRootPath)
 	if err != nil {
 		return fmt.Errorf("initialize upgrade controller: %w", err)
 	}
@@ -663,9 +667,11 @@ type hostStatusProvider struct {
 
 func (p hostStatusProvider) HTTPStatus() web.HTTPStatus {
 	state := p.machine.Snapshot().State
+	probes := p.registry.Probe(context.Background())
 	return web.HTTPStatus{
-		Live:  state != lifecycle.Stopped && state != lifecycle.Failed,
-		Ready: state == lifecycle.Ready,
+		Live:     state != lifecycle.Stopped && state != lifecycle.Failed,
+		Ready:    state == lifecycle.Ready && probes.Ready(),
+		Degraded: probes.AnyDegraded || probes.AnyFailed,
 	}
 }
 
@@ -752,12 +758,12 @@ func (h *host) requestStop(reason string) {
 	})
 }
 
-func (h *host) HandleControl(_ context.Context, request control.Request) control.Response {
+func (h *host) HandleControl(ctx context.Context, request control.Request) control.Response {
 	switch request.Operation {
 	case "status":
 		return control.Success(h.status())
 	case "health":
-		return control.Success(h.healthReport(request.Deep))
+		return control.Success(h.healthReport(ctx, request.Deep))
 	case "version":
 		return control.Success(versionData())
 	case "stop":
@@ -767,20 +773,20 @@ func (h *host) HandleControl(_ context.Context, request control.Request) control
 		return h.reload()
 	case "diagnose":
 		return control.Success(map[string]any{
-			"health":  h.healthReport(true),
+			"health":  h.healthReport(ctx, true),
 			"version": versionData(),
 			"config":  h.configSummary(),
 		})
 	case "upgrade":
 		return h.upgrade(request)
 	case "logs", "metrics":
-		return h.observabilityQuery(request)
+		return h.observabilityQuery(ctx, request)
 	case "observability-flush":
-		return h.observabilityFlush()
+		return h.observabilityFlush(ctx)
 	case "observability-clean":
-		return h.observabilityClean()
+		return h.observabilityClean(ctx)
 	case "convert-jsonl":
-		return h.convertJSONL()
+		return h.convertJSONL(ctx)
 	case "collect-logs":
 		return h.collectLogs()
 	default:
@@ -788,11 +794,11 @@ func (h *host) HandleControl(_ context.Context, request control.Request) control
 	}
 }
 
-func (h *host) convertJSONL() control.Response {
+func (h *host) convertJSONL(ctx context.Context) control.Response {
 	if h.jsonlConverter == nil {
 		return control.Failure("unavailable", "jsonl converter is not available")
 	}
-	result, err := h.jsonlConverter.ConvertOnce(context.Background())
+	result, err := h.jsonlConverter.ConvertOnce(ctx)
 	if err != nil {
 		return control.Failure("convert_failed", "jsonl to parquet conversion failed")
 	}
@@ -810,7 +816,7 @@ func (h *host) collectLogs() control.Response {
 	return control.Success(map[string]string{"path": path})
 }
 
-func (h *host) observabilityClean() control.Response {
+func (h *host) observabilityClean(ctx context.Context) control.Response {
 	h.mu.RLock()
 	cfg := h.config
 	h.mu.RUnlock()
@@ -827,18 +833,18 @@ func (h *host) observabilityClean() control.Response {
 	if err != nil {
 		return control.Failure("clean_failed", err.Error())
 	}
-	result, err := cleaner.CleanOwn(context.Background())
+	result, err := cleaner.CleanOwn(ctx)
 	if err != nil {
 		return control.Failure("clean_failed", "observability retention failed")
 	}
 	return control.Success(result)
 }
 
-func (h *host) observabilityFlush() control.Response {
+func (h *host) observabilityFlush(ctx context.Context) control.Response {
 	if h.obsPublisher == nil {
 		return control.Failure("unavailable", "observability publisher is not available")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := h.obsPublisher.FlushAll(ctx); err != nil {
 		return control.Failure("flush_failed", "observability flush failed")
@@ -846,7 +852,7 @@ func (h *host) observabilityFlush() control.Response {
 	return control.Success(map[string]any{"dropped": h.obsPublisher.Dropped()})
 }
 
-func (h *host) observabilityQuery(request control.Request) control.Response {
+func (h *host) observabilityQuery(ctx context.Context, request control.Request) control.Response {
 	if h.queryEngine == nil {
 		return control.Failure("unavailable", "observability query engine is not available")
 	}
@@ -910,7 +916,9 @@ func (h *host) observabilityQuery(request control.Request) control.Response {
 	if err != nil {
 		return control.Failure("invalid_request", err.Error())
 	}
-	rows, err := h.queryEngine.Query(context.Background(), template, 1000, params)
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	rows, err := h.queryEngine.Query(queryCtx, template, 1000, params)
 	if err != nil {
 		return control.Failure("query_failed", "observability query failed")
 	}
@@ -925,7 +933,7 @@ func (h *host) upgrade(request control.Request) control.Response {
 	return control.Success(result)
 }
 
-func (h *host) healthReport(deep bool) map[string]any {
+func (h *host) healthReport(ctx context.Context, deep bool) map[string]any {
 	snapshot := h.machine.Snapshot()
 	live := snapshot.State != lifecycle.Stopped && snapshot.State != lifecycle.Failed
 	ready := snapshot.State == lifecycle.Ready
@@ -936,9 +944,9 @@ func (h *host) healthReport(deep bool) map[string]any {
 	}
 	var probes health.Snapshot
 	if deep {
-		probes = h.health.DeepProbe(context.Background())
+		probes = h.health.DeepProbe(ctx)
 	} else {
-		probes = h.health.Probe(context.Background())
+		probes = h.health.Probe(ctx)
 	}
 	report["components"] = probes.Components
 	report["deep"] = "not_requested"
@@ -1032,7 +1040,7 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int) *
 		if parsed, err := url.Parse(cfg.Queue.BridgeBaseURL); err == nil && parsed.Host != "" {
 			bridgeListen = parsed.Host
 		}
-		queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen}
+		queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Token: cfg.Queue.BridgeToken}
 	}
 	return web.Config(web.Options{
 		Root:              cfg.Web.Root,
@@ -1047,6 +1055,12 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int) *
 	})
 }
 
+func callControl(socket string, request control.Request) (control.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return control.Call(ctx, socket, request)
+}
+
 func controlCommand(operation string, args []string) error {
 	flags := flag.NewFlagSet(operation, flag.ContinueOnError)
 	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
@@ -1055,7 +1069,7 @@ func controlCommand(operation string, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
-	response, err := control.Call(context.Background(), *controlSocket, control.Request{Operation: operation, Deep: *deep})
+	response, err := callControl(*controlSocket, control.Request{Operation: operation, Deep: *deep})
 	if err == nil {
 		if !response.OK {
 			return fmt.Errorf("%s: %s", response.Error.Code, response.Error.Message)
