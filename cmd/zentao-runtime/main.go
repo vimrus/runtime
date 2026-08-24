@@ -395,7 +395,7 @@ func serve(args []string) error {
 			return fmt.Errorf("initialize jsonl converter: %w", err)
 		}
 	}
-	host := newHost(*configPath, cfg, logger, registry, auditor, upgradeController, queryEngine, obsPublisher, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
+	host := newHost(configPath, cfg, logger, registry, auditor, upgradeController, queryEngine, obsPublisher, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
 	host.collector = &diagnostics.Collector{
 		LogPaths: []string{
 			effectiveLogPath,

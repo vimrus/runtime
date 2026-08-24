@@ -223,6 +223,12 @@ Docker 交付以 Linux amd64/arm64 原生 Runner 为基线；正式发布还应�
 
 macOS 不是 Runtime 的正式交付目标；在 macOS 上请使用 Docker/BuildKit 构建 Linux 制品，或在 Linux 原生 Runner 上构建和验证。
 
+开发者验证 Go Runtime Host 时使用 `scripts/ci/test-runtime-host.sh`。该脚本会自动读取 PHP 头文件路径，并使用 `nowatcher` 构建标签关闭 FrankenPHP 的可选 Watcher C 扩展；生产构建也使用相同标签：
+
+```bash
+scripts/ci/test-runtime-host.sh
+```
+
 ### Runtime / Full 安装包
 
 Runtime staging 目录准备完成后：
