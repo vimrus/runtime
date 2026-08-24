@@ -38,7 +38,6 @@ import (
 	queueclient "github.com/vimrus/runtime/internal/queue/client"
 	queueengine "github.com/vimrus/runtime/internal/queue/engine"
 	"github.com/vimrus/runtime/internal/queue/worker"
-	"github.com/vimrus/runtime/internal/upgrade"
 	"github.com/vimrus/runtime/internal/web"
 )
 
@@ -77,7 +76,7 @@ func notRunningError(format string, args ...any) error {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|upgrade|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|run-service>")
+		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|run-service>")
 	}
 	switch args[0] {
 	case "serve", "start":
@@ -86,8 +85,6 @@ func run(args []string) error {
 		return runServiceCommand(args[1:])
 	case "status", "stop", "reload", "health", "diagnose":
 		return controlCommand(args[0], args[1:])
-	case "upgrade":
-		return upgradeCommand(args[1:])
 	case "logs", "metrics":
 		return observabilityCommand(args[0], args[1:])
 	case "php-cli":
@@ -246,28 +243,6 @@ func observabilityCommand(operation string, args []string) error {
 	return printRawJSON(response.Result)
 }
 
-func upgradeCommand(args []string) error {
-	flags := flag.NewFlagSet("upgrade", flag.ContinueOnError)
-	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
-	action := flags.String("action", "status", "prepare|apply|rollback|status")
-	release := flags.String("release", "", "Absolute release path for prepare")
-	if err := flags.Parse(args); err != nil {
-		return usageError("%v", err)
-	}
-	payload, err := json.Marshal(map[string]string{"release": *release})
-	if err != nil {
-		return err
-	}
-	response, err := callControl(*controlSocket, control.Request{Operation: "upgrade", Action: *action, Payload: payload})
-	if err != nil {
-		return err
-	}
-	if !response.OK {
-		return fmt.Errorf("%s: %s", response.Error.Code, response.Error.Message)
-	}
-	return printRawJSON(response.Result)
-}
-
 func serve(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	root := flags.String("root", "", "PHP document root override")
@@ -275,7 +250,7 @@ func serve(args []string) error {
 	pidFile := flags.String("pid-file", "", "PID file override")
 	controlSocket := flags.String("control-socket", "", "Control socket override")
 	threads := flags.Int("threads", 0, "PHP thread count override")
-	installRoot := flags.String("install-root", "/opt/zentao", "Installation root for upgrade transactions")
+	installRoot := flags.String("install-root", "/opt/zentao", "Installation root")
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
@@ -372,10 +347,6 @@ func serve(args []string) error {
 	if queueEngine != nil {
 		registry.Register("queue", health.KindDependency, false, false, func(context.Context) health.Result { return queueEngine.Health() })
 	}
-	upgradeController, err := upgrade.NewController(installRootPath)
-	if err != nil {
-		return fmt.Errorf("initialize upgrade controller: %w", err)
-	}
 	var jsonlConverter *jsonl.Converter
 	if obsPublisher != nil {
 		clusterID := cfg.Runtime.ClusterID
@@ -395,7 +366,7 @@ func serve(args []string) error {
 			return fmt.Errorf("initialize jsonl converter: %w", err)
 		}
 	}
-	host := newHost(configPath, cfg, logger, registry, auditor, upgradeController, queryEngine, obsPublisher, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
+	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
 	host.collector = &diagnostics.Collector{
 		LogPaths: []string{
 			effectiveLogPath,
@@ -724,7 +695,6 @@ type host struct {
 	logger            *logging.Logger
 	health            *health.Registry
 	auditor           control.Auditor
-	upgrades          *upgrade.Controller
 	queryEngine       query.Engine
 	obsPublisher      *observability.Publisher
 	jsonlConverter    *jsonl.Converter
@@ -733,7 +703,7 @@ type host struct {
 	collector         *diagnostics.Collector
 }
 
-func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, upgrades *upgrade.Controller, queryEngine query.Engine, obsPublisher *observability.Publisher, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
+func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
 	return &host{
 		configPath:        configPath,
 		config:            cfg,
@@ -742,7 +712,6 @@ func newHost(configPath string, cfg config.Config, logger *logging.Logger, regis
 		logger:            logger,
 		health:            registry,
 		auditor:           auditor,
-		upgrades:          upgrades,
 		queryEngine:       queryEngine,
 		obsPublisher:      obsPublisher,
 		jsonlConverter:    jsonlConverter,
@@ -777,8 +746,6 @@ func (h *host) HandleControl(ctx context.Context, request control.Request) contr
 			"version": versionData(),
 			"config":  h.configSummary(),
 		})
-	case "upgrade":
-		return h.upgrade(request)
 	case "logs", "metrics":
 		return h.observabilityQuery(ctx, request)
 	case "observability-flush":
@@ -923,14 +890,6 @@ func (h *host) observabilityQuery(ctx context.Context, request control.Request) 
 		return control.Failure("query_failed", "observability query failed")
 	}
 	return control.Success(rows)
-}
-
-func (h *host) upgrade(request control.Request) control.Response {
-	result, err := h.upgrades.Handle(request.Action, request.Payload)
-	if err != nil {
-		return control.Failure("upgrade_failed", err.Error())
-	}
-	return control.Success(result)
 }
 
 func (h *host) healthReport(ctx context.Context, deep bool) map[string]any {

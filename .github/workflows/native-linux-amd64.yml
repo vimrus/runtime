@@ -44,9 +44,6 @@ jobs:
       - name: Install dry run
         run: tests/install/install-dry-run.sh
 
-      - name: Rolling upgrade
-        run: tests/e2e/rolling-upgrade.sh
-
       - name: Docker Compose smoke
         run: tests/docker/compose-smoke.sh
 

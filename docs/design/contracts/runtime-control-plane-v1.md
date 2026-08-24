@@ -24,7 +24,7 @@ Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-se
     "clusterID": "cluster-prod-1"
   },
   "web": {
-    "root": "/opt/zentao/app/current/www",
+    "root": "/opt/zentao/app/zentaopms/www",
     "listen": "0.0.0.0:8080",
     "threads": 4,
     "readHeaderTimeout": "10s",

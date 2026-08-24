@@ -49,7 +49,7 @@ jobs:
           root="$(mktemp -d)"
           scripts/ci/stage-app-package.sh "${PACKAGE}" "${root}/app" >/dev/null
           for forbidden in .git __pycache__ node_modules .cache; do
-            if find "${root}/app/app/releases" -name "${forbidden}" -print -quit | grep -q .; then
+            if find "${root}/app/zentaopms" -name "${forbidden}" -print -quit | grep -q .; then
               echo "package contains forbidden entry: ${forbidden}" >&2
               exit 1
             fi

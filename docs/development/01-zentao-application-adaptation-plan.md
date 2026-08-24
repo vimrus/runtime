@@ -151,7 +151,7 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
 | Z-INSTALL-01 | P0 | 新安装适配 | `www/install.php`、Runtime 配置 | Runtime 环境检查和 Cache Bridge 初始化配置 | Z-QUEUE-01, Z-CACHE-01 | Runtime/Full/外部数据库三种安装路径均可完成 |
-| Z-UPGRADE-01 | P0 | 增量升级和回滚边界 | upgrade、数据库迁移 | 一次性迁移（升级前备份）、失败提示和恢复说明 | Z-INSTALL-01 | 数据库迁移失败时应用不进入半启用新协议状态 |
+| Z-UPGRADE-01 | P0 | 应用替换和数据库迁移边界 | 手工备份、数据库迁移 | 用户备份后替换 `app/zentaopms`，失败时按备份恢复 | Z-INSTALL-01 | 数据库迁移失败时应用不进入半启用新协议状态 |
 | Z-MIGRATE-01 | P1 | 旧队列灰度迁移 | cron、Queue Service | 按 Handler 切换、回退和观察窗口 | Z-QUEUE-10, Z-UPGRADE-01 | 禁止无控制双消费；旧任务有明确排空或保留策略 |
 | Z-EDITION-01 | P0 | 版本包含关系验证 | 各版本/插件 | 开源、企业、旗舰、IPD 合并测试 | Z-REL-01 | 公共能力不被扩展覆盖破坏，各工作界面可启动 |
 | Z-DB-01 | P0 | 数据库契约矩阵 | DAO、innovation、tests | Queue/Upgrade SQL 契约测试 | 各数据任务 | MySQL、PostgreSQL为强制门槛；信创数据库结果逐项记录 |
@@ -383,7 +383,7 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
 - 元数据：建议包含 `VERSION` 或等价版本标识；不包含 `.git`、测试缓存、
   开发依赖和非目标版本代码。
 - 消费方式：`scripts/ci/stage-app-package.sh <package> <install-root>`
-  解包到 `<install-root>/app/releases/<version>` 并切换 `app/current`；
+  用户备份 `<install-root>/app/zentaopms` 后，将新应用解包到该目录；
   `tests/e2e/zentao-app-smoke.sh` 在 Runtime 容器中执行
   readiness 与 PHP 入口冒烟。
 - CI：`application-matrix.yml` 在 private/self-hosted Runner 上通过
@@ -428,5 +428,5 @@ else
 ```
 
 Runtime 集成环境生成时会对暂存副本应用最小兼容补丁
-（`scripts/ci/patch-classic-mode.sh`，只改 `app/releases/<version>/www/index.php`，
+（`scripts/ci/patch-classic-mode.sh`，只改 `app/zentaopms/www/index.php`，
 不改原始 zip），作为正式修复前的临时 shim；正式修复后应移除该补丁逻辑。

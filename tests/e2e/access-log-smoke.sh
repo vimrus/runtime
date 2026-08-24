@@ -42,7 +42,7 @@ cat > "${work}/runtime.json" <<EOF
     "logPath": "/shared/logs/runtime.log"
   },
   "web": {
-    "root": "/shared/app/current/www",
+    "root": "/shared/app/zentaopms/www",
     "listen": "127.0.0.1:8080",
     "threads": 4,
     "readHeaderTimeout": "10s",

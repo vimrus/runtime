@@ -277,7 +277,7 @@ Runtime Host 使用结构化配置生成并加载 Caddy JSON。配置语义示�
 ```yaml
 web:
   listen: ":80"
-  document_root: /opt/zentao/app/current/www
+  document_root: /opt/zentao/app/zentaopms/www
   auto_https: false
   compression: [zstd, gzip]
 php:
@@ -306,8 +306,8 @@ Host 将上述配置转换为包含 FrankenPHP Caddy `php_server` route 的 Cadd
 
 ```text
 runtime/                 zentao-runtime、PHP、扩展和共享库
-app/releases/<version>/  各版本禅道应用
-app/current              当前版本链接或版本指针
+app/zentaopms/           当前禅道主应用
+app/<other>/             其他独立应用（可选）
 config/                  Runtime 配置、Caddy JSON 基线、php.ini
 data/                    附件及其他持久数据
 observability/           本地或 NFS 指标/日志 Parquet 数据集
@@ -318,8 +318,6 @@ backups/                 数据库、附件和配置备份
 licenses/                第三方许可证
 manifest.json            构建和组件版本信息
 ```
-
-Windows 可以使用目录指针文件代替符号链接，避免普通用户权限不足。
 
 应用升级不得覆盖持久数据目录、用户配置和数据库目录。
 
@@ -436,24 +434,21 @@ CI 必须分别执行 MySQL 和 PostgreSQL 的以下测试：
 9. Full 版 MySQL、ionCube Loader、DuckDB/Go Binding 和相关 C/C++ Runtime 的许可证及再分发条款必须完成确认。
 10. DuckDB 禁止运行时自动安装或加载未审核 Extension，不向公共 Web 暴露任意 SQL 和文件路径。
 
-## 14. 升级与回滚
+## 14. 应用替换与数据迁移
 
-升级流程建议如下：
+Runtime 不管理禅道应用版本目录和回滚指针。部署人员负责备份并替换主应用目录：
 
 ```text
 预检查
-  -> 停止 Scheduler
-  -> 进入维护模式
-  -> 备份数据库、附件和配置
-  -> 安装新 Runtime 和应用到新版本目录
-  -> 执行禅道升级程序
+  -> 停止 Runtime 或进入维护模式
+  -> 备份数据库、附件、配置和 app/zentaopms
+  -> 替换 app/zentaopms
+  -> 执行禅道数据库迁移程序
   -> 运行健康检查
-  -> 切换 current 版本
-  -> 启动 Scheduler
-  -> 退出维护模式
+  -> 启动 Runtime
 ```
 
-应用文件可以通过切换版本目录回滚。数据库发生迁移后，不能只回滚应用文件；必须恢复升级前数据库备份。
+应用文件恢复依赖部署人员保存的备份。数据库发生迁移后，不能只恢复应用文件；必须按禅道迁移说明和备份策略处理数据库。
 
 首版需要明确支持的迁移来源：
 

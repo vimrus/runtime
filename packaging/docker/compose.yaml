@@ -14,7 +14,7 @@ services:
       target: runtime
     command: ["serve"]
     environment:
-      ZENTAO_RUNTIME_ROOT: /opt/zentao/app/current/www
+      ZENTAO_RUNTIME_ROOT: /opt/zentao/app/zentaopms/www
       ZENTAO_RUNTIME_LISTEN: "0.0.0.0:8080"
       ZENTAO_RUNTIME_CONTROL_SOCKET: /run/zentao/runtime.sock
       ZENTAO_RUNTIME_PID_FILE: /run/zentao/runtime.pid

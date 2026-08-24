@@ -206,7 +206,7 @@ cat > "${output_dir}/config/runtime.json.tpl" <<EOF
     "logMaxBackups": 5
   },
   "web": {
-    "root": "@ABS_ROOT@/app/current/www",
+    "root": "@ABS_ROOT@/app/zentaopms/www",
     "listen": "0.0.0.0:8080",
     "threads": 8,
     "readHeaderTimeout": "10s",
@@ -335,7 +335,7 @@ cat > "${output_dir}/db-init.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-sql="${root}/app/current/db/zentao.sql"
+sql="${root}/app/zentaopms/db/zentao.sql"
 if [[ ! -f "${sql}" ]]; then
     echo "zentao.sql not found at ${sql}" >&2
     exit 1

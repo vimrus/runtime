@@ -37,7 +37,7 @@ cat > "${work}/runtime.json" <<EOF
 {
   "schemaVersion": 1,
   "runtime": {"controlSocket": "/tmp/zentao.sock", "pidFile": "/tmp/zentao.pid", "drainTimeout": "10s"},
-  "web": {"root": "/shared/app/current/www", "listen": "127.0.0.1:8080", "threads": 4, "readHeaderTimeout": "10s", "idleTimeout": "30s", "maxHeaderBytes": 16384}
+  "web": {"root": "/shared/app/zentaopms/www", "listen": "127.0.0.1:8080", "threads": 4, "readHeaderTimeout": "10s", "idleTimeout": "30s", "maxHeaderBytes": 16384}
 }
 EOF
 
@@ -60,7 +60,7 @@ done
 
 docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/readiness \
     | jq --exit-status '.status == "ready"' >/dev/null
-docker exec "${container}" sh -c 'test -f /shared/app/current/www/install.php'
+docker exec "${container}" sh -c 'test -f /shared/app/zentaopms/www/install.php'
 # PHP executes through FrankenPHP Classic: index.php must return a PHP
 # response (ZenTao typically redirects to install/login before DB setup).
 code="$(docker exec "${container}" curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/)"

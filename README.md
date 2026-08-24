@@ -1,6 +1,6 @@
 # ZenTao Runtime
 
-ZenTao Runtime（可执行文件：`zentao`）是禅道的统一运行环境。它把 Web 服务、PHP 8.4、进程生命周期、健康检查、日志、诊断、升级和可选的队列/观测能力组合成一个可交付产品，支持单机部署，也支持 Linux 双节点接入现有负载均衡。
+ZenTao Runtime（可执行文件：`zentao`）是禅道的统一运行环境。它把 Web 服务、PHP 8.4、进程生命周期、健康检查、日志、诊断和可选的队列/观测能力组合成一个可交付产品，支持单机部署，也支持 Linux 双节点接入现有负载均衡。
 
 ## 产品形态
 
@@ -27,8 +27,7 @@ zentao serve
 ```text
 /opt/zentao/
   bin/zentao               Runtime 程序
-  app/current/www          当前禅道应用
-  app/releases/            应用版本
+  app/zentaopms/www        禅道主应用 Web 根目录
   config/runtime.json      Runtime 固定配置
   data/                    附件、节点标识等持久化数据
   logs/                    Runtime、访问和 PHP 日志
@@ -98,7 +97,7 @@ serve:
   --pid-file          覆盖 PID 文件
   --control-socket    覆盖控制 socket/Named Pipe
   --threads           覆盖 PHP 线程数
-  --install-root      应用、数据和升级目录根路径
+  --install-root      应用、数据和日志目录根路径
 
 status/stop/reload/health/diagnose:
   --control-socket    控制 socket（Windows 为 Named Pipe）
@@ -117,16 +116,7 @@ health/diagnose:
 
 ### 升级
 
-升级使用应用版本目录和 `app/current` 指针，不覆盖 `config/` 和 `data/`：
-
-```bash
-zentao upgrade --action status
-zentao upgrade --action prepare --release /opt/zentao/app/releases/2026.08.24
-zentao upgrade --action apply
-zentao upgrade --action rollback
-```
-
-`prepare` 的 `--release` 必须是 `AppsDir` 下包含 `www/` 的绝对路径。升级前请保留备份目录，并在应用层完成登录、静态资源和关键业务验证。
+应用升级由部署人员自行备份并替换 `/opt/zentao/app/zentaopms`；Runtime 不维护应用版本目录、指针或自动回滚。替换完成后重启 `zentao`，再检查 `zentao health --deep` 和 readiness 端点。
 
 ### 日志、指标和诊断
 

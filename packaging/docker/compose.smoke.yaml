@@ -6,14 +6,14 @@ services:
     image: zentao:runtime-linux-amd64
     command: ["serve"]
     environment:
-      ZENTAO_RUNTIME_ROOT: /opt/zentao/app/current/www
+      ZENTAO_RUNTIME_ROOT: /opt/zentao/app/zentaopms/www
       ZENTAO_RUNTIME_LISTEN: "0.0.0.0:8080"
       ZENTAO_RUNTIME_CONTROL_SOCKET: /tmp/zentao-runtime.sock
       ZENTAO_RUNTIME_PID_FILE: /tmp/zentao-runtime.pid
     ports:
       - "18080:8080"
     volumes:
-      - ../../tests/fixtures/php:/opt/zentao/app/current/www:ro
+      - ../../tests/fixtures/php:/opt/zentao/app/zentaopms/www:ro
       - ../../tests/fixtures/runtime/runtime.json:/opt/zentao/config/runtime.json:ro
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/_runtime/readiness"]

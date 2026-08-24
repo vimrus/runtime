@@ -35,10 +35,10 @@ jobs:
           find scripts packaging -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
       - name: Unit tests (non-CGO packages)
-        run: go test -count=1 ./internal/config ./internal/lifecycle ./internal/health ./internal/control ./internal/logging ./internal/upgrade ./internal/queue/... ./internal/scheduler ./internal/observability/... ./internal/gateway ./internal/mysql
+        run: go test -count=1 ./internal/config ./internal/lifecycle ./internal/health ./internal/control ./internal/logging ./internal/queue/... ./internal/scheduler ./internal/observability/... ./internal/gateway ./internal/mysql
 
       - name: Vet (non-CGO packages)
-        run: go vet ./internal/config ./internal/lifecycle ./internal/health ./internal/control ./internal/logging ./internal/upgrade ./internal/queue/... ./internal/scheduler ./internal/observability/... ./internal/gateway ./internal/mysql
+        run: go vet ./internal/config ./internal/lifecycle ./internal/health ./internal/control ./internal/logging ./internal/queue/... ./internal/scheduler ./internal/observability/... ./internal/gateway ./internal/mysql
 
       - name: Documentation link check
         run: |

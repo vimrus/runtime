@@ -47,7 +47,7 @@ cat > "${work}/runtime.json" <<EOF
     "logMaxBackups": 5
   },
   "web": {
-    "root": "/shared/app/current/www",
+    "root": "/shared/app/zentaopms/www",
     "listen": "127.0.0.1:8080",
     "threads": 4,
     "readHeaderTimeout": "10s",

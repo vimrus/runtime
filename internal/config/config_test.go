@@ -91,7 +91,7 @@ func TestLoadAppliesLogAndIdentitySettings(t *testing.T) {
     "nodeID": "node-a",
     "clusterID": "cluster-prod-1"
   },
-  "web": {"root": "/opt/zentao/app/current/www", "listen": "127.0.0.1:8080"}
+  "web": {"root": "/opt/zentao/app/zentaopms/www", "listen": "127.0.0.1:8080"}
 }`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestLoadAppliesLogAndIdentitySettings(t *testing.T) {
 
 func TestValidateRejectsInvalidIdentityAndRelativeLogPath(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/current/www"
+	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Runtime.NodeID = "node with spaces"
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected invalid nodeID to be rejected")
@@ -129,7 +129,7 @@ func TestValidateRejectsInvalidIdentityAndRelativeLogPath(t *testing.T) {
 
 func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/current/www"
+	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Queue.Enabled = true
 	if err := config.Validate(); err == nil {
 		t.Fatal("queue enabled without bridge URL must be rejected")
@@ -142,7 +142,7 @@ func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 	loaded, err := Load(pathWithContent(t, `{
   "schemaVersion": 1,
   "runtime": {"controlSocket": "/run/zentao/runtime.sock", "pidFile": "/run/zentao/runtime.pid"},
-  "web": {"root": "/opt/zentao/app/current/www", "listen": "127.0.0.1:8080"},
+  "web": {"root": "/opt/zentao/app/zentaopms/www", "listen": "127.0.0.1:8080"},
   "queue": {
     "enabled": true,
     "bridgeBaseURL": "http://127.0.0.1:8081/internal/runtime/queue/v1",
@@ -159,7 +159,7 @@ func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 
 func TestObservabilityValidation(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/current/www"
+	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Observability.Enabled = true
 	if err := config.Validate(); err == nil {
 		t.Fatal("observability enabled without dataset root must be rejected")
@@ -173,7 +173,7 @@ func TestObservabilityValidation(t *testing.T) {
 
 func TestObservabilityJSONLDefaultsAndValidation(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/current/www"
+	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Observability.Enabled = true
 	config.Observability.DatasetRoot = "/opt/zentao/observability"
 	config.Observability.SpoolPath = "/opt/zentao/spool/observability"
@@ -187,7 +187,7 @@ func TestObservabilityJSONLDefaultsAndValidation(t *testing.T) {
 	loaded, err := Load(pathWithContent(t, `{
   "schemaVersion": 1,
   "runtime": {"controlSocket": "/run/zentao/runtime.sock", "pidFile": "/run/zentao/runtime.pid"},
-  "web": {"root": "/opt/zentao/app/current/www", "listen": "127.0.0.1:8080"},
+  "web": {"root": "/opt/zentao/app/zentaopms/www", "listen": "127.0.0.1:8080"},
   "observability": {
     "enabled": true,
     "datasetRoot": "/opt/zentao/observability",
