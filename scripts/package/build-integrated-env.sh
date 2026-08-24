@@ -186,7 +186,7 @@ if not defined ZT_DB_USER set ZT_DB_USER=zentao
 if not defined ZT_DB_PASSWORD set ZT_DB_PASSWORD=zentao
 if not defined ZT_DB_PREFIX set ZT_DB_PREFIX=zt_
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\bin\render-config.ps1" -Root "%ROOT%"
-"%ROOT%\runtime\zentao.exe" serve --config "%ROOT%\config\runtime.json" --install-root "%ROOT%"
+"%ROOT%\runtime\zentao.exe" serve --install-root "%ROOT%"
 EOF
     echo "integrated Windows environment generated: ${output_dir}"
     echo "edition: ${edition} (platform: windows)"
@@ -281,9 +281,7 @@ export ZT_REQUEST_TYPE="${ZT_REQUEST_TYPE:-PATH_INFO}"
 export ZT_TIMEZONE="${ZT_TIMEZONE:-Asia/Shanghai}"
 
 "${root}/bin/render-config.sh" "${root}"
-exec "${root}/bin/zentao" serve \
-    --config "${root}/config/runtime.json" \
-    --install-root "${root}"
+exec "${root}/bin/zentao" serve --install-root "${root}"
 EOF
 chmod +x "${output_dir}/run.sh"
 
@@ -293,7 +291,7 @@ services:
     image: zentao:runtime-linux-amd64
     entrypoint: ["sh", "-c"]
     command:
-      - /opt/zentao/bin/render-config.sh /opt/zentao && exec /opt/zentao/bin/zentao serve --config /opt/zentao/config/runtime.json --install-root /opt/zentao
+      - /opt/zentao/bin/render-config.sh /opt/zentao && exec /opt/zentao/bin/zentao serve --install-root /opt/zentao
     environment:
       IN_CONTAINER: "true"
       ZT_INSTALLED: "true"

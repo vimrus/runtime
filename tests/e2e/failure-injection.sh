@@ -26,7 +26,7 @@ docker run --detach --name "${container}" \
     --volume "${repo_root}/tests/fixtures/php:/app:ro" \
     --volume "${repo_root}/tests/fixtures/runtime:/runtime-config:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao serve --config /tmp/runtime.json' >/dev/null
+    -c 'cp /runtime-config/runtime.json /opt/zentao/config/runtime.json && exec zentao serve' >/dev/null
 
 wait_ready() {
     for _ in $(seq 1 30); do

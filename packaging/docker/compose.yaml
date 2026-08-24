@@ -12,7 +12,7 @@ services:
       context: ../..
       dockerfile: packaging/runtime/Dockerfile
       target: runtime
-    command: ["serve", "--config", "/opt/zentao/config/runtime.json"]
+    command: ["serve"]
     environment:
       ZENTAO_RUNTIME_ROOT: /opt/zentao/app/current/www
       ZENTAO_RUNTIME_LISTEN: "0.0.0.0:8080"

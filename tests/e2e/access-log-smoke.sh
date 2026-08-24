@@ -55,9 +55,9 @@ EOF
 docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${work}/app:/shared:rw" \
-    --volume "${work}/runtime.json:/tmp/runtime.json:ro" \
+    --volume "${work}/runtime.json:/runtime-config/runtime.json:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'mkdir -p /shared/logs && exec zentao serve --config /tmp/runtime.json --install-root /shared/app' >/dev/null
+    -c 'mkdir -p /shared/logs && cp /runtime-config/runtime.json /opt/zentao/config/runtime.json && exec zentao serve --install-root /shared/app' >/dev/null
 
 ready=0
 for _ in $(seq 1 30); do

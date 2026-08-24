@@ -19,7 +19,7 @@ Runtime 不直接访问禅道业务数据库。数据库连接由 PHP 应用和�
 准备应用发布目录和配置后启动：
 
 ```bash
-zentao serve --config /opt/zentao/config/runtime.json
+zentao serve
 ```
 
 常见运行目录：
@@ -29,7 +29,7 @@ zentao serve --config /opt/zentao/config/runtime.json
   bin/zentao               Runtime 程序
   app/current/www          当前禅道应用
   app/releases/            应用版本
-  config/runtime.json      Runtime 配置
+  config/runtime.json      Runtime 固定配置
   data/                    附件、节点标识等持久化数据
   logs/                    Runtime、访问和 PHP 日志
   observability/           Parquet 数据集
@@ -74,7 +74,7 @@ scripts/package/build-integrated-env.sh open /tmp/zentao-open
 
 ## 子命令
 
-运行 `zentao` 不带参数会显示命令概览。控制类命令默认使用配置中的控制 socket；可以用 `--control-socket` 覆盖。
+运行 `zentao` 不带参数会显示命令概览。Runtime 固定读取 `/opt/zentao/config/runtime.json`（Windows 为 `C:\Program Files\ZenTao\config\runtime.json`），不能通过命令行更改配置文件位置。控制类命令默认使用配置中的控制 socket；可以用 `--control-socket` 覆盖。
 
 ### 服务与生命周期
 
@@ -93,7 +93,6 @@ version             输出版本和构建能力
 
 ```text
 serve:
-  --config            Runtime 配置文件
   --root              覆盖 PHP 文档根目录
   --listen            覆盖 Web 监听地址
   --pid-file          覆盖 PID 文件
@@ -154,7 +153,7 @@ zentao php-cli -- -r 'echo PHP_VERSION, PHP_EOL;'
 Windows 服务入口：
 
 ```powershell
-zentao.exe run-service --name ZenTaoRuntime --config 'C:\Program Files\ZenTao\config\runtime.json'
+zentao.exe run-service --name ZenTaoRuntime
 ```
 
 ## 配置和安全

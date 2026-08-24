@@ -16,12 +16,10 @@ import (
 func runServiceCommand(args []string) error {
 	flags := flag.NewFlagSet("run-service", flag.ContinueOnError)
 	name := flags.String("name", "ZenTaoRuntime", "Windows service name")
-	configPath := flags.String("config", `C:\Program Files\ZenTao\config\runtime.json`, "Runtime configuration file")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	serveArgs := []string{"--config", *configPath}
-	serveArgs = append(serveArgs, flags.Args()...)
+	serveArgs := flags.Args()
 	errc := make(chan error, 1)
 	go func() { errc <- serve(serveArgs) }()
 	return windows.Run(windows.Service{

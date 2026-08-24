@@ -52,7 +52,7 @@ start_node() {
         --entrypoint sh \
         --volume "${tmpdir}:/shared:rw" \
         "${RUNTIME_IMAGE}" \
-        -c "exec zentao serve --config ${config} --install-root ${install_root}" >/dev/null
+        -c "cp '${config}' /opt/zentao/config/runtime.json && exec zentao serve --install-root '${install_root}'" >/dev/null
 }
 
 wait_ready() {

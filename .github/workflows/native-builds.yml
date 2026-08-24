@@ -138,7 +138,7 @@ jobs:
           if ($version.duckdb -ne "v2.10505.0") { throw "duckdb version check failed: $($version.duckdb)" }
           $env:PHPRC = "$root\config"
           $proc = Start-Process -FilePath "$root\runtime\zentao.exe" `
-              -ArgumentList 'serve','--config',"$root\config\runtime.json",'--install-root',$root `
+              -ArgumentList 'serve','--install-root',$root `
               -PassThru -WindowStyle Hidden `
               -RedirectStandardOutput "$root\logs\run.out.log" `
               -RedirectStandardError "$root\logs\run.err.log"

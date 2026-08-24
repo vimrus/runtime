@@ -52,7 +52,7 @@ func main() {
 	if err := run(os.Args[1:]); err != nil {
 		var exitErr *exitError
 		if errors.As(err, &exitErr) {
-		fmt.Fprintln(os.Stderr, "zentao:", exitErr.message)
+			fmt.Fprintln(os.Stderr, "zentao:", exitErr.message)
 			os.Exit(exitErr.code)
 		}
 		fmt.Fprintln(os.Stderr, "zentao:", err)
@@ -270,7 +270,6 @@ func upgradeCommand(args []string) error {
 
 func serve(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	configPath := flags.String("config", "/opt/zentao/config/runtime.json", "Runtime configuration file")
 	root := flags.String("root", "", "PHP document root override")
 	listen := flags.String("listen", "", "HTTP listen address override")
 	pidFile := flags.String("pid-file", "", "PID file override")
@@ -285,7 +284,8 @@ func serve(args []string) error {
 		return fmt.Errorf("resolve install root: %w", err)
 	}
 
-	cfg, err := loadServeConfig(*configPath, *root, *listen, *pidFile, *controlSocket, *threads)
+	configPath := defaultConfigPath()
+	cfg, err := loadServeConfig(configPath, *root, *listen, *pidFile, *controlSocket, *threads)
 	if err != nil {
 		return err
 	}
