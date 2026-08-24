@@ -11,8 +11,8 @@ trap 'rm -rf "${tmpdir}"' EXIT
 
 prefix="/opt/zentao"
 mkdir -p "${tmpdir}/opt/zentao/bin"
-cp "${repo_root}/dist/runtime-linux-amd64/bin/zentao-runtime" "${tmpdir}/opt/zentao/bin/zentao-runtime" 2>/dev/null || \
-    touch "${tmpdir}/opt/zentao/bin/zentao-runtime"
+cp "${repo_root}/dist/runtime-linux-amd64/bin/zentao" "${tmpdir}/opt/zentao/bin/zentao" 2>/dev/null || \
+    touch "${tmpdir}/opt/zentao/bin/zentao"
 
 ZENTAO_DRY_RUN=1 \
 ZENTAO_STAGE_ROOT="${tmpdir}" \
@@ -33,7 +33,7 @@ for path in \
 done
 
 [[ -f "${tmpdir}/etc/systemd/system/zentao-runtime.service" ]] || { echo "missing runtime unit" >&2; exit 1; }
-grep -q "ExecStart=${prefix}/bin/zentao-runtime" "${tmpdir}/etc/systemd/system/zentao-runtime.service"
+grep -q "ExecStart=${prefix}/bin/zentao" "${tmpdir}/etc/systemd/system/zentao-runtime.service"
 [[ -f "${tmpdir}/etc/logrotate.d/zentao" ]] || { echo "missing logrotate policy" >&2; exit 1; }
 
 echo "install dry run passed"

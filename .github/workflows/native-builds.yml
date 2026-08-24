@@ -134,10 +134,10 @@ jobs:
           bash scripts/package/build-integrated-env.sh open dist/zentao-open-win64 --platform windows
           $root = (Resolve-Path dist/zentao-open-win64).Path
           powershell -NoProfile -ExecutionPolicy Bypass -File "$root\bin\render-config.ps1" -Root $root
-          $version = (& "$root\runtime\zentao-runtime.exe" version | Out-String | ConvertFrom-Json)
+          $version = (& "$root\runtime\zentao.exe" version | Out-String | ConvertFrom-Json)
           if ($version.duckdb -ne "v2.10505.0") { throw "duckdb version check failed: $($version.duckdb)" }
           $env:PHPRC = "$root\config"
-          $proc = Start-Process -FilePath "$root\runtime\zentao-runtime.exe" `
+          $proc = Start-Process -FilePath "$root\runtime\zentao.exe" `
               -ArgumentList 'serve','--config',"$root\config\runtime.json",'--install-root',$root `
               -PassThru -WindowStyle Hidden `
               -RedirectStandardOutput "$root\logs\run.out.log" `
@@ -165,7 +165,7 @@ jobs:
             if (-not $json.ioncube -or -not $json.zts) { throw "PHP/ionCube check failed: $body" }
             & "$root\runtime\php.exe" -d "zend_extension=$root\runtime\ioncube_loader_win_8.4.dll" -r "exit(extension_loaded('ionCube Loader')?0:1);"
             if ($LASTEXITCODE -ne 0) { throw "ionCube Loader check failed" }
-            & "$root\runtime\zentao-runtime.exe" flush-observability --control-socket "\\.\pipe\zentao-runtime"
+            & "$root\runtime\zentao.exe" flush-observability --control-socket "\\.\pipe\zentao-runtime"
             if ($LASTEXITCODE -ne 0) { throw "Windows observability flush failed" }
             $parquet = Get-ChildItem -Path "$root\observability" -Recurse -Filter "*.parquet" -File -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $parquet) { throw "no Parquet published by Windows observability" }

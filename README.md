@@ -1,6 +1,6 @@
 # ZenTao Runtime
 
-ZenTao Runtime（可执行文件：`zentao-runtime`）是禅道的统一运行环境。它把 Web 服务、PHP 8.4、进程生命周期、健康检查、日志、诊断、升级和可选的队列/观测能力组合成一个可交付产品，支持单机部署，也支持 Linux 双节点接入现有负载均衡。
+ZenTao Runtime（可执行文件：`zentao`）是禅道的统一运行环境。它把 Web 服务、PHP 8.4、进程生命周期、健康检查、日志、诊断、升级和可选的队列/观测能力组合成一个可交付产品，支持单机部署，也支持 Linux 双节点接入现有负载均衡。
 
 ## 产品形态
 
@@ -19,14 +19,14 @@ Runtime 不直接访问禅道业务数据库。数据库连接由 PHP 应用和�
 准备应用发布目录和配置后启动：
 
 ```bash
-zentao-runtime serve --config /opt/zentao/config/runtime.json
+zentao serve --config /opt/zentao/config/runtime.json
 ```
 
 常见运行目录：
 
 ```text
 /opt/zentao/
-  bin/zentao-runtime       Runtime 程序
+  bin/zentao               Runtime 程序
   app/current/www          当前禅道应用
   app/releases/            应用版本
   config/runtime.json      Runtime 配置
@@ -74,7 +74,7 @@ scripts/package/build-integrated-env.sh open /tmp/zentao-open
 
 ## 子命令
 
-运行 `zentao-runtime` 不带参数会显示命令概览。控制类命令默认使用配置中的控制 socket；可以用 `--control-socket` 覆盖。
+运行 `zentao` 不带参数会显示命令概览。控制类命令默认使用配置中的控制 socket；可以用 `--control-socket` 覆盖。
 
 ### 服务与生命周期
 
@@ -121,10 +121,10 @@ health/diagnose:
 升级使用应用版本目录和 `app/current` 指针，不覆盖 `config/` 和 `data/`：
 
 ```bash
-zentao-runtime upgrade --action status
-zentao-runtime upgrade --action prepare --release /opt/zentao/app/releases/2026.08.24
-zentao-runtime upgrade --action apply
-zentao-runtime upgrade --action rollback
+zentao upgrade --action status
+zentao upgrade --action prepare --release /opt/zentao/app/releases/2026.08.24
+zentao upgrade --action apply
+zentao upgrade --action rollback
 ```
 
 `prepare` 的 `--release` 必须是 `AppsDir` 下包含 `www/` 的绝对路径。升级前请保留备份目录，并在应用层完成登录、静态资源和关键业务验证。
@@ -132,13 +132,13 @@ zentao-runtime upgrade --action rollback
 ### 日志、指标和诊断
 
 ```bash
-zentao-runtime logs --since 30m
-zentao-runtime logs --since 2h --level error --limit 200
-zentao-runtime metrics --since 1h --metric-name http.requests
-zentao-runtime flush-observability
-zentao-runtime clean-observability
-zentao-runtime convert-jsonl
-zentao-runtime collect-logs
+zentao logs --since 30m
+zentao logs --since 2h --level error --limit 200
+zentao metrics --since 1h --metric-name http.requests
+zentao flush-observability
+zentao clean-observability
+zentao convert-jsonl
+zentao collect-logs
 ```
 
 查询选项：`--since` 使用 Go duration，`--until` 使用 RFC3339 时间，另有 `--node`、`--level`、`--metric-name`、`--limit` 和 `--control-socket`。`collect-logs` 返回诊断压缩包路径；诊断包只包含本地日志和摘要，不包含业务数据库内容、请求正文或凭据。
@@ -146,7 +146,7 @@ zentao-runtime collect-logs
 ### PHP CLI 和 Windows 服务
 
 ```bash
-zentao-runtime php-cli -- -r 'echo PHP_VERSION, PHP_EOL;'
+zentao php-cli -- -r 'echo PHP_VERSION, PHP_EOL;'
 ```
 
 `php-cli` 使用与 Web 相同的 PHP、扩展和 ionCube 配置，也可以指定 `--php /path/to/php`。
@@ -154,7 +154,7 @@ zentao-runtime php-cli -- -r 'echo PHP_VERSION, PHP_EOL;'
 Windows 服务入口：
 
 ```powershell
-zentao-runtime.exe run-service --name ZenTaoRuntime --config 'C:\Program Files\ZenTao\config\runtime.json'
+zentao.exe run-service --name ZenTaoRuntime --config 'C:\Program Files\ZenTao\config\runtime.json'
 ```
 
 ## 配置和安全
@@ -198,7 +198,7 @@ Set-Location C:\path\to\runtime
 .\scripts\windows\build.ps1
 ```
 
-默认输出 `dist/runtime-windows-x64/`。脚本会校验锁定归档，编译 MSVC/COFF DuckDB，构建 `runtime\zentao-runtime.exe`，复制 PHP/扩展/ionCube，并执行 PHP 和 Parquet 冒烟验证。仅在已有 DuckDB 缓存时才使用：
+默认输出 `dist/runtime-windows-x64/`。脚本会校验锁定归档，编译 MSVC/COFF DuckDB，构建 `runtime\zentao.exe`，复制 PHP/扩展/ionCube，并执行 PHP 和 Parquet 冒烟验证。仅在已有 DuckDB 缓存时才使用：
 
 ```powershell
 .\scripts\windows\build.ps1 -SkipDuckDB
@@ -217,7 +217,7 @@ docker compose -f packaging/docker/compose.yaml --profile full config
 
 ```bash
 RUNTIME_ARCH=amd64 bash -c 'source scripts/build/common.sh; build_runtime_image'
-# 生成 zentao-runtime:runtime-linux-amd64
+# 生成 zentao:runtime-linux-amd64
 ```
 
 Docker 交付以 Linux amd64/arm64 原生 Runner 为基线；正式发布还应执行包校验、SBOM、签名和 Compose 冒烟测试。

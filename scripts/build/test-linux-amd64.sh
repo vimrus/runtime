@@ -20,7 +20,7 @@ docker run --detach --name "${container}" \
     --volume "${REPO_ROOT}/tests/fixtures/php:/app:ro" \
     --volume "${REPO_ROOT}/tests/fixtures/runtime:/runtime-config:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao-runtime serve --config /tmp/runtime.json' >/dev/null
+    -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao serve --config /tmp/runtime.json' >/dev/null
 
 for _ in $(seq 1 30); do
     if docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/healthz >/dev/null; then
@@ -49,32 +49,32 @@ docker exec "${container}" sh -c 'printf zentao-poc > /tmp/upload.txt && curl --
     | jq --exit-status '.name == "upload.txt" and .size == 10 and .error == 0' >/dev/null
 
 docker exec "${container}" stat -c '%a' /tmp/zentao-runtime.sock | grep -Fx '600'
-docker exec "${container}" zentao-runtime status --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao status --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.lifecycle.state == "ready" and .web.root == "/app"' >/dev/null
-docker exec "${container}" zentao-runtime health --deep --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.live == true and .ready == true and .deep == "ok"' >/dev/null
-docker exec "${container}" zentao-runtime health --deep --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.components[] | select(.name == "observability") | .status == "ok"' >/dev/null
 docker exec "${container}" sed -i 's/"idleTimeout": "30s"/"idleTimeout": "31s"/' /tmp/runtime.json
-docker exec "${container}" zentao-runtime reload --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao reload --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.reloaded == true and .restartRequired == false' >/dev/null
 docker exec "${container}" sed -i 's/"threads": 4/"threads": 5/' /tmp/runtime.json
-docker exec "${container}" zentao-runtime reload --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao reload --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.reloaded == false and .restartRequired == true' >/dev/null
-docker exec "${container}" zentao-runtime health --deep --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.live == true and .ready == true and .deep == "ok"' >/dev/null
-docker exec "${container}" zentao-runtime version \
+docker exec "${container}" zentao version \
     | jq --exit-status '.mode == "classic" and .php_zts == true and .zend_signals == false and .duckdb == "v2.10505.0"' >/dev/null
-docker exec "${container}" zentao-runtime php-cli -- -r 'echo PHP_VERSION;' \
+docker exec "${container}" zentao php-cli -- -r 'echo PHP_VERSION;' \
     | grep -E '^8\.4\.' >/dev/null
-docker exec "${container}" zentao-runtime php-cli -- -r 'exit(extension_loaded("ionCube Loader") ? 0 : 1);'
-docker exec "${container}" zentao-runtime flush-observability --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao php-cli -- -r 'exit(extension_loaded("ionCube Loader") ? 0 : 1);'
+docker exec "${container}" zentao flush-observability --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.dropped == 0' >/dev/null
-docker exec "${container}" zentao-runtime logs --since 5m --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao logs --since 5m --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status 'length >= 1 and .[0].message == "runtime started"' >/dev/null
-docker exec "${container}" zentao-runtime clean-observability --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao clean-observability --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.removedFiles >= 0 and .deletedDirs >= 0' >/dev/null
-docker exec "${container}" zentao-runtime collect-logs --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao collect-logs --control-socket /tmp/zentao-runtime.sock \
     | jq -r '.path' > /tmp/collect-path.txt
 docker exec "${container}" sh -c "tar -tzf $(cat /tmp/collect-path.txt) | grep -F 'summary.json'" >/dev/null
 
@@ -105,7 +105,7 @@ if [[ -n "${ZENTAO_APP_DIR:-${ZENTAO_POC_APP_DIR:-}}" ]]; then
         | grep -F 'No syntax errors detected'
 fi
 
-docker exec "${container}" zentao-runtime stop --control-socket /tmp/zentao-runtime.sock \
+docker exec "${container}" zentao stop --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.result == "stopping"' >/dev/null
 
 echo "Linux amd64 Runtime tests passed"

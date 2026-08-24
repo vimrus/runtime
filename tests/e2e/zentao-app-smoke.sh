@@ -46,7 +46,7 @@ docker run --detach --name "${container}" \
     --volume "${work}/app:/shared:rw" \
     --volume "${work}/runtime.json:/tmp/runtime.json:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'exec zentao-runtime serve --config /tmp/runtime.json --install-root /shared/app' >/dev/null
+    -c 'exec zentao serve --config /tmp/runtime.json --install-root /shared/app' >/dev/null
 
 ready=0
 for _ in $(seq 1 30); do

@@ -52,10 +52,10 @@ func main() {
 	if err := run(os.Args[1:]); err != nil {
 		var exitErr *exitError
 		if errors.As(err, &exitErr) {
-			fmt.Fprintln(os.Stderr, "zentao-runtime:", exitErr.message)
+		fmt.Fprintln(os.Stderr, "zentao:", exitErr.message)
 			os.Exit(exitErr.code)
 		}
-		fmt.Fprintln(os.Stderr, "zentao-runtime:", err)
+		fmt.Fprintln(os.Stderr, "zentao:", err)
 		os.Exit(1)
 	}
 }
@@ -77,7 +77,7 @@ func notRunningError(format string, args ...any) error {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return usageError("usage: zentao-runtime <serve|start|status|stop|reload|health|diagnose|upgrade|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|run-service>")
+		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|upgrade|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|run-service>")
 	}
 	switch args[0] {
 	case "serve", "start":
@@ -1085,14 +1085,14 @@ func controlCommand(operation string, args []string) error {
 func processFallback(pidFile string, stop bool) error {
 	pid, err := readPIDFile(pidFile)
 	if err != nil {
-		return notRunningError("zentao-runtime is not running: %v", err)
+		return notRunningError("zentao is not running: %v", err)
 	}
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return err
 	}
 	if err := process.Signal(syscall.Signal(0)); err != nil {
-		return notRunningError("zentao-runtime is not running: %v", err)
+		return notRunningError("zentao is not running: %v", err)
 	}
 	if stop {
 		if err := process.Signal(syscall.SIGTERM); err != nil {

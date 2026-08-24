@@ -36,7 +36,7 @@ jobs:
         run: scripts/native/build-linux.sh amd64
 
       - name: Verify no database drivers embedded
-        run: scripts/package/verify-no-db-driver.sh dist/runtime-linux-amd64/bin/zentao-runtime
+        run: scripts/package/verify-no-db-driver.sh dist/runtime-linux-amd64/bin/zentao
 
       - name: Test Classic mode and ionCube
         run: scripts/native/test-linux.sh amd64

@@ -5,7 +5,7 @@ set -Eeuo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly VERSION_LOCK="${REPO_ROOT}/versions.lock.json"
 readonly RUNTIME_ARCH="${RUNTIME_ARCH:-${POC_ARCH:-amd64}}"
-readonly RUNTIME_IMAGE="zentao-runtime:runtime-linux-${RUNTIME_ARCH}"
+readonly RUNTIME_IMAGE="zentao:runtime-linux-${RUNTIME_ARCH}"
 readonly RUNTIME_GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 readonly RUNTIME_DEBIAN_MIRROR="${DEBIAN_MIRROR:-http://mirrors.ustc.edu.cn/debian}"
 readonly RUNTIME_DEBIAN_SECURITY_MIRROR="${DEBIAN_SECURITY_MIRROR:-http://mirrors.ustc.edu.cn/debian-security}"

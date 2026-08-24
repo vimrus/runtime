@@ -128,7 +128,7 @@ RUN export CGO_CFLAGS="$(/opt/zentao/php/bin/php-config --includes)" \
     && go build \
         -tags "duckdb nobadger nomysql nopgx nowatcher nobrotli nomercure" \
         -ldflags "-s -w -X main.runtimeVersion=runtime -X main.frankenPHPVersion=${FRANKENPHP_VERSION} -X main.caddyVersion=${CADDY_VERSION}" \
-        -o /opt/zentao/bin/zentao-runtime \
+        -o /opt/zentao/bin/zentao \
         ./cmd/zentao-runtime
 
 RUN find \
@@ -170,7 +170,7 @@ RUN mkdir -p /opt/zentao/logs
 COPY --from=builder /opt/zentao /opt/zentao
 COPY --chmod=0755 packaging/docker/healthcheck.sh /opt/zentao/packaging/docker/healthcheck.sh
 ENV PATH="/opt/zentao/bin:/opt/zentao/php/bin:${PATH}"
-ENTRYPOINT ["/opt/zentao/bin/zentao-runtime"]
+ENTRYPOINT ["/opt/zentao/bin/zentao"]
 
 FROM scratch AS artifact
 COPY --from=builder /opt/zentao /

@@ -88,7 +88,7 @@ docker run --detach --name "${container}" \
     --volume "${work}/app:/shared:rw" \
     --volume "${work}/runtime.json:/tmp/runtime.json:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'mkdir -p /shared/logs /shared/observability /shared/spool && exec zentao-runtime serve --config /tmp/runtime.json --install-root /shared/app' >/dev/null
+    -c 'mkdir -p /shared/logs /shared/observability /shared/spool && exec zentao serve --config /tmp/runtime.json --install-root /shared/app' >/dev/null
 
 wait_ready
 
@@ -96,7 +96,7 @@ docker exec "${container}" curl --fail --silent "http://127.0.0.1:8080/index.php
 docker exec "${container}" curl --fail --silent "http://127.0.0.1:8080/index.php?x=2" >/dev/null
 sleep 1
 
-docker exec "${container}" zentao-runtime stop --control-socket /tmp/zentao.sock >/dev/null
+docker exec "${container}" zentao stop --control-socket /tmp/zentao.sock >/dev/null
 if ! docker wait "${container}" >/dev/null 2>&1; then
     echo "runtime did not stop cleanly" >&2
     exit 1
@@ -126,7 +126,7 @@ if ! docker start "${container}" >/dev/null; then
 fi
 wait_ready
 
-first="$(docker exec "${container}" zentao-runtime convert-jsonl --control-socket /tmp/zentao.sock)"
+first="$(docker exec "${container}" zentao convert-jsonl --control-socket /tmp/zentao.sock)"
 echo "first conversion: ${first}"
 echo "${first}" | jq -e '.events > 0 and .segments >= 1 and .malformed == 0' >/dev/null \
     || { echo "expected converted events from access/runtime JSONL" >&2; exit 1; }
@@ -136,7 +136,7 @@ docker exec "${container}" sh -c "find /shared/observability/logs/schema=v1 -typ
 docker exec "${container}" test -f "/shared/logs/.jsonl-state-${node_id}.json" \
     || { echo "converter state file missing" >&2; exit 1; }
 
-second="$(docker exec "${container}" zentao-runtime convert-jsonl --control-socket /tmp/zentao.sock)"
+second="$(docker exec "${container}" zentao convert-jsonl --control-socket /tmp/zentao.sock)"
 echo "second conversion: ${second}"
 echo "${second}" | jq -e '.events == 0 and .segments == 0' >/dev/null \
     || { echo "conversion must be idempotent" >&2; exit 1; }

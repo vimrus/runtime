@@ -104,7 +104,7 @@ try {
     go build `
         -tags "duckdb duckdb_use_static_lib nobadger nomysql nopgx nowatcher nobrotli nomercure" `
         -ldflags "-s -w -X main.runtimeVersion=dev -X main.frankenPHPVersion=$($Lock.frankenphp.version) -X main.caddyVersion=$($Lock.caddy.version) -extldflags=-fuse-ld=lld" `
-        -o (Join-Path $Staging "runtime\zentao-runtime.exe") `
+        -o (Join-Path $Staging "runtime\zentao.exe") `
         .\cmd\zentao-runtime
 } finally {
     Pop-Location

@@ -52,7 +52,7 @@ start_node() {
         --entrypoint sh \
         --volume "${tmpdir}:/shared:rw" \
         "${RUNTIME_IMAGE}" \
-        -c "exec zentao-runtime serve --config ${config} --install-root ${install_root}" >/dev/null
+        -c "exec zentao serve --config ${config} --install-root ${install_root}" >/dev/null
 }
 
 wait_ready() {
@@ -82,19 +82,19 @@ wait_ready "${container_b}" 8081
 [[ "$(serve_version "${container_b}" 8081)" == "v1" ]]
 
 # Rolling upgrade node B first.
-docker exec "${container_b}" zentao-runtime upgrade \
+docker exec "${container_b}" zentao upgrade \
     --action prepare --release /shared/node-b/app/releases/v2 \
     --control-socket /tmp/b.sock | jq --exit-status '.state == "staged"' >/dev/null
-docker exec "${container_b}" zentao-runtime upgrade \
+docker exec "${container_b}" zentao upgrade \
     --action apply --control-socket /tmp/b.sock | jq --exit-status '.state == "committed"' >/dev/null
 [[ "$(serve_version "${container_b}" 8081)" == "v2" ]]
 [[ "$(serve_version "${container_a}" 8080)" == "v1" ]]
 
 # Then node A.
-docker exec "${container_a}" zentao-runtime upgrade \
+docker exec "${container_a}" zentao upgrade \
     --action prepare --release /shared/node-a/app/releases/v2 \
     --control-socket /tmp/a.sock | jq --exit-status '.state == "staged"' >/dev/null
-docker exec "${container_a}" zentao-runtime upgrade \
+docker exec "${container_a}" zentao upgrade \
     --action apply --control-socket /tmp/a.sock | jq --exit-status '.state == "committed"' >/dev/null
 [[ "$(serve_version "${container_a}" 8080)" == "v2" ]]
 [[ "$(serve_version "${container_b}" 8081)" == "v2" ]]

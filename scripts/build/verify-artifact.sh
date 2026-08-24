@@ -9,7 +9,7 @@ fi
 
 readonly artifact_root="$1"
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly runtime_bin="${artifact_root}/bin/zentao-runtime"
+readonly runtime_bin="${artifact_root}/bin/zentao"
 readonly libphp="${artifact_root}/php/lib/libphp.so"
 readonly loader="${artifact_root}/php/lib/ioncube/ioncube_loader_lin_8.4_ts.so"
 

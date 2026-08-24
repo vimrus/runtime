@@ -33,8 +33,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! -x "${PREFIX}/bin/zentao-runtime" ]] && [[ "${DRY_RUN}" != "1" ]]; then
-    echo "zentao-runtime binary not found under ${PREFIX}/bin" >&2
+if [[ ! -x "${PREFIX}/bin/zentao" ]] && [[ "${DRY_RUN}" != "1" ]]; then
+    echo "zentao binary not found under ${PREFIX}/bin" >&2
     exit 1
 fi
 if [[ "${PREFIX}" != /* ]]; then

@@ -32,7 +32,7 @@ docker run --detach --name "${container}" \
     --volume "${repo_root}/tests/fixtures/php:/app:ro" \
     --volume "${repo_root}/tests/fixtures/runtime:/runtime-config:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao-runtime serve --config /tmp/runtime.json' >/dev/null
+    -c 'cp /runtime-config/runtime.json /tmp/runtime.json && exec zentao serve --config /tmp/runtime.json' >/dev/null
 
 for _ in $(seq 1 30); do
     if docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/healthz >/dev/null; then
@@ -46,7 +46,7 @@ docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/r
 docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/ \
     | jq --exit-status '.zts == true and .ioncube == true and (.php | startswith("8.4."))' >/dev/null
 docker exec "${container}" php --ri 'ionCube Loader' | grep -F 'ionCube Loader'
-docker exec "${container}" zentao-runtime version \
+docker exec "${container}" zentao version \
     | jq --exit-status '.mode == "classic" and .php_zts == true and .zend_signals == false and .duckdb == "v2.10505.0"' >/dev/null
 
 mkdir -p "${synthetic_dir}/open"
