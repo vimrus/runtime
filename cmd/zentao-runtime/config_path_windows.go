@@ -2,6 +2,19 @@
 
 package main
 
+import (
+	"os"
+	"path/filepath"
+)
+
+func defaultInstallRoot() string {
+	executable, err := os.Executable()
+	if err == nil {
+		return filepath.Dir(filepath.Dir(executable))
+	}
+	return `C:\Program Files\ZenTao`
+}
+
 func defaultConfigPath() string {
-	return `C:\Program Files\ZenTao\config\runtime.json`
+	return filepath.Join(defaultInstallRoot(), "config", "runtime.toml")
 }

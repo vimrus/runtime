@@ -64,7 +64,7 @@ else
 fi
 if [[ "${binary_ok}" != "1" ]]; then
     echo "runtime stage is missing ${runtime_binary}: ${runtime_stage}" >&2
-    echo "build it first with scripts/native/build-linux.sh amd64 or scripts/windows/build.ps1" >&2
+    echo "build it first with scripts/native/build-linux.sh or scripts/windows/build.ps1" >&2
     exit 1
 fi
 
@@ -91,42 +91,40 @@ mkdir -p "${output_dir}/run" "${output_dir}/logs" "${output_dir}/data" \
 if [[ "${platform}" == "windows" ]]; then
     mkdir -p "${output_dir}/runtime/ext" "${output_dir}/bin"
     release_name="$(basename "${staged_release}")"
-    cat > "${output_dir}/config/runtime.json.tpl" <<'EOF'
-{
-  "schemaVersion": 1,
-  "runtime": {
-    "controlSocket": "\\\\.\\pipe\\zentao-runtime",
-    "pidFile": "@ABS_ROOT@\\run\\runtime.pid",
-    "drainTimeout": "30s",
-    "logPath": "@ABS_ROOT@\\logs\\runtime.log",
-    "logMaxBytes": 16777216,
-    "logMaxBackups": 5
-  },
-  "web": {
-    "root": "@ABS_ROOT@\\app\\releases\\@RELEASE@\\www",
-    "listen": "0.0.0.0:8080",
-    "threads": 8,
-    "readHeaderTimeout": "10s",
-    "idleTimeout": "30s",
-    "maxHeaderBytes": 16384
-  },
-  "observability": {
-    "enabled": true,
-    "datasetRoot": "@ABS_ROOT@\\observability",
-    "spoolPath": "@ABS_ROOT@\\spool\\observability",
-    "maxSpoolBytes": 1073741824,
-    "maxBatchRows": 10000,
-    "maxBatchBytes": 16777216,
-    "flushInterval": "60s",
-    "metricsDays": 30,
-    "logDays": 7,
-    "jsonlConvertInterval": "1h",
-    "jsonlConvertSources": ["access", "runtime"],
-    "jsonlKeepDays": 7
-  }
-}
+cat > "${output_dir}/config/runtime.toml.tpl" <<'EOF'
+schemaVersion = 1
+
+[runtime]
+controlSocket = "\\\\.\\pipe\\zentao-runtime"
+pidFile = "run\\runtime.pid"
+drainTimeout = "30s"
+logPath = "logs\\runtime.log"
+logMaxBytes = 16777216
+logMaxBackups = 5
+
+[web]
+root = "app\\releases\\@RELEASE@\\www"
+listen = "0.0.0.0:8080"
+threads = 8
+readHeaderTimeout = "10s"
+idleTimeout = "30s"
+maxHeaderBytes = 16384
+
+[observability]
+enabled = true
+datasetRoot = "observability"
+spoolPath = "spool\\observability"
+maxSpoolBytes = 1073741824
+maxBatchRows = 10000
+maxBatchBytes = 16777216
+flushInterval = "60s"
+metricsDays = 30
+logDays = 7
+jsonlConvertInterval = "1h"
+jsonlConvertSources = ["access", "runtime"]
+jsonlKeepDays = 7
 EOF
-    sed -i "s|@RELEASE@|${release_name}|" "${output_dir}/config/runtime.json.tpl"
+    sed -i "s|@RELEASE@|${release_name}|" "${output_dir}/config/runtime.toml.tpl"
     cat > "${output_dir}/config/php.ini.tpl" <<'EOF'
 zend_extension=@ABS_ROOT@\runtime\ioncube_loader_win_8.4.dll
 extension_dir=@ABS_ROOT@\runtime\ext
@@ -161,10 +159,10 @@ param([string]$Root = "")
 if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 $Root = (Resolve-Path $Root).Path.TrimEnd('\')
 New-Item -ItemType Directory -Force -Path "$Root\run", "$Root\logs", "$Root\config\conf.d" | Out-Null
-$runtime = Get-Content "$Root\config\runtime.json.tpl" -Raw
+$runtime = Get-Content "$Root\config\runtime.toml.tpl" -Raw
 $runtime = $runtime.Replace('@ABS_ROOT@', $Root.Replace('\', '\\'))
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-[System.IO.File]::WriteAllText("$Root\config\runtime.json", $runtime, $utf8NoBom)
+[System.IO.File]::WriteAllText("$Root\config\runtime.toml", $runtime, $utf8NoBom)
 $php = Get-Content "$Root\config\php.ini.tpl" -Raw
 $php = $php.Replace('@ABS_ROOT@', $Root)
 [System.IO.File]::WriteAllText("$Root\config\php.ini", $php, $utf8NoBom)
@@ -194,40 +192,38 @@ EOF
     exit 0
 fi
 
-cat > "${output_dir}/config/runtime.json.tpl" <<EOF
-{
-  "schemaVersion": 1,
-  "runtime": {
-    "controlSocket": "@ABS_ROOT@/run/runtime.sock",
-    "pidFile": "@ABS_ROOT@/run/runtime.pid",
-    "drainTimeout": "30s",
-    "logPath": "@ABS_ROOT@/logs/runtime.log",
-    "logMaxBytes": 16777216,
-    "logMaxBackups": 5
-  },
-  "web": {
-    "root": "@ABS_ROOT@/app/zentaopms/www",
-    "listen": "0.0.0.0:8080",
-    "threads": 8,
-    "readHeaderTimeout": "10s",
-    "idleTimeout": "30s",
-    "maxHeaderBytes": 16384
-  },
-  "observability": {
-    "enabled": true,
-    "datasetRoot": "@ABS_ROOT@/observability",
-    "spoolPath": "@ABS_ROOT@/spool/observability",
-    "maxSpoolBytes": 1073741824,
-    "maxBatchRows": 10000,
-    "maxBatchBytes": 16777216,
-    "flushInterval": "60s",
-    "metricsDays": 30,
-    "logDays": 7,
-    "jsonlConvertInterval": "1h",
-    "jsonlConvertSources": ["access", "runtime"],
-    "jsonlKeepDays": 7
-  }
-}
+cat > "${output_dir}/config/runtime.toml.tpl" <<EOF
+schemaVersion = 1
+
+[runtime]
+controlSocket = "run/runtime.sock"
+pidFile = "run/runtime.pid"
+drainTimeout = "30s"
+logPath = "logs/runtime.log"
+logMaxBytes = 16777216
+logMaxBackups = 5
+
+[web]
+root = "app/zentaopms/www"
+listen = "0.0.0.0:8080"
+threads = 8
+readHeaderTimeout = "10s"
+idleTimeout = "30s"
+maxHeaderBytes = 16384
+
+[observability]
+enabled = true
+datasetRoot = "observability"
+spoolPath = "spool/observability"
+maxSpoolBytes = 1073741824
+maxBatchRows = 10000
+maxBatchBytes = 16777216
+flushInterval = "60s"
+metricsDays = 30
+logDays = 7
+jsonlConvertInterval = "1h"
+jsonlConvertSources = ["access", "runtime"]
+jsonlKeepDays = 7
 EOF
 
 cat > "${output_dir}/config/php.ini.tpl" <<'EOF'
@@ -256,9 +252,9 @@ set -Eeuo pipefail
 root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 root="$(cd "${root}" && pwd)"
 mkdir -p "${root}/run" "${root}/logs" "${root}/config/conf.d"
-sed "s|@ABS_ROOT@|${root}|g" "${root}/config/runtime.json.tpl" > "${root}/config/runtime.json"
+sed "s|@ABS_ROOT@|${root}|g" "${root}/config/runtime.toml.tpl" > "${root}/config/runtime.toml"
 sed "s|@ABS_ROOT@|${root}|g" "${root}/config/php.ini.tpl" > "${root}/config/php.ini"
-chmod 600 "${root}/config/runtime.json" "${root}/config/php.ini"
+chmod 600 "${root}/config/runtime.toml" "${root}/config/php.ini"
 EOF
 chmod +x "${output_dir}/bin/render-config.sh"
 

@@ -32,7 +32,7 @@ docker run --detach --name "${container}" \
     --volume "${repo_root}/tests/fixtures/php:/app:ro" \
     --volume "${repo_root}/tests/fixtures/runtime:/runtime-config:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'cp /runtime-config/runtime.json /opt/zentao/config/runtime.json && exec zentao serve' >/dev/null
+    -c 'cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve' >/dev/null
 
 for _ in $(seq 1 30); do
     if docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/healthz >/dev/null; then

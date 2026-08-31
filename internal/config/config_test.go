@@ -9,12 +9,19 @@ import (
 )
 
 func TestLoadAppliesDefaultsAndEnvironment(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime.json")
-	content := `{
-  "schemaVersion": 1,
-  "runtime": {"controlSocket": "/tmp/zentao.sock", "pidFile": "/tmp/zentao.pid", "drainTimeout": "15s"},
-  "web": {"root": "/srv/zentao/www", "listen": "127.0.0.1:8081", "threads": 8, "idleTimeout": "45s"}
-}`
+	path := filepath.Join(t.TempDir(), "runtime.toml")
+	content := `schemaVersion = 1
+
+[runtime]
+controlSocket = "/tmp/zentao.sock"
+pidFile = "/tmp/zentao.pid"
+drainTimeout = "15s"
+
+[web]
+root = "/srv/zentao/www"
+listen = "127.0.0.1:8081"
+threads = 8
+idleTimeout = "45s"`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -30,18 +37,41 @@ func TestLoadAppliesDefaultsAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadExampleTOML(t *testing.T) {
+	config, err := Load(filepath.Join("..", "..", "config", "runtime.example.toml"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SchemaVersion != SchemaVersion || config.Web.Threads != 4 || len(config.Queue.Workers) != 3 {
+		t.Fatalf("example configuration was not loaded: %#v", config)
+	}
+	if !filepath.IsAbs(config.Web.Root) || !filepath.IsAbs(config.Runtime.LogPath) || !filepath.IsAbs(config.Observability.DatasetRoot) {
+		t.Fatalf("relative paths were not resolved: %#v", config)
+	}
+}
+
+func TestLoadRejectsJSONConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.toml")
+	if err := os.WriteFile(path, []byte(`{"schemaVersion":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, nil); err == nil {
+		t.Fatal("expected legacy JSON configuration to be rejected")
+	}
+}
+
 func TestLoadRejectsUnknownAndInvalidFields(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime.json")
-	content := `{"schemaVersion":1,"web":{"root":"/app","unknown":true}}`
+	path := filepath.Join(t.TempDir(), "runtime.toml")
+	content := "schemaVersion = 1\n[web]\nroot = \"/app\"\nunknown = true\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Load(path, nil)
-	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+	if err == nil || (!strings.Contains(err.Error(), "unknown field") && !strings.Contains(err.Error(), "missing in the target struct")) {
 		t.Fatalf("expected unknown-field error, got %v", err)
 	}
 
-	content = `{"schemaVersion":2,"web":{"root":"/app"}}`
+	content = "schemaVersion = 2\n[web]\nroot = \"/app\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -78,21 +108,22 @@ func TestRestartRequired(t *testing.T) {
 }
 
 func TestLoadAppliesLogAndIdentitySettings(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "runtime.json")
-	content := `{
-  "schemaVersion": 1,
-  "runtime": {
-    "controlSocket": "/run/zentao/runtime.sock",
-    "pidFile": "/run/zentao/runtime.pid",
-    "auditLog": "/var/log/zentao/audit.log",
-    "logPath": "/var/log/zentao/runtime.log",
-    "logMaxBytes": 1048576,
-    "logMaxBackups": 3,
-    "nodeID": "node-a",
-    "clusterID": "cluster-prod-1"
-  },
-  "web": {"root": "/opt/zentao/app/zentaopms/www", "listen": "127.0.0.1:8080"}
-}`
+	path := filepath.Join(t.TempDir(), "runtime.toml")
+	content := `schemaVersion = 1
+
+[runtime]
+controlSocket = "/run/zentao/runtime.sock"
+pidFile = "/run/zentao/runtime.pid"
+auditLog = "/var/log/zentao/audit.log"
+logPath = "/var/log/zentao/runtime.log"
+logMaxBytes = 1048576
+logMaxBackups = 3
+nodeID = "node-a"
+clusterID = "cluster-prod-1"
+
+[web]
+root = "/opt/zentao/app/zentaopms/www"
+listen = "127.0.0.1:8080"`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -139,16 +170,24 @@ func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 	if err := config.Validate(); err == nil {
 		t.Fatal("queue enabled without workers must be rejected")
 	}
-	loaded, err := Load(pathWithContent(t, `{
-  "schemaVersion": 1,
-  "runtime": {"controlSocket": "/run/zentao/runtime.sock", "pidFile": "/run/zentao/runtime.pid"},
-  "web": {"root": "/opt/zentao/app/zentaopms/www", "listen": "127.0.0.1:8080"},
-  "queue": {
-    "enabled": true,
-    "bridgeBaseURL": "http://127.0.0.1:8081/internal/runtime/queue/v1",
-    "workers": [{"name": "mail", "concurrency": 2}]
-  }
-}`), []string{"ZENTAO_QUEUE_TOKEN=secret"})
+	loaded, err := Load(pathWithContent(t, `schemaVersion = 1
+
+[runtime]
+controlSocket = "/run/zentao/runtime.sock"
+pidFile = "/run/zentao/runtime.pid"
+
+[web]
+root = "/opt/zentao/app/zentaopms/www"
+listen = "127.0.0.1:8080"
+
+[queue]
+enabled = true
+bridgeBaseURL = "http://127.0.0.1:8081/internal/runtime/queue/v1"
+
+[[queue.workers]]
+name = "mail"
+concurrency = 2
+`), []string{"ZENTAO_QUEUE_TOKEN=secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,19 +223,24 @@ func TestObservabilityJSONLDefaultsAndValidation(t *testing.T) {
 	if err := config.Validate(); err == nil {
 		t.Fatal("unsupported jsonl source must be rejected")
 	}
-	loaded, err := Load(pathWithContent(t, `{
-  "schemaVersion": 1,
-  "runtime": {"controlSocket": "/run/zentao/runtime.sock", "pidFile": "/run/zentao/runtime.pid"},
-  "web": {"root": "/opt/zentao/app/zentaopms/www", "listen": "127.0.0.1:8080"},
-  "observability": {
-    "enabled": true,
-    "datasetRoot": "/opt/zentao/observability",
-    "spoolPath": "/opt/zentao/spool/observability",
-    "jsonlConvertInterval": "30m",
-    "jsonlConvertSources": ["access"],
-    "jsonlKeepDays": 3
-  }
-}`), nil)
+	loaded, err := Load(pathWithContent(t, `schemaVersion = 1
+
+[runtime]
+controlSocket = "/run/zentao/runtime.sock"
+pidFile = "/run/zentao/runtime.pid"
+
+[web]
+root = "/opt/zentao/app/zentaopms/www"
+listen = "127.0.0.1:8080"
+
+[observability]
+enabled = true
+datasetRoot = "/opt/zentao/observability"
+spoolPath = "/opt/zentao/spool/observability"
+jsonlConvertInterval = "30m"
+jsonlConvertSources = ["access"]
+jsonlKeepDays = 3
+`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +251,7 @@ func TestObservabilityJSONLDefaultsAndValidation(t *testing.T) {
 
 func pathWithContent(t *testing.T, content string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "runtime.json")
+	path := filepath.Join(t.TempDir(), "runtime.toml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}

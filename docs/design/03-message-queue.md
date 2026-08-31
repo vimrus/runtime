@@ -1334,7 +1334,7 @@ PHP Handler Contract 的基础上增加 Redis、NATS 或其他传输，而不重
 - Queue Bridge v1 DTO、Fake Bridge 与 Go 客户端已实现并测试；本机传输的
   鉴权、批量和版本协商见 `docs/queue-bridge-v1-contract.md`。
 - 有界 Worker Pool、租约/fencing、Wakeup 与自适应轮询、Reaper 和
-  Scheduler 注册表已实现并接入 Host；`runtime.json` 的 `queue` 配置段已
+  Scheduler 注册表已实现并接入 Host；`runtime.toml` 的 `queue` 配置段已
   冻结默认值。
 - PHP Queue Service、DAO、管理界面与首批 Handler 迁移属于
   `docs/development/01-zentao-application-adaptation-plan.md`，尚未实施；真实 MySQL/

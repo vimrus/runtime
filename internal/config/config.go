@@ -2,10 +2,7 @@
 package config
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/url"
 	"os"
@@ -13,74 +10,76 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const SchemaVersion = 1
 
 type Config struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	Runtime       Runtime       `json:"runtime"`
-	Web           Web           `json:"web"`
-	Queue         Queue         `json:"queue,omitempty"`
-	Observability Observability `json:"observability,omitempty"`
+	SchemaVersion int           `json:"schemaVersion" toml:"schemaVersion"`
+	Runtime       Runtime       `json:"runtime" toml:"runtime"`
+	Web           Web           `json:"web" toml:"web"`
+	Queue         Queue         `json:"queue,omitempty" toml:"queue,omitempty"`
+	Observability Observability `json:"observability,omitempty" toml:"observability,omitempty"`
 }
 
 type Runtime struct {
-	ControlSocket string        `json:"controlSocket"`
-	PIDFile       string        `json:"pidFile"`
-	DrainTimeout  time.Duration `json:"drainTimeout"`
-	AuditLog      string        `json:"auditLog,omitempty"`
-	LogPath       string        `json:"logPath,omitempty"`
-	LogMaxBytes   int64         `json:"logMaxBytes,omitempty"`
-	LogMaxBackups int           `json:"logMaxBackups,omitempty"`
-	NodeID        string        `json:"nodeID,omitempty"`
-	ClusterID     string        `json:"clusterID,omitempty"`
+	ControlSocket string        `json:"controlSocket" toml:"controlSocket"`
+	PIDFile       string        `json:"pidFile" toml:"pidFile"`
+	DrainTimeout  time.Duration `json:"drainTimeout" toml:"drainTimeout"`
+	AuditLog      string        `json:"auditLog,omitempty" toml:"auditLog,omitempty"`
+	LogPath       string        `json:"logPath,omitempty" toml:"logPath,omitempty"`
+	LogMaxBytes   int64         `json:"logMaxBytes,omitempty" toml:"logMaxBytes,omitempty"`
+	LogMaxBackups int           `json:"logMaxBackups,omitempty" toml:"logMaxBackups,omitempty"`
+	NodeID        string        `json:"nodeID,omitempty" toml:"nodeID,omitempty"`
+	ClusterID     string        `json:"clusterID,omitempty" toml:"clusterID,omitempty"`
 }
 
 type Web struct {
-	Root              string        `json:"root"`
-	Listen            string        `json:"listen"`
-	Threads           int           `json:"threads"`
-	ReadHeaderTimeout time.Duration `json:"readHeaderTimeout"`
-	IdleTimeout       time.Duration `json:"idleTimeout"`
-	MaxHeaderBytes    int           `json:"maxHeaderBytes"`
-	AccessLog         string        `json:"accessLog,omitempty"` // deprecated: runtime now derives per-node access log paths
+	Root              string        `json:"root" toml:"root"`
+	Listen            string        `json:"listen" toml:"listen"`
+	Threads           int           `json:"threads" toml:"threads"`
+	ReadHeaderTimeout time.Duration `json:"readHeaderTimeout" toml:"readHeaderTimeout"`
+	IdleTimeout       time.Duration `json:"idleTimeout" toml:"idleTimeout"`
+	MaxHeaderBytes    int           `json:"maxHeaderBytes" toml:"maxHeaderBytes"`
+	AccessLog         string        `json:"accessLog,omitempty" toml:"accessLog,omitempty"` // deprecated: runtime now derives per-node access log paths
 }
 
 type Queue struct {
-	Enabled           bool          `json:"enabled"`
-	BridgeBaseURL     string        `json:"bridgeBaseURL"`
-	BridgeToken       string        `json:"bridgeToken,omitempty"`
-	RequestTimeout    time.Duration `json:"requestTimeout"`
-	ClaimBatch        int           `json:"claimBatch"`
-	LeaseSeconds      int           `json:"leaseSeconds"`
-	HeartbeatInterval time.Duration `json:"heartbeatInterval"`
-	ReapInterval      time.Duration `json:"reapInterval"`
-	ReapBatch         int           `json:"reapBatch"`
-	DrainTimeout      time.Duration `json:"drainTimeout"`
-	Workers           []QueueWorker `json:"workers"`
+	Enabled           bool          `json:"enabled" toml:"enabled"`
+	BridgeBaseURL     string        `json:"bridgeBaseURL" toml:"bridgeBaseURL"`
+	BridgeToken       string        `json:"bridgeToken,omitempty" toml:"bridgeToken,omitempty"`
+	RequestTimeout    time.Duration `json:"requestTimeout" toml:"requestTimeout"`
+	ClaimBatch        int           `json:"claimBatch" toml:"claimBatch"`
+	LeaseSeconds      int           `json:"leaseSeconds" toml:"leaseSeconds"`
+	HeartbeatInterval time.Duration `json:"heartbeatInterval" toml:"heartbeatInterval"`
+	ReapInterval      time.Duration `json:"reapInterval" toml:"reapInterval"`
+	ReapBatch         int           `json:"reapBatch" toml:"reapBatch"`
+	DrainTimeout      time.Duration `json:"drainTimeout" toml:"drainTimeout"`
+	Workers           []QueueWorker `json:"workers" toml:"workers"`
 }
 
 type QueueWorker struct {
-	Name        string        `json:"name"`
-	Concurrency int           `json:"concurrency"`
-	MinPoll     time.Duration `json:"minPoll"`
-	MaxPoll     time.Duration `json:"maxPoll"`
+	Name        string        `json:"name" toml:"name"`
+	Concurrency int           `json:"concurrency" toml:"concurrency"`
+	MinPoll     time.Duration `json:"minPoll" toml:"minPoll"`
+	MaxPoll     time.Duration `json:"maxPoll" toml:"maxPoll"`
 }
 
 type Observability struct {
-	Enabled              bool          `json:"enabled"`
-	DatasetRoot          string        `json:"datasetRoot"`
-	SpoolPath            string        `json:"spoolPath"`
-	MaxSpoolBytes        int64         `json:"maxSpoolBytes"`
-	MaxBatchRows         int           `json:"maxBatchRows"`
-	MaxBatchBytes        int64         `json:"maxBatchBytes"`
-	FlushInterval        time.Duration `json:"flushInterval"`
-	MetricsDays          int           `json:"metricsDays"`
-	LogDays              int           `json:"logDays"`
-	JSONLConvertInterval time.Duration `json:"jsonlConvertInterval,omitempty"`
-	JSONLConvertSources  []string      `json:"jsonlConvertSources,omitempty"`
-	JSONLKeepDays        int           `json:"jsonlKeepDays,omitempty"`
+	Enabled              bool          `json:"enabled" toml:"enabled"`
+	DatasetRoot          string        `json:"datasetRoot" toml:"datasetRoot"`
+	SpoolPath            string        `json:"spoolPath" toml:"spoolPath"`
+	MaxSpoolBytes        int64         `json:"maxSpoolBytes" toml:"maxSpoolBytes"`
+	MaxBatchRows         int           `json:"maxBatchRows" toml:"maxBatchRows"`
+	MaxBatchBytes        int64         `json:"maxBatchBytes" toml:"maxBatchBytes"`
+	FlushInterval        time.Duration `json:"flushInterval" toml:"flushInterval"`
+	MetricsDays          int           `json:"metricsDays" toml:"metricsDays"`
+	LogDays              int           `json:"logDays" toml:"logDays"`
+	JSONLConvertInterval time.Duration `json:"jsonlConvertInterval,omitempty" toml:"jsonlConvertInterval,omitempty"`
+	JSONLConvertSources  []string      `json:"jsonlConvertSources,omitempty" toml:"jsonlConvertSources,omitempty"`
+	JSONLKeepDays        int           `json:"jsonlKeepDays,omitempty" toml:"jsonlKeepDays,omitempty"`
 }
 
 type Overrides struct {
@@ -161,6 +160,13 @@ func Load(path string, environ []string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	configRoot, err := filepath.Abs(filepath.Dir(filepath.Dir(path)))
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve runtime configuration root: %w", err)
+	}
+	if err := config.resolvePaths(configRoot); err != nil {
+		return Config{}, err
+	}
 	config, err = ApplyEnvironment(config, environ)
 	if err != nil {
 		return Config{}, err
@@ -171,77 +177,98 @@ func Load(path string, environ []string) (Config, error) {
 	return config, nil
 }
 
+// resolvePaths expands paths relative to the installation root. Keeping this
+// normalization at the configuration boundary lets the rest of Runtime use
+// absolute paths without exposing the installation prefix in TOML.
+func (c *Config) resolvePaths(root string) error {
+	if root == "" {
+		return fmt.Errorf("runtime configuration root is empty")
+	}
+	resolve := func(path *string) {
+		if *path == "" || filepath.IsAbs(*path) || strings.HasPrefix(*path, `\\`) {
+			return
+		}
+		*path = filepath.Join(root, *path)
+	}
+	resolve(&c.Runtime.ControlSocket)
+	resolve(&c.Runtime.PIDFile)
+	resolve(&c.Runtime.AuditLog)
+	resolve(&c.Runtime.LogPath)
+	resolve(&c.Web.Root)
+	resolve(&c.Web.AccessLog)
+	resolve(&c.Observability.DatasetRoot)
+	resolve(&c.Observability.SpoolPath)
+	return nil
+}
+
 func decode(data []byte) (Config, error) {
 	type rawRuntime struct {
-		ControlSocket *string `json:"controlSocket"`
-		PIDFile       *string `json:"pidFile"`
-		DrainTimeout  *string `json:"drainTimeout"`
-		AuditLog      *string `json:"auditLog"`
-		LogPath       *string `json:"logPath"`
-		LogMaxBytes   *int64  `json:"logMaxBytes"`
-		LogMaxBackups *int    `json:"logMaxBackups"`
-		NodeID        *string `json:"nodeID"`
-		ClusterID     *string `json:"clusterID"`
+		ControlSocket *string `toml:"controlSocket"`
+		PIDFile       *string `toml:"pidFile"`
+		DrainTimeout  *string `toml:"drainTimeout"`
+		AuditLog      *string `toml:"auditLog"`
+		LogPath       *string `toml:"logPath"`
+		LogMaxBytes   *int64  `toml:"logMaxBytes"`
+		LogMaxBackups *int    `toml:"logMaxBackups"`
+		NodeID        *string `toml:"nodeID"`
+		ClusterID     *string `toml:"clusterID"`
 	}
 	type rawWeb struct {
-		Root              *string `json:"root"`
-		Listen            *string `json:"listen"`
-		Threads           *int    `json:"threads"`
-		ReadHeaderTimeout *string `json:"readHeaderTimeout"`
-		IdleTimeout       *string `json:"idleTimeout"`
-		MaxHeaderBytes    *int    `json:"maxHeaderBytes"`
-		AccessLog         *string `json:"accessLog"`
+		Root              *string `toml:"root"`
+		Listen            *string `toml:"listen"`
+		Threads           *int    `toml:"threads"`
+		ReadHeaderTimeout *string `toml:"readHeaderTimeout"`
+		IdleTimeout       *string `toml:"idleTimeout"`
+		MaxHeaderBytes    *int    `toml:"maxHeaderBytes"`
+		AccessLog         *string `toml:"accessLog"`
 	}
 	type rawQueueWorker struct {
-		Name        *string `json:"name"`
-		Concurrency *int    `json:"concurrency"`
-		MinPoll     *string `json:"minPoll"`
-		MaxPoll     *string `json:"maxPoll"`
+		Name        *string `toml:"name"`
+		Concurrency *int    `toml:"concurrency"`
+		MinPoll     *string `toml:"minPoll"`
+		MaxPoll     *string `toml:"maxPoll"`
 	}
 	type rawQueue struct {
-		Enabled           *bool             `json:"enabled"`
-		BridgeBaseURL     *string           `json:"bridgeBaseURL"`
-		BridgeToken       *string           `json:"bridgeToken"`
-		RequestTimeout    *string           `json:"requestTimeout"`
-		ClaimBatch        *int              `json:"claimBatch"`
-		LeaseSeconds      *int              `json:"leaseSeconds"`
-		HeartbeatInterval *string           `json:"heartbeatInterval"`
-		ReapInterval      *string           `json:"reapInterval"`
-		ReapBatch         *int              `json:"reapBatch"`
-		DrainTimeout      *string           `json:"drainTimeout"`
-		Workers           *[]rawQueueWorker `json:"workers"`
+		Enabled           *bool             `toml:"enabled"`
+		BridgeBaseURL     *string           `toml:"bridgeBaseURL"`
+		BridgeToken       *string           `toml:"bridgeToken"`
+		RequestTimeout    *string           `toml:"requestTimeout"`
+		ClaimBatch        *int              `toml:"claimBatch"`
+		LeaseSeconds      *int              `toml:"leaseSeconds"`
+		HeartbeatInterval *string           `toml:"heartbeatInterval"`
+		ReapInterval      *string           `toml:"reapInterval"`
+		ReapBatch         *int              `toml:"reapBatch"`
+		DrainTimeout      *string           `toml:"drainTimeout"`
+		Workers           *[]rawQueueWorker `toml:"workers"`
 	}
 	type rawObservability struct {
-		Enabled              *bool    `json:"enabled"`
-		DatasetRoot          *string  `json:"datasetRoot"`
-		SpoolPath            *string  `json:"spoolPath"`
-		MaxSpoolBytes        *int64   `json:"maxSpoolBytes"`
-		MaxBatchRows         *int     `json:"maxBatchRows"`
-		MaxBatchBytes        *int64   `json:"maxBatchBytes"`
-		FlushInterval        *string  `json:"flushInterval"`
-		MetricsDays          *int     `json:"metricsDays"`
-		LogDays              *int     `json:"logDays"`
-		JSONLConvertInterval *string  `json:"jsonlConvertInterval"`
-		JSONLConvertSources  []string `json:"jsonlConvertSources"`
-		JSONLKeepDays        *int     `json:"jsonlKeepDays"`
+		Enabled              *bool    `toml:"enabled"`
+		DatasetRoot          *string  `toml:"datasetRoot"`
+		SpoolPath            *string  `toml:"spoolPath"`
+		MaxSpoolBytes        *int64   `toml:"maxSpoolBytes"`
+		MaxBatchRows         *int     `toml:"maxBatchRows"`
+		MaxBatchBytes        *int64   `toml:"maxBatchBytes"`
+		FlushInterval        *string  `toml:"flushInterval"`
+		MetricsDays          *int     `toml:"metricsDays"`
+		LogDays              *int     `toml:"logDays"`
+		JSONLConvertInterval *string  `toml:"jsonlConvertInterval"`
+		JSONLConvertSources  []string `toml:"jsonlConvertSources"`
+		JSONLKeepDays        *int     `toml:"jsonlKeepDays"`
 	}
 	type rawConfig struct {
-		SchemaVersion *int              `json:"schemaVersion"`
-		Runtime       *rawRuntime       `json:"runtime"`
-		Web           *rawWeb           `json:"web"`
-		Queue         *rawQueue         `json:"queue"`
-		Observability *rawObservability `json:"observability"`
+		SchemaVersion *int              `toml:"schemaVersion"`
+		Runtime       *rawRuntime       `toml:"runtime"`
+		Web           *rawWeb           `toml:"web"`
+		Queue         *rawQueue         `toml:"queue"`
+		Observability *rawObservability `toml:"observability"`
 	}
 
 	config := Default()
 	var raw rawConfig
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder := toml.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
 		return Config{}, fmt.Errorf("decode runtime configuration: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return Config{}, fmt.Errorf("decode runtime configuration: multiple JSON values")
 	}
 	if raw.SchemaVersion != nil {
 		config.SchemaVersion = *raw.SchemaVersion

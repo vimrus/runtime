@@ -14,7 +14,7 @@ services:
       - "18080:8080"
     volumes:
       - ../../tests/fixtures/php:/opt/zentao/app/zentaopms/www:ro
-      - ../../tests/fixtures/runtime/runtime.json:/opt/zentao/config/runtime.json:ro
+      - ../../tests/fixtures/runtime/runtime.toml:/opt/zentao/config/runtime.toml:ro
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/_runtime/readiness"]
       interval: 2s

@@ -76,13 +76,15 @@ func notRunningError(format string, args ...any) error {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|run-service>")
+		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|service|run-service>")
 	}
 	switch args[0] {
 	case "serve", "start":
 		return serve(args[1:])
 	case "run-service":
 		return runServiceCommand(args[1:])
+	case "service":
+		return serviceCommand(args[1:])
 	case "status", "stop", "reload", "health", "diagnose":
 		return controlCommand(args[0], args[1:])
 	case "logs", "metrics":
@@ -158,7 +160,7 @@ func phpCLICommand(args []string) error {
 		candidates := []string{
 			filepath.Join(dir, "php"),
 			filepath.Join(dir, "php.exe"),
-			"/opt/zentao/php/bin/php",
+			filepath.Join(defaultInstallRoot(), "php", "bin", "php"),
 		}
 		for _, candidate := range candidates {
 			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
@@ -250,7 +252,7 @@ func serve(args []string) error {
 	pidFile := flags.String("pid-file", "", "PID file override")
 	controlSocket := flags.String("control-socket", "", "Control socket override")
 	threads := flags.Int("threads", 0, "PHP thread count override")
-	installRoot := flags.String("install-root", "/opt/zentao", "Installation root")
+	installRoot := flags.String("install-root", defaultInstallRoot(), "Installation root")
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
@@ -372,7 +374,7 @@ func serve(args []string) error {
 			effectiveLogPath,
 			effectiveAuditLog,
 			effectiveAccessLog,
-			"/opt/zentao/logs/php-error.log",
+			filepath.Join(installRootPath, "logs", "php-error.log"),
 		},
 		OutputDir: logsDir,
 		Summary: func() map[string]any {

@@ -137,7 +137,7 @@ Copy-Item (Join-Path $phpRoot "*.dll") (Join-Path $Staging "runtime") -ErrorActi
 Copy-Item (Join-Path $vcpkgRoot "installed\x64-windows\bin\*.dll") (Join-Path $Staging "runtime") -ErrorAction SilentlyContinue
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Staging "config\conf.d"), (Join-Path $Staging "licenses") | Out-Null
-Copy-Item (Join-Path $RepoRoot "config\runtime.example.json") (Join-Path $Staging "config\runtime.example.json")
+Copy-Item (Join-Path $RepoRoot "config\runtime.example.toml") (Join-Path $Staging "config\runtime.example.toml")
 Copy-Item (Join-Path $RepoRoot "packaging\runtime\php.ini") (Join-Path $Staging "config\php.ini")
 
 & (Join-Path $Staging "runtime\php.exe") -v | Out-Null

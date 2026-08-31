@@ -32,32 +32,30 @@ if [[ -f "${staged_release}/www/index.php" ]]; then
     "${repo_root}/scripts/ci/patch-classic-mode.sh" "${staged_release}" >/dev/null || true
 fi
 
-cat > "${work}/runtime.json" <<EOF
-{
-  "schemaVersion": 1,
-  "runtime": {
-    "controlSocket": "/tmp/zentao.sock",
-    "pidFile": "/tmp/zentao.pid",
-    "drainTimeout": "10s",
-    "logPath": "/shared/logs/runtime.log"
-  },
-  "web": {
-    "root": "/shared/app/zentaopms/www",
-    "listen": "127.0.0.1:8080",
-    "threads": 4,
-    "readHeaderTimeout": "10s",
-    "idleTimeout": "30s",
-    "maxHeaderBytes": 16384
-  }
-}
+cat > "${work}/runtime.toml" <<EOF
+schemaVersion = 1
+
+[runtime]
+controlSocket = "/tmp/zentao.sock"
+pidFile = "/tmp/zentao.pid"
+drainTimeout = "10s"
+logPath = "/shared/logs/runtime.log"
+
+[web]
+root = "/shared/app/zentaopms/www"
+listen = "127.0.0.1:8080"
+threads = 4
+readHeaderTimeout = "10s"
+idleTimeout = "30s"
+maxHeaderBytes = 16384
 EOF
 
 docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${work}/app:/shared:rw" \
-    --volume "${work}/runtime.json:/runtime-config/runtime.json:ro" \
+    --volume "${work}/runtime.toml:/runtime-config/runtime.toml:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'mkdir -p /shared/logs && cp /runtime-config/runtime.json /opt/zentao/config/runtime.json && exec zentao serve --install-root /shared/app' >/dev/null
+    -c 'mkdir -p /shared/logs && cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve --install-root /shared/app' >/dev/null
 
 ready=0
 for _ in $(seq 1 30); do

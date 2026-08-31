@@ -35,40 +35,38 @@ if [[ -f "${staged_release}/www/index.php" ]]; then
     "${repo_root}/scripts/ci/patch-classic-mode.sh" "${staged_release}" >/dev/null || true
 fi
 
-cat > "${work}/runtime.json" <<EOF
-{
-  "schemaVersion": 1,
-  "runtime": {
-    "controlSocket": "/tmp/zentao.sock",
-    "pidFile": "/tmp/zentao.pid",
-    "drainTimeout": "10s",
-    "logPath": "/shared/logs/runtime.log",
-    "logMaxBytes": 16777216,
-    "logMaxBackups": 5
-  },
-  "web": {
-    "root": "/shared/app/zentaopms/www",
-    "listen": "127.0.0.1:8080",
-    "threads": 4,
-    "readHeaderTimeout": "10s",
-    "idleTimeout": "30s",
-    "maxHeaderBytes": 16384
-  },
-  "observability": {
-    "enabled": true,
-    "datasetRoot": "/shared/observability",
-    "spoolPath": "/shared/spool/observability",
-    "maxSpoolBytes": 1073741824,
-    "maxBatchRows": 10000,
-    "maxBatchBytes": 16777216,
-    "flushInterval": "1s",
-    "metricsDays": 7,
-    "logDays": 7,
-    "jsonlConvertInterval": "1h",
-    "jsonlConvertSources": ["access", "runtime"],
-    "jsonlKeepDays": 7
-  }
-}
+cat > "${work}/runtime.toml" <<EOF
+schemaVersion = 1
+
+[runtime]
+controlSocket = "/tmp/zentao.sock"
+pidFile = "/tmp/zentao.pid"
+drainTimeout = "10s"
+logPath = "/shared/logs/runtime.log"
+logMaxBytes = 16777216
+logMaxBackups = 5
+
+[web]
+root = "/shared/app/zentaopms/www"
+listen = "127.0.0.1:8080"
+threads = 4
+readHeaderTimeout = "10s"
+idleTimeout = "30s"
+maxHeaderBytes = 16384
+
+[observability]
+enabled = true
+datasetRoot = "/shared/observability"
+spoolPath = "/shared/spool/observability"
+maxSpoolBytes = 1073741824
+maxBatchRows = 10000
+maxBatchBytes = 16777216
+flushInterval = "1s"
+metricsDays = 7
+logDays = 7
+jsonlConvertInterval = "1h"
+jsonlConvertSources = ["access", "runtime"]
+jsonlKeepDays = 7
 EOF
 
 wait_ready() {
@@ -86,9 +84,9 @@ wait_ready() {
 docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${work}/app:/shared:rw" \
-    --volume "${work}/runtime.json:/runtime-config/runtime.json:ro" \
+    --volume "${work}/runtime.toml:/runtime-config/runtime.toml:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'mkdir -p /shared/logs /shared/observability /shared/spool && cp /runtime-config/runtime.json /opt/zentao/config/runtime.json && exec zentao serve --install-root /shared/app' >/dev/null
+    -c 'mkdir -p /shared/logs /shared/observability /shared/spool && cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve --install-root /shared/app' >/dev/null
 
 wait_ready
 

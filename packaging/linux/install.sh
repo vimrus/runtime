@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # Install the ZenTao Runtime as a systemd service. The Runtime itself must
-# already be staged under /opt/zentao (or the configured ZENTAO_PREFIX).
+# already be staged under the Runtime root (or the configured ZENTAO_PREFIX).
 #
-# Usage: install.sh [--prefix /opt/zentao] [--no-start]
+# Usage: install.sh [--prefix <runtime-root>] [--no-start]
 #
 # Test mode: set ZENTAO_DRY_RUN=1 to stage files without touching systemd or
 # creating users; ZENTAO_STAGE_ROOT overrides the filesystem root used by
@@ -11,7 +11,8 @@
 
 set -Eeuo pipefail
 
-PREFIX="${ZENTAO_PREFIX:-/opt/zentao}"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PREFIX="${ZENTAO_PREFIX:-${SCRIPT_ROOT}}"
 START_SERVICE=1
 DRY_RUN="${ZENTAO_DRY_RUN:-0}"
 STAGE_ROOT="${ZENTAO_STAGE_ROOT:-/}"

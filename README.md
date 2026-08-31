@@ -2,6 +2,10 @@
 
 ZenTao Runtime（可执行文件：`zentao`）是禅道的统一运行环境。它把 Web 服务、PHP 8.4、进程生命周期、健康检查、日志、诊断和可选的队列/观测能力组合成一个可交付产品，支持单机部署，也支持 Linux 双节点接入现有负载均衡。
 
+本文中的 `/opt/zentao` 是 Linux Runtime 根目录示例。Runtime 会根据可执行文件位置自动识别根目录，配置中的相对路径也以该目录为基准。
+
+文中的 `zentao` 和 `./bin/zentao` 指向同一个程序：前者要求程序已加入 `PATH`，后者是在 Runtime 根目录下直接调用二进制文件。未配置 `PATH` 时请使用 `./bin/zentao`；Windows 对应为 `runtime\\zentao.exe`。
+
 ## 产品形态
 
 | 形态 | 内容 | 适用场景 |
@@ -14,37 +18,38 @@ Runtime 不直接访问禅道业务数据库。数据库连接由 PHP 应用和�
 
 ## 快速开始
 
-### 已有 Runtime 安装目录
+### Linux
 
-准备应用发布目录和配置后启动：
-
-```bash
-zentao serve
-```
-
-常见运行目录：
-
-```text
-/opt/zentao/
-  bin/zentao               Runtime 程序
-  app/zentaopms/www        禅道主应用 Web 根目录
-  config/runtime.json      Runtime 固定配置
-  data/                    附件、节点标识等持久化数据
-  logs/                    Runtime、访问和 PHP 日志
-  observability/           Parquet 数据集
-  spool/observability/     观测故障时的本地 spool
-```
-
-Linux 可以使用 systemd 安装：
+请在 Runtime 根目录执行。首次启动前，从模板创建配置并按实际路径修改：
 
 ```bash
-sudo packaging/linux/install.sh --prefix /opt/zentao
+sudo install -m 0640 config/runtime.example.toml config/runtime.toml
+sudo editor config/runtime.toml
+```
+
+准备好应用发布目录后启动：
+
+```bash
+./bin/zentao serve
+```
+
+也可以使用统一的服务注册命令。请在 Runtime 根目录执行，Runtime 会自动识别根目录：
+
+```bash
+sudo ./bin/zentao service install
 sudo systemctl status zentao
 ```
 
-安装脚本默认创建 `zentao` 系统用户。配置样例见 [`config/runtime.example.json`](./config/runtime.example.json)。
+安装脚本默认创建 `zentao` 系统用户。配置样例见 [`config/runtime.example.toml`](./config/runtime.example.toml)。
 
 ### Docker Compose
+
+首次启动前，从模板创建仓库根目录下的配置文件：
+
+```bash
+cp config/runtime.example.toml config/runtime.toml
+$EDITOR config/runtime.toml
+```
 
 仅启动 Web（连接外部数据库）：
 
@@ -60,20 +65,24 @@ docker compose -f packaging/docker/compose.yaml --profile full up -d
 
 使用外部数据库时，通过 `ZT_DB_DRIVER`、`ZT_DB_HOST`、`ZT_DB_PORT`、`ZT_DB_NAME`、`ZT_DB_USER`、`ZT_DB_PASSWORD` 和 `ZT_DB_PREFIX` 配置 PHP 应用。不要把生产密码提交到 Compose 文件或仓库。
 
-### 集成环境
+## 运行目录
 
-有应用包和 Runtime 制品时，可以生成一个自包含目录：
-
-```bash
-scripts/package/build-integrated-env.sh open /tmp/zentao-open
-/tmp/zentao-open/run.sh
+```text
+/opt/zentao/
+  bin/zentao               Runtime 程序
+  app/zentaopms/www        禅道主应用 Web 根目录
+  config/runtime.toml      Runtime 固定配置
+  data/                    附件、节点标识等持久化数据
+  logs/                    Runtime、访问和 PHP 日志
+  observability/           Parquet 数据集
+  spool/observability/     观测故障时的本地 spool
 ```
 
-版本参数支持 `open`、`biz`、`max` 和 `ipd`。应用包默认从 `app-packages/` 查找，也可以通过 `ZENTAO_APP_PACKAGES_DIR` 指定目录。
+默认配置文件位于 Runtime 根目录的 `config/runtime.toml`；标准安装示例分别为 Linux `/opt/zentao/config/runtime.toml` 和 Windows `C:\Program Files\ZenTao\config\runtime.toml`。
 
 ## 子命令
 
-运行 `zentao` 不带参数会显示命令概览。Runtime 固定读取 `/opt/zentao/config/runtime.json`（Windows 为 `C:\Program Files\ZenTao\config\runtime.json`），不能通过命令行更改配置文件位置。控制类命令默认使用配置中的控制 socket；可以用 `--control-socket` 覆盖。
+运行 `zentao` 不带参数会显示命令概览。Runtime 会从自身根目录的 `config/runtime.toml` 读取配置，不能通过命令行更改配置文件位置。控制类命令默认使用配置中的控制 socket；可以用 `--control-socket` 覆盖。
 
 ### 服务与生命周期
 
@@ -143,97 +152,27 @@ zentao php-cli -- -r 'echo PHP_VERSION, PHP_EOL;'
 Windows 服务入口：
 
 ```powershell
-zentao.exe run-service --name ZenTaoRuntime
+zentao.exe service install
 ```
+
+`service install` 和 `service uninstall` 分别注册和注销 Linux systemd 服务或 Windows 系统服务；`run-service` 仅作为 Windows 服务的内部启动入口。
 
 ## 配置和安全
 
-- 使用 [`config/runtime.example.json`](./config/runtime.example.json) 生成 `runtime.json`，并按实际安装路径修改绝对路径。
-- 控制 socket/Named Pipe 是管理入口，不应暴露到公网；Linux 默认使用 `0600` 和同用户鉴权。
-- 队列 Bridge 仅允许本机回环地址，并使用每次 Runtime 启动生成的随机 token。
-- Runtime 日志和审计日志会对密码、token、Cookie、Authorization 等敏感字段脱敏。
-- 多节点部署需要部署方提供共享 Session/附件存储、数据库高可用和负载均衡；Runtime 不替代这些基础设施。
+详细的配置初始化、Docker 持久化和安全要求见
+[《配置与安全》](./docs/configuration-and-security.md)。
 
-## 从源码编译
+## 编译与打包
 
-正式构建会固定 PHP、FrankenPHP、Caddy、DuckDB、MySQL 和 ionCube 版本，并生成 manifest、SBOM、校验和和大小报告。构建脚本需要 Docker/BuildKit、Git、`jq`；Linux 构建还需要能够运行 Docker 的环境。
-
-### Linux amd64 / arm64
-
-推荐在目标架构的 Linux Runner 上执行：
-
-```bash
-scripts/native/build-linux.sh amd64
-scripts/native/build-linux.sh arm64
-```
-
-产物位于 `dist/runtime-linux-amd64/` 或 `dist/runtime-linux-arm64/`。构建脚本会使用
-`packaging/runtime/Dockerfile` 生成 Runtime 制品并执行制品校验。
-
-如需覆盖 Go 代理或 Debian 镜像源：
-
-```bash
-GOPROXY=https://goproxy.cn,direct \
-DEBIAN_MIRROR=http://deb.debian.org/debian \
-scripts/native/build-linux.sh amd64
-```
-
-### Windows x86_64
-
-在 Windows 原生环境执行 PowerShell，要求 Go、Visual Studio LLVM/Clang、Windows PHP 8.4 开发包、vcpkg 和网络下载依赖可用：
-
-```powershell
-Set-Location C:\path\to\runtime
-.\scripts\windows\build.ps1
-```
-
-默认输出 `dist/runtime-windows-x64/`。脚本会校验锁定归档，编译 MSVC/COFF DuckDB，构建 `runtime\zentao.exe`，复制 PHP/扩展/ionCube，并执行 PHP 和 Parquet 冒烟验证。仅在已有 DuckDB 缓存时才使用：
-
-```powershell
-.\scripts\windows\build.ps1 -SkipDuckDB
-```
-
-### Docker 镜像和 Compose
-
-直接校验 Compose 配置：
-
-```bash
-docker compose -f packaging/docker/compose.yaml config
-docker compose -f packaging/docker/compose.yaml --profile full config
-```
-
-构建本地 Web 镜像（脚本会从 `versions.lock.json` 读取全部构建参数）：
-
-```bash
-RUNTIME_ARCH=amd64 bash -c 'source scripts/build/common.sh; build_runtime_image'
-# 生成 zentao:runtime-linux-amd64
-```
-
-Docker 交付以 Linux amd64/arm64 原生 Runner 为基线；正式发布还应执行包校验、SBOM、签名和 Compose 冒烟测试。
-
-macOS 不是 Runtime 的正式交付目标；在 macOS 上请使用 Docker/BuildKit 构建 Linux 制品，或在 Linux 原生 Runner 上构建和验证。
-
-开发者验证 Go Runtime Host 时使用 `scripts/ci/test-runtime-host.sh`。该脚本会自动读取 PHP 头文件路径，并使用 `nowatcher` 构建标签关闭 FrankenPHP 的可选 Watcher C 扩展；生产构建也使用相同标签：
-
-```bash
-scripts/ci/test-runtime-host.sh
-```
-
-### Runtime / Full 安装包
-
-Runtime staging 目录准备完成后：
-
-```bash
-scripts/package/assemble-runtime.sh <staging-dir> zentao-runtime-linux-amd64 dist/packages
-scripts/package/assemble-full.sh <staging-dir> linux-amd64 zentao-full-linux-amd64 dist/packages
-```
-
-支持的 Full 平台参数为 `linux-amd64`、`linux-arm64` 和 `windows-x64`。脚本会从 `versions.lock.json` 下载并校验 MySQL 归档。
+源码编译、Docker 镜像、Runtime/Full 安装包以及集成环境的完整说明见
+[`docs/build-and-package.md`](./docs/build-and-package.md)。
 
 ## 文档入口
 
 - 产品/部署设计：[docs/design/](./docs/design/)
 - 开发与验证：[docs/development/](./docs/development/)
+- 配置与安全：[docs/configuration-and-security.md](./docs/configuration-and-security.md)
+- 编译与打包：[docs/build-and-package.md](./docs/build-and-package.md)
 - 文档索引：[docs/README.md](./docs/README.md)
 
 README 只描述产品使用和交付方式；设计决策、协议细节、开发任务和发布门槛请查看上述文档。

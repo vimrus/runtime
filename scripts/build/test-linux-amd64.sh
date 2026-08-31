@@ -20,7 +20,7 @@ docker run --detach --name "${container}" \
     --volume "${REPO_ROOT}/tests/fixtures/php:/app:ro" \
     --volume "${REPO_ROOT}/tests/fixtures/runtime:/runtime-config:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'cp /runtime-config/runtime.json /opt/zentao/config/runtime.json && exec zentao serve' >/dev/null
+    -c 'cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve' >/dev/null
 
 for _ in $(seq 1 30); do
     if docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/healthz >/dev/null; then
@@ -55,10 +55,10 @@ docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-run
     | jq --exit-status '.live == true and .ready == true and .deep == "ok"' >/dev/null
 docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.components[] | select(.name == "observability") | .status == "ok"' >/dev/null
-docker exec "${container}" sed -i 's/"idleTimeout": "30s"/"idleTimeout": "31s"/' /opt/zentao/config/runtime.json
+docker exec "${container}" sed -i 's/idleTimeout = "30s"/idleTimeout = "31s"/' /opt/zentao/config/runtime.toml
 docker exec "${container}" zentao reload --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.reloaded == true and .restartRequired == false' >/dev/null
-docker exec "${container}" sed -i 's/"threads": 4/"threads": 5/' /opt/zentao/config/runtime.json
+docker exec "${container}" sed -i 's/threads = 4/threads = 5/' /opt/zentao/config/runtime.toml
 docker exec "${container}" zentao reload --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.reloaded == false and .restartRequired == true' >/dev/null
 docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-runtime.sock \

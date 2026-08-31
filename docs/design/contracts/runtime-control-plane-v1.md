@@ -8,44 +8,42 @@ Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-se
 
 ## 2. 配置文件
 
-默认路径是 `/opt/zentao/config/runtime.json`。可复制 [配置样例](../../../config/runtime.example.json)，配置格式为严格 JSON，未知字段和不支持的 `schemaVersion` 会阻止启动。
+默认路径是 Runtime 根目录下的 `config/runtime.toml`（Linux 标准示例为 `/opt/zentao/config/runtime.toml`）。可复制 [配置样例](../../../config/runtime.example.toml)，配置格式为严格 TOML，未知字段和不支持的 `schemaVersion` 会阻止启动。
 
-```json
-{
-  "schemaVersion": 1,
-  "runtime": {
-    "controlSocket": "/run/zentao/runtime.sock",
-    "pidFile": "/run/zentao/runtime.pid",
-    "drainTimeout": "30s",
-    "logPath": "/opt/zentao/logs/runtime.log",
-    "logMaxBytes": 16777216,
-    "logMaxBackups": 5,
-    "nodeID": "node-a",
-    "clusterID": "cluster-prod-1"
-  },
-  "web": {
-    "root": "/opt/zentao/app/zentaopms/www",
-    "listen": "0.0.0.0:8080",
-    "threads": 4,
-    "readHeaderTimeout": "10s",
-    "idleTimeout": "30s",
-    "maxHeaderBytes": 16384
-  },
-  "observability": {
-    "enabled": true,
-    "datasetRoot": "/opt/zentao/observability",
-    "spoolPath": "/opt/zentao/spool/observability",
-    "flushInterval": "60s",
-    "metricsDays": 30,
-    "logDays": 7,
-    "jsonlConvertInterval": "1h",
-    "jsonlConvertSources": ["access", "runtime"],
-    "jsonlKeepDays": 7
-  }
-}
+```toml
+schemaVersion = 1
+
+[runtime]
+controlSocket = "/run/zentao/runtime.sock"
+pidFile = "/run/zentao/runtime.pid"
+drainTimeout = "30s"
+logPath = "logs/runtime.log"
+logMaxBytes = 16777216
+logMaxBackups = 5
+nodeID = "node-a"
+clusterID = "cluster-prod-1"
+
+[web]
+root = "app/zentaopms/www"
+listen = "0.0.0.0:8080"
+threads = 4
+readHeaderTimeout = "10s"
+idleTimeout = "30s"
+maxHeaderBytes = 16384
+
+[observability]
+enabled = true
+datasetRoot = "observability"
+spoolPath = "spool/observability"
+flushInterval = "60s"
+metricsDays = 30
+logDays = 7
+jsonlConvertInterval = "1h"
+jsonlConvertSources = ["access", "runtime"]
+jsonlKeepDays = 7
 ```
 
-`web.root`、`runtime.controlSocket` 和 `runtime.pidFile` 必须为绝对路径。`web.threads` 的范围为 2 至 256，Header 限制范围为 1 KiB 至 1 MiB，全部超时必须为正的 Go duration 字符串。
+应用、日志和观测目录等路径默认按安装根目录解析，通常使用 `app/...`、`logs/...`、`observability/...` 等相对路径；系统级 socket/PID 或其他特殊目录可以填写绝对路径。`web.threads` 的范围为 2 至 256，Header 限制范围为 1 KiB 至 1 MiB，全部超时必须为正的 Go duration 字符串。
 
 环境变量只覆盖明确字段：
 
@@ -106,8 +104,9 @@ Linux 默认 Socket 为 `/run/zentao/runtime.sock`，创建后权限为 `0600`�
 
 当前支持 `status`、`version`、`health`、`diagnose`、`reload`、`stop`、
 `upgrade`、`logs`、`metrics`、`observability-flush`、
-`observability-clean`、`convert-jsonl` 和 `collect-logs`；Linux 入口同时
-提供 `start`（等价于 `serve`），Windows 提供 `run-service`。CLI 使用同一二进制：
+`observability-clean`、`convert-jsonl` 和 `collect-logs`；入口同时提供
+`start`（等价于 `serve`）以及跨平台的 `service install` / `service uninstall`。
+Windows 的 `run-service` 仅作为 Service Control Manager 的进程入口。CLI 使用同一二进制：
 
 ```bash
 zentao-runtime status --control-socket /run/zentao/runtime.sock

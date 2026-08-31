@@ -17,6 +17,7 @@ coverage-*.out
 .env.*
 !.env.example
 *.local
+/config/runtime.toml
 
 # Logs and crash output
 *.log

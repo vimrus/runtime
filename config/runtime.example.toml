@@ -1,0 +1,116 @@
+# Runtime configuration. Relative paths are resolved from the installation root.
+# Copy this file to config/runtime.toml before starting Runtime.
+# Durations use Go syntax, for example 30s, 5m, or 1h.
+# Configuration is strict: unknown keys and unsupported schema versions are errors.
+# Configuration schema version.
+schemaVersion = 1
+
+[runtime]
+# Linux Unix socket or Windows Named Pipe used by control commands.
+controlSocket = "/run/zentao/runtime.sock"
+# PID file used by lifecycle commands and service management.
+pidFile = "/run/zentao/runtime.pid"
+# Grace period for draining HTTP requests and workers during shutdown.
+drainTimeout = "30s"
+# Runtime log directory and file. Relative paths use the installation root.
+logPath = "logs/runtime.log"
+# Maximum size of one Runtime log file in bytes; 0 disables the limit.
+logMaxBytes = 16777216
+# Number of rotated Runtime log files to keep.
+logMaxBackups = 5
+# Stable node name used in log and observability records; empty enables auto-generation.
+nodeID = "node-a"
+# Cluster identifier shared by nodes in the same deployment.
+clusterID = "cluster-prod-1"
+
+[web]
+# PHP application document root, relative to the installation root.
+root = "app/zentaopms/www"
+# HTTP bind address and port.
+listen = "0.0.0.0:8080"
+# Number of PHP worker threads.
+threads = 4
+# Maximum time to read request headers.
+readHeaderTimeout = "10s"
+# Keep-alive idle timeout for HTTP connections.
+idleTimeout = "30s"
+# Maximum accepted HTTP header size in bytes.
+maxHeaderBytes = 16384
+
+[queue]
+# Enable the PHP Queue Bridge worker engine.
+enabled = false
+# Local PHP Queue Bridge URL; required when queue is enabled.
+bridgeBaseURL = "http://127.0.0.1:8081/internal/runtime/queue/v1"
+# Shared secret for authenticating Queue Bridge requests.
+# bridgeToken = "change-me"
+# Timeout for one Queue Bridge request.
+requestTimeout = "5s"
+# Maximum number of jobs claimed in one batch.
+claimBatch = 8
+# Lease duration for a claimed job, in seconds.
+leaseSeconds = 60
+# Worker heartbeat interval.
+heartbeatInterval = "20s"
+# Interval between expired-lease reaping passes.
+reapInterval = "10s"
+# Maximum number of expired leases reaped per pass.
+reapBatch = 100
+# Grace period for draining queue workers during shutdown.
+drainTimeout = "30s"
+
+[[queue.workers]]
+# Worker channel name.
+name = "default"
+# Maximum concurrent jobs for this worker.
+concurrency = 4
+# Minimum adaptive polling interval.
+minPoll = "50ms"
+# Maximum adaptive polling interval.
+maxPoll = "5s"
+
+[[queue.workers]]
+# Worker channel name.
+name = "mail"
+# Maximum concurrent jobs for this worker.
+concurrency = 4
+# Minimum adaptive polling interval.
+minPoll = "50ms"
+# Maximum adaptive polling interval.
+maxPoll = "5s"
+
+[[queue.workers]]
+# Worker channel name.
+name = "slow"
+# Maximum concurrent jobs for this worker.
+concurrency = 1
+# Minimum adaptive polling interval.
+minPoll = "50ms"
+# Maximum adaptive polling interval.
+maxPoll = "5s"
+
+[observability]
+# Enable metrics, logs, and Parquet publishing.
+enabled = true
+# Root directory for published Parquet datasets.
+datasetRoot = "observability"
+# Local spool directory used when publishing is temporarily unavailable.
+spoolPath = "spool/observability"
+# Maximum local spool size in bytes.
+maxSpoolBytes = 1073741824
+# Maximum rows in one Parquet batch.
+maxBatchRows = 10000
+# Maximum encoded bytes in one Parquet batch.
+maxBatchBytes = 16777216
+# Interval between flushes to the Parquet dataset.
+flushInterval = "60s"
+# Number of days to retain metrics.
+metricsDays = 30
+# Number of days to retain logs.
+logDays = 7
+# Interval for converting JSONL files to Parquet.
+jsonlConvertInterval = "1h"
+# JSONL source names to convert.
+jsonlConvertSources = ["access", "runtime"]
+# Number of days to retain source JSONL files.
+jsonlKeepDays = 7

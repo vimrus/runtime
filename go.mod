@@ -6,6 +6,7 @@ require (
 	github.com/caddyserver/caddy/v2 v2.11.4
 	github.com/dunglas/frankenphp v1.12.7
 	github.com/dunglas/frankenphp/caddy v1.12.7
+	github.com/pelletier/go-toml/v2 v2.4.3
 )
 
 require (
@@ -111,7 +112,6 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
-	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/pires/go-proxyproto v0.12.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

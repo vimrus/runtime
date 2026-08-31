@@ -5,7 +5,8 @@
 
 set -Eeuo pipefail
 
-PREFIX="${ZENTAO_PREFIX:-/opt/zentao}"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PREFIX="${ZENTAO_PREFIX:-${SCRIPT_ROOT}}"
 
 systemctl disable --now zentao.service 2>/dev/null || true
 rm -f /etc/systemd/system/zentao.service /etc/systemd/system/zentao-runtime.service /etc/systemd/system/zentao-scheduler.service
