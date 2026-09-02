@@ -67,6 +67,14 @@ func Normalize(event Event) (Event, error) {
 	if event.Kind != KindMetrics && event.Kind != KindLogs {
 		return Event{}, errors.New("event kind must be metrics or logs")
 	}
+	if event.Kind == KindMetrics {
+		if !AllowedMetricName(event.MetricName) {
+			return Event{}, fmt.Errorf("metric name %q is not registered", event.MetricName)
+		}
+		if event.MetricKind != "counter" && event.MetricKind != "gauge" {
+			return Event{}, fmt.Errorf("metric kind %q must be counter or gauge", event.MetricKind)
+		}
+	}
 	if event.EventID == "" {
 		event.EventID = randomID()
 	}

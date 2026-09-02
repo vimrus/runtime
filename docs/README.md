@@ -4,6 +4,7 @@
 
 面向使用者的编译、打包和集成环境操作说明见[《编译与打包》](./build-and-package.md)。
 配置文件、Docker 持久化和安全要求见[《配置与安全》](./configuration-and-security.md)。
+多节点配置和上线步骤见[《多节点部署指南》](./deployment/multi-node.md)。
 
 ## 文档分层
 
@@ -17,6 +18,7 @@
 - [可观测性](./design/05-observability.md)：DuckDB、Parquet、日志、指标和降级策略。
 - [部署与高可用](./design/06-deployment-and-ha.md)：单机、Docker、双节点和外部负载均衡。
 - [构建与发布](./design/07-build-and-release.md)：原生构建、制品组装、供应链和发布。
+- [MySQL 到 Parquet 增量同步](./design/08-mysql-parquet-sync.md)：支持修改与一致性的 BI 分析副本设计。
 
 ### 契约
 
@@ -31,10 +33,15 @@
 - [Runtime 开发计划](./development/00-runtime-development-plan.md)
 - [禅道应用适配计划](./development/01-zentao-application-adaptation-plan.md)
 - [验证与发布门槛](./development/02-validation-and-release-gates.md)
+- [定时任务执行模式兼容开发计划](./development/03-cron-execution-modes-plan.md)
+- [定时任务多运行模式开发文档](./development/04-cron-execution-modes-development.md)
+- [Runtime 日志系统开发文档](./development/05-logging-system-development.md)
+
+定时任务开发顺序为：先阅读执行模式兼容开发计划，再按开发文档中的实现、测试和验收状态推进。Queue Bridge 的字段、错误码和版本约束以[PHP Queue Bridge v1 契约](./design/contracts/queue-bridge-v1.md)为准；编译、安装、配置和多节点部署不属于开发文档，分别参见上面的用户文档。
 
 ## 当前状态
 
-Runtime 侧 Host、控制面、健康检查、队列 Worker、DuckDB/Parquet、升级事务、平台服务、制品组装和 CI 已有实现。禅道 PHP 队列服务、Runtime 缓存客户端接入、Session/附件适配和跨版本联合测试仍按开发计划推进。正式安装器、代码签名和镜像发布需要发布环境与权限。
+Runtime 侧 Host、控制面、健康检查、队列 Worker、DuckDB/Parquet、升级事务、平台服务、制品组装和 CI 已有实现。定时任务 PHP Queue Bridge 与三种执行模式已实现；Runtime 缓存客户端接入、Session/附件适配和跨版本联合测试仍按开发计划推进。正式安装器、代码签名和镜像发布需要发布环境与权限。
 
 ## 设计原则
 

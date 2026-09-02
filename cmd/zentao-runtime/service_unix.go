@@ -18,6 +18,8 @@ func installServiceCommand(args []string) error {
 		return usageError("service name must not be empty")
 	}
 	root := defaultInstallRoot()
+	runDir := filepath.Join(root, "run")
+	controlSocket := filepath.Join(runDir, "runtime.sock")
 	unit := fmt.Sprintf(`[Unit]
 Description=ZenTao Runtime
 After=network-online.target
@@ -28,7 +30,7 @@ Type=simple
 User=zentao
 Group=zentao
 ExecStart=%s/bin/zentao serve
-ExecReload=%s/bin/zentao reload --control-socket /run/zentao/runtime.sock
+ExecReload=%s/bin/zentao reload --control-socket %s
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=45
@@ -38,11 +40,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=%s/data %s/config %s/logs %s/spool %s/observability /run/zentao
+ReadWritePaths=%s/data %s/config %s/logs %s/spool %s/observability %s
 
 [Install]
 WantedBy=multi-user.target
-`, root, root, filepath.Join(root, "data"), filepath.Join(root, "config"), filepath.Join(root, "logs"), filepath.Join(root, "spool"), filepath.Join(root, "observability"))
+`, root, root, controlSocket, filepath.Join(root, "data"), filepath.Join(root, "config"), filepath.Join(root, "logs"), filepath.Join(root, "spool"), filepath.Join(root, "observability"), runDir)
 	unitPath := filepath.Join("/etc/systemd/system", name+".service")
 	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("write systemd unit: %w", err)

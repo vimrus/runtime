@@ -24,27 +24,53 @@ type ParquetWriter interface {
 }
 
 type Config struct {
-	DatasetRoot   string
-	SpoolPath     string
-	NodeID        string
-	ClusterID     string
-	BootID        string
-	MaxSpoolBytes int64
-	MaxBatchRows  int
-	MaxBatchBytes int64
-	FlushInterval time.Duration
+	DatasetRoot      string
+	SpoolPath        string
+	NodeID           string
+	ClusterID        string
+	BootID           string
+	MaxSpoolBytes    int64
+	MaxBatchRows     int
+	MaxBatchBytes    int64
+	MinBatchRows     int
+	MinBatchBytes    int64
+	FlushInterval    time.Duration
+	MaxFlushInterval time.Duration
 }
 
 type Publisher struct {
 	config Config
 	writer ParquetWriter
 
-	mu        sync.Mutex
-	publishMu sync.Mutex
-	buffer    map[Kind][]Event
-	sequence  uint64
-	spool     map[string]int64 // spool file -> bytes
-	dropped   atomic.Uint64
+	mu              sync.Mutex
+	publishMu       sync.Mutex
+	buffer          map[Kind][]Event
+	sequence        uint64
+	spool           map[string]int64 // spool file -> bytes
+	received        atomic.Uint64
+	published       atomic.Uint64
+	recovered       atomic.Uint64
+	dropped         atomic.Uint64
+	lastReceived    uint64
+	lastDropped     uint64
+	lastPublished   uint64
+	lastRecovered   uint64
+	lastBatchRows   uint64
+	lastBatchBytes  uint64
+	lastPublishedAt time.Time
+}
+
+// Stats exposes the observability pipeline's own counters for health,
+// status and diagnostics. These counters are intentionally kept outside the
+// Parquet pipeline so pipeline failures remain visible without relying on the
+// pipeline itself.
+type Stats struct {
+	Received       uint64 `json:"received"`
+	Published      uint64 `json:"published"`
+	Recovered      uint64 `json:"recovered"`
+	Dropped        uint64 `json:"dropped"`
+	SpoolFiles     int    `json:"spoolFiles"`
+	BufferedEvents int    `json:"bufferedEvents"`
 }
 
 func NewPublisher(config Config, writer ParquetWriter) (*Publisher, error) {
@@ -65,6 +91,24 @@ func NewPublisher(config Config, writer ParquetWriter) (*Publisher, error) {
 	}
 	if config.FlushInterval <= 0 {
 		config.FlushInterval = 60 * time.Second
+	}
+	if config.MinBatchRows <= 0 {
+		config.MinBatchRows = config.MaxBatchRows / 10
+		if config.MinBatchRows < 10 {
+			config.MinBatchRows = 10
+		}
+	}
+	if config.MinBatchBytes <= 0 {
+		config.MinBatchBytes = config.MaxBatchBytes / 10
+		if config.MinBatchBytes < 1024*1024 {
+			config.MinBatchBytes = 1024 * 1024
+		}
+	}
+	if config.MaxFlushInterval <= 0 {
+		config.MaxFlushInterval = config.FlushInterval * 10
+		if config.MaxFlushInterval < 10*time.Minute {
+			config.MaxFlushInterval = 10 * time.Minute
+		}
 	}
 	if err := os.MkdirAll(config.SpoolPath, 0o700); err != nil {
 		return nil, fmt.Errorf("create spool path: %w", err)
@@ -102,10 +146,45 @@ func (p *Publisher) Add(ctx context.Context, event Event) error {
 	bytes := estimateBytes(p.buffer[kind])
 	needsFlush := rows >= p.config.MaxBatchRows || bytes >= p.config.MaxBatchBytes
 	p.mu.Unlock()
+	p.received.Add(1)
 	if needsFlush {
 		return p.Flush(ctx, kind)
 	}
 	return nil
+}
+
+// AddBatch normalizes and buffers a batch of events. If any event fails
+// normalization the whole batch is rejected, so callers never observe
+// partial acceptance.
+func (p *Publisher) AddBatch(ctx context.Context, events []Event) (int, error) {
+	normalized := make([]Event, 0, len(events))
+	for _, event := range events {
+		value, err := Normalize(event)
+		if err != nil {
+			return 0, err
+		}
+		normalized = append(normalized, value)
+	}
+
+	p.mu.Lock()
+	for _, event := range normalized {
+		p.buffer[event.Kind] = append(p.buffer[event.Kind], event)
+	}
+	var flushKinds []Kind
+	for _, kind := range []Kind{KindLogs, KindMetrics} {
+		if len(p.buffer[kind]) >= p.config.MaxBatchRows || estimateBytes(p.buffer[kind]) >= p.config.MaxBatchBytes {
+			flushKinds = append(flushKinds, kind)
+		}
+	}
+	p.mu.Unlock()
+	p.received.Add(uint64(len(normalized)))
+
+	for _, kind := range flushKinds {
+		if err := p.Flush(ctx, kind); err != nil {
+			return len(normalized), err
+		}
+	}
+	return len(normalized), nil
 }
 
 func (p *Publisher) Flush(ctx context.Context, kind Kind) error {
@@ -130,10 +209,96 @@ func (p *Publisher) FlushAll(ctx context.Context) error {
 
 func (p *Publisher) Dropped() uint64 { return p.dropped.Load() }
 
+// Stats returns the pipeline's own counters and current buffer/spool sizes.
+func (p *Publisher) Stats() Stats {
+	p.mu.Lock()
+	spoolFiles := len(p.spool)
+	buffered := len(p.buffer[KindLogs]) + len(p.buffer[KindMetrics])
+	p.mu.Unlock()
+	return Stats{
+		Received:       p.received.Load(),
+		Published:      p.published.Load(),
+		Recovered:      p.recovered.Load(),
+		Dropped:        p.dropped.Load(),
+		SpoolFiles:     spoolFiles,
+		BufferedEvents: buffered,
+	}
+}
+
+// SelfMetricEvents returns the observability pipeline's own metrics as
+// registered metric events. Counter values are deltas since the previous
+// call, so the same counters can also be read from Stats without double
+// counting in Parquet.
+func (p *Publisher) SelfMetricEvents(now time.Time) []Event {
+	stats := p.Stats()
+	p.mu.Lock()
+	receivedDelta := stats.Received - p.lastReceived
+	droppedDelta := stats.Dropped - p.lastDropped
+	publishedDelta := stats.Published - p.lastPublished
+	p.lastReceived = stats.Received
+	p.lastDropped = stats.Dropped
+	p.lastPublished = stats.Published
+	p.lastRecovered = stats.Recovered
+	batchRows := p.lastBatchRows
+	batchBytes := p.lastBatchBytes
+	lastPublishedAt := p.lastPublishedAt
+	p.mu.Unlock()
+
+	now = now.UTC()
+	base := Event{
+		SchemaVersion: SchemaVersion,
+		EventTime:     now,
+		ClusterID:     p.config.ClusterID,
+		NodeID:        p.config.NodeID,
+		BootID:        p.config.BootID,
+		Source:        "runtime",
+		Kind:          KindMetrics,
+	}
+	events := []Event{
+		selfMetric(base, "observability_events_received_total", "counter", float64(receivedDelta), map[string]string{"source": "runtime"}),
+		selfMetric(base, "observability_events_dropped_total", "counter", float64(droppedDelta), map[string]string{"reason": "pipeline"}),
+		selfMetric(base, "observability_batch_publish_total", "counter", float64(publishedDelta), map[string]string{"result": "ok"}),
+		selfMetric(base, "observability_buffer_items", "gauge", float64(stats.BufferedEvents), nil),
+		selfMetric(base, "observability_spool_batches", "gauge", float64(stats.SpoolFiles), nil),
+		selfMetric(base, "observability_batch_rows", "gauge", float64(batchRows), nil),
+		selfMetric(base, "observability_batch_bytes", "gauge", float64(batchBytes), nil),
+	}
+	if !lastPublishedAt.IsZero() {
+		events = append(events, selfMetric(base, "observability_last_published_timestamp", "gauge", float64(lastPublishedAt.Unix()), nil))
+	}
+	events = append(events, selfMetric(base, "observability_nfs_available", "gauge", boolGauge(p.Healthy() == nil), nil))
+	return events
+}
+
+func selfMetric(base Event, name, kind string, value float64, labels map[string]string) Event {
+	event := base
+	event.EventID = randomID()
+	event.MetricName = name
+	event.MetricKind = kind
+	event.Value = &value
+	event.Labels = labels
+	return event
+}
+
+func boolGauge(ok bool) float64 {
+	if ok {
+		return 1
+	}
+	return 0
+}
+
+// EmitSelfMetrics buffers the pipeline's own metrics for the next Parquet
+// flush. Failures are intentionally ignored here so self-observation never
+// feeds back into the failure counters it is reporting.
+func (p *Publisher) EmitSelfMetrics(ctx context.Context) {
+	_, _ = p.AddBatch(ctx, p.SelfMetricEvents(time.Now()))
+}
+
 // Run flushes buffered events on the configured interval until ctx is done.
 func (p *Publisher) Run(ctx context.Context) {
 	ticker := time.NewTicker(p.config.FlushInterval)
 	defer ticker.Stop()
+	lastFlush := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -144,11 +309,32 @@ func (p *Publisher) Run(ctx context.Context) {
 			if err := p.Recover(ctx); err != nil {
 				p.dropped.Add(1)
 			}
-			if err := p.FlushAll(ctx); err != nil {
-				p.dropped.Add(1)
+			if p.shouldFlush(time.Since(lastFlush)) {
+				if err := p.FlushAll(ctx); err != nil {
+					p.dropped.Add(1)
+				}
+				lastFlush = time.Now()
 			}
+			p.EmitSelfMetrics(ctx)
 		}
 	}
+}
+
+// shouldFlush reports whether buffered events are large enough to justify a
+// Parquet batch, or old enough that waiting longer would delay diagnostics
+// beyond MaxFlushInterval.
+func (p *Publisher) shouldFlush(age time.Duration) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if age >= p.config.MaxFlushInterval {
+		return true
+	}
+	for _, kind := range []Kind{KindLogs, KindMetrics} {
+		if len(p.buffer[kind]) >= p.config.MinBatchRows || estimateBytes(p.buffer[kind]) >= p.config.MinBatchBytes {
+			return true
+		}
+	}
+	return false
 }
 
 // Healthy verifies that the local spool remains writable, which is the only
@@ -249,6 +435,12 @@ func (p *Publisher) publishPartition(ctx context.Context, kind Kind, partition P
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		return fmt.Errorf("publish parquet batch %s: %w", batchID, err)
 	}
+	p.published.Add(uint64(len(events)))
+	p.mu.Lock()
+	p.lastBatchRows = uint64(len(events))
+	p.lastBatchBytes = uint64(estimateBytes(events))
+	p.lastPublishedAt = time.Now().UTC()
+	p.mu.Unlock()
 	_ = os.Remove(spoolPath)
 	p.removeSpool(spoolPath)
 	return nil
@@ -357,12 +549,14 @@ func (p *Publisher) Recover(ctx context.Context) error {
 				return removeErr
 			}
 			p.removeSpool(path)
+			p.recovered.Add(uint64(len(file.Events)))
 			continue
 		}
 		if err := p.publishPartition(ctx, file.Record.Kind, file.Record.Partition, file.Events, file.Record.BatchID); err != nil {
 			return err
 		}
 		p.removeSpool(path)
+		p.recovered.Add(uint64(len(file.Events)))
 	}
 	return nil
 }

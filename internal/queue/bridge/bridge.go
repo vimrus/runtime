@@ -26,17 +26,19 @@ const (
 	PathReap         = "/internal/runtime/queue/v1/reap"
 	PathStats        = "/internal/runtime/queue/v1/stats"
 	PathControl      = "/internal/runtime/queue/v1/control"
+	PathSchedule     = "/internal/runtime/queue/v1/schedule"
 )
 
 const (
-	ErrorUnauthenticated   = "unauthenticated"
-	ErrorUnsupportedSchema = "unsupported_schema"
-	ErrorInvalidRequest    = "invalid_request"
-	ErrorRequestTooLarge   = "request_too_large"
-	ErrorInvalidResponse   = "invalid_response"
-	ErrorUnavailable       = "unavailable"
-	ErrorConflict          = "conflict"
-	ErrorInternal          = "internal"
+	ErrorUnauthenticated       = "unauthenticated"
+	ErrorUnsupportedSchema     = "unsupported_schema"
+	ErrorInvalidRequest        = "invalid_request"
+	ErrorRequestTooLarge       = "request_too_large"
+	ErrorInvalidResponse       = "invalid_response"
+	ErrorUnavailable           = "unavailable"
+	ErrorConflict              = "conflict"
+	ErrorExecutionModeConflict = "execution_mode_conflict"
+	ErrorInternal              = "internal"
 )
 
 type Error struct {
@@ -394,6 +396,22 @@ type ControlResponse struct {
 	Applied bool   `json:"applied"`
 	Error   *Error `json:"error,omitempty"`
 }
+
+type ScheduleRequest struct {
+	Schema     int    `json:"schema"`
+	NodeID     string `json:"nodeID"`
+	InstanceID string `json:"instanceID"`
+}
+
+func (r ScheduleRequest) Validate() error { return validateIdentity(r.Schema, r.NodeID, r.InstanceID) }
+
+type ScheduleResponse struct {
+	Schema    int    `json:"schema"`
+	Scheduled bool   `json:"scheduled"`
+	Error     *Error `json:"error,omitempty"`
+}
+
+func (r ScheduleResponse) Validate() error { return validateResponseSchema(r.Schema, r.Error) }
 
 func (r ControlResponse) Validate() error { return validateResponseSchema(r.Schema, r.Error) }
 

@@ -36,6 +36,8 @@ type Manager struct {
 	heartbeat  Heartbeater
 	interval   time.Duration
 	batch      int
+	fatalOnce  sync.Once
+	fatal      chan struct{}
 }
 
 func NewManager(nodeID, instanceID, workerID string, heartbeat Heartbeater, interval time.Duration, batch int) *Manager {
@@ -53,7 +55,25 @@ func NewManager(nodeID, instanceID, workerID string, heartbeat Heartbeater, inte
 		heartbeat:  heartbeat,
 		interval:   interval,
 		batch:      batch,
+		fatal:      make(chan struct{}),
 	}
+}
+
+// Fatal returns a signal for a lost Runtime execution-mode lease.
+func (m *Manager) Fatal() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.fatal
+}
+
+// ResetFatal prepares the manager for a new engine run. It must be called
+// before the engine starts the heartbeat goroutine so observers cannot bind to
+// the previous run's channel.
+func (m *Manager) ResetFatal() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fatal = make(chan struct{})
+	m.fatalOnce = sync.Once{}
 }
 
 func (m *Manager) Add(lease bridge.Lease, cancel context.CancelFunc) {
@@ -148,6 +168,9 @@ func (m *Manager) heartbeatOnce(ctx context.Context) {
 			continue
 		}
 		if response.Error != nil {
+			if response.Error.Code == bridge.ErrorExecutionModeConflict {
+				m.signalFatal()
+			}
 			m.cancelBatch(refs[start:end], response.Error.Code)
 			continue
 		}
@@ -171,6 +194,12 @@ func (m *Manager) heartbeatOnce(ctx context.Context) {
 		}
 		m.mu.Unlock()
 	}
+}
+
+func (m *Manager) signalFatal() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fatalOnce.Do(func() { close(m.fatal) })
 }
 
 func (m *Manager) cancelBatch(refs []bridge.LeaseRef, reason string) {

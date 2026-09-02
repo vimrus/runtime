@@ -18,3 +18,11 @@ func defaultInstallRoot() string {
 func defaultConfigPath() string {
 	return filepath.Join(defaultInstallRoot(), "config", "runtime.toml")
 }
+
+func defaultControlSocketPath() string {
+	return filepath.Join(defaultInstallRoot(), "run", "runtime.sock")
+}
+
+func defaultPIDFilePath() string {
+	return filepath.Join(defaultInstallRoot(), "run", "runtime.pid")
+}

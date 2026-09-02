@@ -176,3 +176,15 @@ func (r *RotatingFile) Close() error {
 	r.file = nil
 	return err
 }
+
+// Sync flushes the active file to stable storage. Audit and other durable
+// writers call this after each record instead of relying on the kernel page
+// cache alone.
+func (r *RotatingFile) Sync() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.file == nil {
+		return nil
+	}
+	return r.file.Sync()
+}

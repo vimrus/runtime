@@ -135,6 +135,12 @@ func (c *Client) Control(ctx context.Context, request bridge.ControlRequest) (br
 	return response, err
 }
 
+func (c *Client) Schedule(ctx context.Context, request bridge.ScheduleRequest) (bridge.ScheduleResponse, error) {
+	var response bridge.ScheduleResponse
+	err := c.post(ctx, bridge.PathSchedule, request, &response)
+	return response, err
+}
+
 func (c *Client) post(ctx context.Context, path string, request bridge.Request, response bridge.Response) error {
 	body, err := bridge.Encode(request)
 	if err != nil {

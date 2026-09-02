@@ -5,9 +5,12 @@
 本文件冻结 Runtime Alpha 的 PHP Queue Bridge v1 数据契约。Bridge 是 `zentao-runtime`
 与禅道 PHP Queue Service 之间的私有接口，不是公共 Web API，也不属于 APIv2。
 
-实施状态（2026-08-19）：Go 侧 DTO、Fake Bridge、HTTP 客户端、Worker/租约/Reaper
-与 Host 集成已完成；真实 PHP 路由、Caddy 专用 loopback Listener、每次启动随机
-凭据及端到端鉴权属于应用侧 `Z-QUEUE-03` 的联合工作，尚未实施。
+实施状态（2026-09-01）：Go 侧 DTO、Fake Bridge、HTTP 客户端、Worker/租约/Reaper
+与 Host 集成已完成；禅道 PHP 侧 Queue Bridge 路由、鉴权、模式租约 fencing、批量
+Claim/Heartbeat/Execute/Reap/Stats/Control 和 Runtime 联合冒烟已实现。真实部署
+环境的 PHP-FPM/Apache、固定 RoadRunner supervisor、故障恢复和完整发布矩阵仍按
+[定时任务多运行模式开发文档](../../development/04-cron-execution-modes-development.md)
+中的“发布前待验收”执行。
 
 Go Runtime 不连接数据库、不导入数据库 Driver、不保存数据库凭据，也不包含业务 SQL。
 
@@ -28,6 +31,7 @@ Go Runtime 不连接数据库、不导入数据库 Driver、不保存数据库�
 | 路径 | 请求 | 响应 | 目的 |
 |---|---|---|---|
 | `/capabilities` | `CapabilitiesRequest` | `CapabilitiesResponse` | 启动时确认 Schema 与 DAO 能力 |
+| `/schedule` | `ScheduleRequest` | `ScheduleResponse` | 由 Runtime 触发 PHP 调度到期 Cron |
 | `/claim` | `ClaimRequest` | `ClaimResponse` | 批量领取租约 |
 | `/execute` | `ExecuteRequest` | `ExecuteResponse` | 执行注册 Handler 并持久化结果 |
 | `/heartbeat` | `HeartbeatRequest` | `HeartbeatResponse` | 批量延长租约 |
@@ -63,6 +67,7 @@ Heartbeat 对每条租约独立返回 `extended`、`stale`、`not_found` 或 `er
 - `invalid_response`
 - `unavailable`
 - `conflict`
+- `execution_mode_conflict`
 - `internal`
 
 错误对象为 `{ "code": "...", "message": "...", "retryable": false }`。错误消息必须脱敏并限制长度；不得包含 Payload、认证凭据或数据库连接信息。
@@ -77,9 +82,10 @@ Fake Bridge 不执行 SQL，不模拟数据库并发，也不能替代 MySQL、P
 
 未知请求字段、错误的 Schema、超过大小或批次限制的请求必须在触发业务操作前拒绝。新增必填字段或改变字段语义必须升级为 `/v2`；v1 只能新增可选字段，并同时更新 Go/PHP 共享夹具和契约测试。
 
-## 8. 实施状态（2026-08-19）
+## 8. 实施状态（2026-09-01）
 
 - Go 侧 DTO、Fake Bridge、HTTP 客户端、Worker/租约/Reaper 与 Host 集成
   已实现并通过单测；`internal/queue/bridge` 是本契约的唯一 Go 实现来源。
-- PHP 侧 Bridge 路由、鉴权与 Queue Service（`Z-QUEUE-03` 等）尚未实施，
-  实施时必须以本文件与 adaptation plan 第 17.2 节为准，并补齐跨仓夹具。
+- PHP 侧 Bridge 路由、鉴权与 Queue Service 已接入 `zentaopms/module/cron`，
+  并由 Runtime 的 Queue Engine 使用；实现必须继续以本文件为准。PHP-FPM/Apache、
+  RoadRunner supervisor、故障注入和未覆盖数据库/平台的联合验收仍未关闭。

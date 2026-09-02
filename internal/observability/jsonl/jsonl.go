@@ -27,6 +27,11 @@ type Config struct {
 	Sources   []string
 	Publisher *observability.Publisher
 	Interval  time.Duration
+	// DeleteAfterConvert removes a sealed segment after its events have been
+	// published to Parquet and the conversion state has been saved. This is
+	// safe only when Parquet is the retained copy and raw JSONL has no
+	// compliance requirement.
+	DeleteAfterConvert bool
 }
 
 type SegmentState struct {
@@ -91,6 +96,8 @@ func (c *Converter) ConvertOnce(ctx context.Context) (Result, error) {
 	if err != nil {
 		return result, err
 	}
+	pendingFlush := false
+	var processed []string
 	for _, segment := range segments {
 		info, err := os.Stat(segment)
 		if err != nil {
@@ -104,21 +111,35 @@ func (c *Converter) ConvertOnce(ctx context.Context) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		for _, event := range events {
-			if err := c.config.Publisher.Add(ctx, event); err != nil {
-				return result, fmt.Errorf("add event from %s: %w", segment, err)
+		if len(events) > 0 {
+			if _, err := c.config.Publisher.AddBatch(ctx, events); err != nil {
+				return result, fmt.Errorf("add events from %s: %w", segment, err)
 			}
-		}
-		if err := c.config.Publisher.Flush(ctx, observability.KindLogs); err != nil {
-			return result, fmt.Errorf("flush events from %s: %w", segment, err)
+			pendingFlush = true
 		}
 		state[segment] = SegmentState{Size: info.Size(), ModTime: info.ModTime().UTC()}
 		result.Segments++
 		result.Events += len(events)
 		result.Malformed += malformed
+		processed = append(processed, segment)
+	}
+	// Flush once after all segments are buffered so a conversion cycle
+	// produces one Parquet batch per partition instead of one small part per
+	// segment.
+	if pendingFlush {
+		if err := c.config.Publisher.Flush(ctx, observability.KindLogs); err != nil {
+			return result, fmt.Errorf("flush converted events: %w", err)
+		}
 	}
 	if err := c.saveState(state); err != nil {
 		return result, err
+	}
+	if c.config.DeleteAfterConvert {
+		for _, segment := range processed {
+			if err := os.Remove(segment); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return result, fmt.Errorf("remove converted segment %s: %w", segment, err)
+			}
+		}
 	}
 	result.Skipped = len(segments) - result.Segments
 	return result, nil
@@ -164,6 +185,10 @@ func (c *Converter) scanSegments() ([]string, error) {
 }
 
 func (c *Converter) parseSegment(path string) ([]observability.Event, int, error) {
+	return parseJSONLFile(path, c.config.ClusterID, c.config.NodeID, c.config.BootID)
+}
+
+func parseJSONLFile(path, clusterID, nodeID, bootID string) ([]observability.Event, int, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, 0, err
@@ -183,7 +208,7 @@ func (c *Converter) parseSegment(path string) ([]observability.Event, int, error
 		if line == "" {
 			continue
 		}
-		event, ok, err := parseLine(line, source, c.config.ClusterID, c.config.NodeID, c.config.BootID)
+		event, ok, err := parseLine(line, source, clusterID, nodeID, bootID)
 		if err != nil {
 			malformed++
 			continue
@@ -194,6 +219,54 @@ func (c *Converter) parseSegment(path string) ([]observability.Event, int, error
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, malformed, err
+	}
+	return events, malformed, nil
+}
+
+// ReadRecent reads every JSONL file that still exists for this node: the
+// active files and any sealed segments that have not been converted yet.
+// Because ConvertOnce deletes segments after successful conversion, files
+// found here are guaranteed not to overlap with the Parquet dataset.
+func ReadRecent(config Config) ([]observability.Event, int, error) {
+	if config.LogsDir == "" || config.NodeID == "" {
+		return nil, 0, errors.New("logsDir and nodeID are required")
+	}
+	entries, err := os.ReadDir(config.LogsDir)
+	if err != nil {
+		return nil, 0, err
+	}
+	var events []observability.Event
+	malformed := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		matched := false
+		for _, source := range config.Sources {
+			switch source {
+			case "access":
+				if name == "access-"+config.NodeID+".jsonl" || accessSegmentPattern.MatchString(name) {
+					matched = true
+				}
+			case "runtime":
+				if name == "runtime-"+config.NodeID+".jsonl" || runtimeSegmentPattern.MatchString(name) {
+					matched = true
+				}
+			}
+			if matched {
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		parsed, bad, err := parseJSONLFile(filepath.Join(config.LogsDir, name), config.ClusterID, config.NodeID, config.BootID)
+		if err != nil {
+			return nil, 0, err
+		}
+		events = append(events, parsed...)
+		malformed += bad
 	}
 	return events, malformed, nil
 }

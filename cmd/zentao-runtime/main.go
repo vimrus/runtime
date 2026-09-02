@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,7 +109,7 @@ func run(args []string) error {
 
 func convertJSONLCommand(args []string) error {
 	flags := flag.NewFlagSet("convert-jsonl", flag.ContinueOnError)
-	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
@@ -124,7 +125,7 @@ func convertJSONLCommand(args []string) error {
 
 func collectLogsCommand(args []string) error {
 	flags := flag.NewFlagSet("collect-logs", flag.ContinueOnError)
-	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
@@ -173,6 +174,7 @@ func phpCLICommand(args []string) error {
 		return errors.New("PHP CLI binary not found; set ZENTAO_PHP_BIN or --php")
 	}
 	command := exec.Command(binary, flags.Args()...)
+	command.Env = append(os.Environ(), phpConfigurationEnvironment(defaultInstallRoot())...)
 	command.Stdin = os.Stdin
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
@@ -188,7 +190,7 @@ func phpCLICommand(args []string) error {
 
 func cleanObservabilityCommand(args []string) error {
 	flags := flag.NewFlagSet("clean-observability", flag.ContinueOnError)
-	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
@@ -204,7 +206,7 @@ func cleanObservabilityCommand(args []string) error {
 
 func flushObservabilityCommand(args []string) error {
 	flags := flag.NewFlagSet("flush-observability", flag.ContinueOnError)
-	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)
 	}
@@ -220,7 +222,7 @@ func flushObservabilityCommand(args []string) error {
 
 func observabilityCommand(operation string, args []string) error {
 	flags := flag.NewFlagSet(operation, flag.ContinueOnError)
-	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
 	since := flags.String("since", "30m", "Query start offset (Go duration)")
 	until := flags.String("until", "", "Query end time (RFC3339, default now)")
 	node := flags.String("node", "", "Node filter")
@@ -260,8 +262,11 @@ func serve(args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve install root: %w", err)
 	}
+	if err := configurePHPEnvironment(installRootPath); err != nil {
+		return err
+	}
 
-	configPath := defaultConfigPath()
+	configPath := filepath.Join(installRootPath, "config", "runtime.toml")
 	cfg, err := loadServeConfig(configPath, *root, *listen, *pidFile, *controlSocket, *threads)
 	if err != nil {
 		return err
@@ -279,6 +284,20 @@ func serve(args []string) error {
 		return err
 	}
 	cfg.Runtime.NodeID = nodeID
+	clusterID := cfg.Runtime.ClusterID
+	if clusterID == "" {
+		clusterID = "standalone"
+	}
+	identityEnv := map[string]string{
+		"ZENTAO_NODE_ID":    nodeID,
+		"ZENTAO_CLUSTER_ID": clusterID,
+		"ZENTAO_BOOT_ID":    instanceID(),
+	}
+	for name, value := range identityEnv {
+		if err := os.Setenv(name, value); err != nil {
+			return fmt.Errorf("set %s: %w", name, err)
+		}
+	}
 	logsDir := filepath.Dir(cfg.Runtime.LogPath)
 	if cfg.Runtime.LogPath == "" {
 		logsDir = filepath.Join(installRootPath, "logs")
@@ -291,7 +310,7 @@ func serve(args []string) error {
 	effectiveAccessLog := filepath.Join(logsDir, "access-"+nodeID+".jsonl")
 
 	logger, err := logging.New(logging.Options{
-		Level:        slog.LevelInfo,
+		Level:        parseLogLevel(cfg.Runtime.LogLevel),
 		OutputPath:   effectiveLogPath,
 		MaxBytes:     cfg.Runtime.LogMaxBytes,
 		MaxBackups:   cfg.Runtime.LogMaxBackups,
@@ -306,7 +325,7 @@ func serve(args []string) error {
 	}
 	defer logger.Close()
 
-	auditor, err := control.NewFileAuditor(effectiveAuditLog)
+	auditor, err := control.NewFileAuditorWithRetention(effectiveAuditLog, cfg.Runtime.AuditLogMaxBytes, cfg.Runtime.AuditLogMaxBackups, cfg.Runtime.AuditLogKeepDays)
 	if err != nil {
 		return fmt.Errorf("initialize audit log: %w", err)
 	}
@@ -356,19 +375,22 @@ func serve(args []string) error {
 			clusterID = "standalone"
 		}
 		jsonlConverter, err = jsonl.New(jsonl.Config{
-			LogsDir:   logsDir,
-			NodeID:    nodeID,
-			ClusterID: clusterID,
-			BootID:    instanceID(),
-			Sources:   cfg.Observability.JSONLConvertSources,
-			Publisher: obsPublisher,
-			Interval:  cfg.Observability.JSONLConvertInterval,
+			LogsDir:            logsDir,
+			NodeID:             nodeID,
+			ClusterID:          clusterID,
+			BootID:             instanceID(),
+			Sources:            cfg.Observability.JSONLConvertSources,
+			Publisher:          obsPublisher,
+			Interval:           cfg.Observability.JSONLConvertInterval,
+			DeleteAfterConvert: cfg.Observability.JSONLDeleteAfterConvert,
 		})
 		if err != nil {
 			return fmt.Errorf("initialize jsonl converter: %w", err)
 		}
 	}
 	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
+	host.logsDir = logsDir
+	host.jsonlSources = cfg.Observability.JSONLConvertSources
 	host.collector = &diagnostics.Collector{
 		LogPaths: []string{
 			effectiveLogPath,
@@ -395,10 +417,36 @@ func serve(args []string) error {
 	if err := host.machine.Transition(lifecycle.CaddyStarting, "loading Caddy and FrankenPHP"); err != nil {
 		return err
 	}
-	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays)); err != nil {
+	observabilityBridge := web.ObservabilityBridgeOptions{}
+	if obsPublisher != nil {
+		web.SetObservabilitySink(obsPublisher)
+		observabilityTokenBytes := make([]byte, 32)
+		if _, err := rand.Read(observabilityTokenBytes); err != nil {
+			return fmt.Errorf("generate observability bridge token: %w", err)
+		}
+		observabilityToken := hex.EncodeToString(observabilityTokenBytes)
+		observabilityURL := "http://" + cfg.Observability.BridgeListen + "/internal/runtime/observability/v1/events"
+		if err := os.Setenv("ZENTAO_OBSERVABILITY_URL", observabilityURL); err != nil {
+			return fmt.Errorf("set observability bridge url: %w", err)
+		}
+		if err := os.Setenv("ZENTAO_OBSERVABILITY_TOKEN", observabilityToken); err != nil {
+			return fmt.Errorf("set observability bridge token: %w", err)
+		}
+		if err := os.Setenv("ZENTAO_OBSERVABILITY_SCHEMA", strconv.Itoa(observability.SchemaVersion)); err != nil {
+			return fmt.Errorf("set observability schema version: %w", err)
+		}
+		observabilityBridge = web.ObservabilityBridgeOptions{
+			Enabled: true,
+			Listen:  cfg.Observability.BridgeListen,
+			Token:   observabilityToken,
+			Sink:    obsPublisher,
+		}
+	}
+	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge)); err != nil {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
+	host.observabilityToken = observabilityBridge.Token
 	controlServer, err := control.ListenWithOptions(cfg.Runtime.ControlSocket, host, control.Options{
 		Authorizer: controlAuthorizer(),
 		Auditor:    auditor,
@@ -413,6 +461,7 @@ func serve(args []string) error {
 		_ = caddy.Stop()
 		return err
 	}
+	fmt.Fprintf(os.Stdout, "zentao: listening on %s\n", cfg.Web.Listen)
 	logger.Info("runtime ready", slog.String("listen", cfg.Web.Listen), slog.String("root", cfg.Web.Root), slog.String("mode", "classic"))
 	serveCtx, serveCancel := context.WithCancel(context.Background())
 	defer serveCancel()
@@ -480,6 +529,38 @@ func serve(args []string) error {
 		return err
 	}
 	logger.Info("runtime stopped")
+	return nil
+}
+
+func parseLogLevel(value string) slog.Level {
+	switch strings.ToLower(value) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+func phpConfigurationEnvironment(installRoot string) []string {
+	configDir := filepath.Join(installRoot, "config")
+	return []string{
+		"ZENTAO_RUNTIME_PHP_ROOT=" + installRoot,
+		"PHPRC=" + configDir,
+		"PHP_INI_SCAN_DIR=" + filepath.Join(configDir, "conf.d"),
+	}
+}
+
+func configurePHPEnvironment(installRoot string) error {
+	for _, entry := range phpConfigurationEnvironment(installRoot) {
+		name, value, _ := strings.Cut(entry, "=")
+		if err := os.Setenv(name, value); err != nil {
+			return fmt.Errorf("configure PHP environment: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -551,15 +632,18 @@ func newObservabilityPublisher(cfg config.Config, nodeID string) (*observability
 		clusterID = "standalone"
 	}
 	return observability.NewPublisher(observability.Config{
-		DatasetRoot:   cfg.Observability.DatasetRoot,
-		SpoolPath:     cfg.Observability.SpoolPath,
-		NodeID:        nodeID,
-		ClusterID:     clusterID,
-		BootID:        instance,
-		MaxSpoolBytes: cfg.Observability.MaxSpoolBytes,
-		MaxBatchRows:  cfg.Observability.MaxBatchRows,
-		MaxBatchBytes: cfg.Observability.MaxBatchBytes,
-		FlushInterval: cfg.Observability.FlushInterval,
+		DatasetRoot:      cfg.Observability.DatasetRoot,
+		SpoolPath:        cfg.Observability.SpoolPath,
+		NodeID:           nodeID,
+		ClusterID:        clusterID,
+		BootID:           instance,
+		MaxSpoolBytes:    cfg.Observability.MaxSpoolBytes,
+		MaxBatchRows:     cfg.Observability.MaxBatchRows,
+		MaxBatchBytes:    cfg.Observability.MaxBatchBytes,
+		MinBatchRows:     cfg.Observability.MinBatchRows,
+		MinBatchBytes:    cfg.Observability.MinBatchBytes,
+		FlushInterval:    cfg.Observability.FlushInterval,
+		MaxFlushInterval: cfg.Observability.MaxFlushInterval,
 	}, writer)
 }
 
@@ -651,10 +735,7 @@ func (p hostStatusProvider) HTTPStatus() web.HTTPStatus {
 func loadServeConfig(path, root, listen, pidFile, controlSocket string, threads int) (config.Config, error) {
 	cfg, err := config.Load(path, os.Environ())
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) || root == "" {
-			return config.Config{}, err
-		}
-		cfg = config.Default()
+		return config.Config{}, err
 	}
 	overrides := config.Overrides{}
 	if root != "" {
@@ -688,21 +769,24 @@ func loadServeConfig(path, root, listen, pidFile, controlSocket string, threads 
 }
 
 type host struct {
-	configPath        string
-	machine           *lifecycle.Machine
-	stop              chan struct{}
-	stopOnce          sync.Once
-	mu                sync.RWMutex
-	config            config.Config
-	logger            *logging.Logger
-	health            *health.Registry
-	auditor           control.Auditor
-	queryEngine       query.Engine
-	obsPublisher      *observability.Publisher
-	jsonlConverter    *jsonl.Converter
-	accessLogPath     string
-	accessLogKeepDays int
-	collector         *diagnostics.Collector
+	configPath         string
+	machine            *lifecycle.Machine
+	stop               chan struct{}
+	stopOnce           sync.Once
+	mu                 sync.RWMutex
+	config             config.Config
+	logger             *logging.Logger
+	health             *health.Registry
+	auditor            control.Auditor
+	queryEngine        query.Engine
+	obsPublisher       *observability.Publisher
+	jsonlConverter     *jsonl.Converter
+	accessLogPath      string
+	accessLogKeepDays  int
+	observabilityToken string
+	logsDir            string
+	jsonlSources       []string
+	collector          *diagnostics.Collector
 }
 
 func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
@@ -743,11 +827,15 @@ func (h *host) HandleControl(ctx context.Context, request control.Request) contr
 	case "reload":
 		return h.reload()
 	case "diagnose":
-		return control.Success(map[string]any{
+		diagnose := map[string]any{
 			"health":  h.healthReport(ctx, true),
 			"version": versionData(),
 			"config":  h.configSummary(),
-		})
+		}
+		if h.obsPublisher != nil {
+			diagnose["observability"] = h.obsPublisher.Stats()
+		}
+		return control.Success(diagnose)
 	case "logs", "metrics":
 		return h.observabilityQuery(ctx, request)
 	case "observability-flush":
@@ -818,7 +906,7 @@ func (h *host) observabilityFlush(ctx context.Context) control.Response {
 	if err := h.obsPublisher.FlushAll(ctx); err != nil {
 		return control.Failure("flush_failed", "observability flush failed")
 	}
-	return control.Success(map[string]any{"dropped": h.obsPublisher.Dropped()})
+	return control.Success(map[string]any{"stats": h.obsPublisher.Stats()})
 }
 
 func (h *host) observabilityQuery(ctx context.Context, request control.Request) control.Response {
@@ -866,7 +954,7 @@ func (h *host) observabilityQuery(ctx context.Context, request control.Request) 
 		maxDays = h.config.Observability.MetricsDays
 	}
 	h.mu.RUnlock()
-	template, params, _, err := query.Build(query.Config{
+	template, params, limit, err := query.Build(query.Config{
 		DatasetRoot: datasetRoot,
 		MaxDays:     maxDays,
 		MaxRows:     1000,
@@ -891,7 +979,74 @@ func (h *host) observabilityQuery(ctx context.Context, request control.Request) 
 	if err != nil {
 		return control.Failure("query_failed", "observability query failed")
 	}
+	if kind == observability.KindLogs && h.logsDir != "" && h.config.Observability.JSONLDeleteAfterConvert {
+		rows = h.mergeRecentJSONLLogs(rows, since, until, payload.Node, payload.Level, limit)
+	}
 	return control.Success(rows)
+}
+
+func (h *host) mergeRecentJSONLLogs(parquetRows []query.Row, since, until time.Time, node, level string, limit int) []query.Row {
+	clusterID := h.config.Runtime.ClusterID
+	if clusterID == "" {
+		clusterID = "standalone"
+	}
+	events, _, err := jsonl.ReadRecent(jsonl.Config{
+		LogsDir:   h.logsDir,
+		NodeID:    h.config.Runtime.NodeID,
+		ClusterID: clusterID,
+		BootID:    instanceID(),
+		Sources:   h.jsonlSources,
+	})
+	if err != nil {
+		h.logger.Warn("read recent jsonl logs failed", slog.Any("error", err))
+		return parquetRows
+	}
+	rows := make([]query.Row, 0, len(parquetRows)+len(events))
+	rows = append(rows, parquetRows...)
+	for _, event := range events {
+		if event.EventTime.Before(since) || !event.EventTime.Before(until) {
+			continue
+		}
+		if node != "" && event.NodeID != node {
+			continue
+		}
+		if level != "" && !strings.EqualFold(event.Level, level) {
+			continue
+		}
+		rows = append(rows, query.Row{
+			"eventTime": event.EventTime,
+			"eventID":   event.EventID,
+			"node":      event.NodeID,
+			"source":    event.Source,
+			"level":     event.Level,
+			"message":   event.Message,
+			"traceID":   event.TraceID,
+		})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rowEventTimeNanos(rows[i]) > rowEventTimeNanos(rows[j])
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
+func rowEventTimeNanos(row query.Row) int64 {
+	value := row["eventTime"]
+	switch typed := value.(type) {
+	case time.Time:
+		return typed.UnixNano()
+	case string:
+		for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+			if parsed, err := time.Parse(layout, typed); err == nil {
+				return parsed.UnixNano()
+			}
+		}
+	case float64:
+		return int64(typed * float64(time.Second))
+	}
+	return 0
 }
 
 func (h *host) healthReport(ctx context.Context, deep bool) map[string]any {
@@ -925,7 +1080,7 @@ func (h *host) status() map[string]any {
 	h.mu.RLock()
 	cfg := h.config
 	h.mu.RUnlock()
-	return map[string]any{
+	result := map[string]any{
 		"lifecycle": h.machine.Snapshot(),
 		"web": map[string]any{
 			"listen":  cfg.Web.Listen,
@@ -937,6 +1092,10 @@ func (h *host) status() map[string]any {
 			"clusterID": cfg.Runtime.ClusterID,
 		},
 	}
+	if h.obsPublisher != nil {
+		result["observability"] = h.obsPublisher.Stats()
+	}
+	return result
 }
 
 func (h *host) configSummary() map[string]any {
@@ -973,7 +1132,16 @@ func (h *host) reload() control.Response {
 		_ = h.machine.Transition(lifecycle.Ready, "restart-required configuration change not applied")
 		return control.Success(map[string]any{"reloaded": false, "restartRequired": true})
 	}
-	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays))
+	observabilityBridge := web.ObservabilityBridgeOptions{}
+	if h.obsPublisher != nil && candidate.Observability.Enabled {
+		observabilityBridge = web.ObservabilityBridgeOptions{
+			Enabled: true,
+			Listen:  candidate.Observability.BridgeListen,
+			Token:   h.observabilityToken,
+			Sink:    h.obsPublisher,
+		}
+	}
+	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge))
 	if err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy configuration rendering failed")
 		return control.Failure("reload_failed", "render Caddy configuration")
@@ -994,7 +1162,7 @@ func (h *host) reload() control.Response {
 	return control.Success(map[string]any{"reloaded": true, "restartRequired": false})
 }
 
-func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int) *caddy.Config {
+func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions) *caddy.Config {
 	queueBridge := web.QueueBridgeOptions{}
 	if cfg.Queue.Enabled {
 		bridgeListen := "127.0.0.1:8081"
@@ -1004,15 +1172,16 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int) *
 		queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Token: cfg.Queue.BridgeToken}
 	}
 	return web.Config(web.Options{
-		Root:              cfg.Web.Root,
-		Listen:            cfg.Web.Listen,
-		Threads:           cfg.Web.Threads,
-		ReadHeaderTimeout: cfg.Web.ReadHeaderTimeout,
-		IdleTimeout:       cfg.Web.IdleTimeout,
-		MaxHeaderBytes:    cfg.Web.MaxHeaderBytes,
-		AccessLogPath:     accessLogPath,
-		AccessLogKeepDays: accessLogKeepDays,
-		QueueBridge:       queueBridge,
+		Root:                cfg.Web.Root,
+		Listen:              cfg.Web.Listen,
+		Threads:             cfg.Web.Threads,
+		ReadHeaderTimeout:   cfg.Web.ReadHeaderTimeout,
+		IdleTimeout:         cfg.Web.IdleTimeout,
+		MaxHeaderBytes:      cfg.Web.MaxHeaderBytes,
+		AccessLogPath:       accessLogPath,
+		AccessLogKeepDays:   accessLogKeepDays,
+		QueueBridge:         queueBridge,
+		ObservabilityBridge: observabilityBridge,
 	})
 }
 
@@ -1024,8 +1193,8 @@ func callControl(socket string, request control.Request) (control.Response, erro
 
 func controlCommand(operation string, args []string) error {
 	flags := flag.NewFlagSet(operation, flag.ContinueOnError)
-	controlSocket := flags.String("control-socket", config.Default().Runtime.ControlSocket, "Runtime control socket")
-	pidFile := flags.String("pid-file", config.Default().Runtime.PIDFile, "PID file fallback")
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
+	pidFile := flags.String("pid-file", defaultPIDFilePath(), "PID file fallback")
 	deep := flags.Bool("deep", operation == "diagnose", "request deep health")
 	if err := flags.Parse(args); err != nil {
 		return usageError("%v", err)

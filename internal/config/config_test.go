@@ -37,16 +37,64 @@ idleTimeout = "45s"`
 	}
 }
 
+func TestDefaultWebListenBindsAllIPv4Interfaces(t *testing.T) {
+	if got := Default().Web.Listen; got != "0.0.0.0:8080" {
+		t.Fatalf("default web listen = %q, want 0.0.0.0:8080", got)
+	}
+}
+
 func TestLoadExampleTOML(t *testing.T) {
 	config, err := Load(filepath.Join("..", "..", "config", "runtime.example.toml"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.SchemaVersion != SchemaVersion || config.Web.Threads != 4 || len(config.Queue.Workers) != 3 {
+	if config.SchemaVersion != SchemaVersion || config.Web.Threads != 4 || len(config.Queue.Workers) != 1 {
 		t.Fatalf("example configuration was not loaded: %#v", config)
 	}
 	if !filepath.IsAbs(config.Web.Root) || !filepath.IsAbs(config.Runtime.LogPath) || !filepath.IsAbs(config.Observability.DatasetRoot) {
 		t.Fatalf("relative paths were not resolved: %#v", config)
+	}
+}
+
+func TestLoadMissingConfigurationUsesDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config", "runtime.toml")
+	config, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(filepath.Dir(path))
+	if config.Web.Root != filepath.Join(root, "app/zentaopms/www") {
+		t.Fatalf("unexpected default web root: %q", config.Web.Root)
+	}
+	if config.Runtime.LogPath != filepath.Join(root, "logs/runtime.log") {
+		t.Fatalf("unexpected default log path: %q", config.Runtime.LogPath)
+	}
+	if config.Runtime.ControlSocket != filepath.Join(root, "run/runtime.sock") {
+		t.Fatalf("unexpected default control socket: %q", config.Runtime.ControlSocket)
+	}
+	if config.Runtime.PIDFile != filepath.Join(root, "run/runtime.pid") {
+		t.Fatalf("unexpected default PID file: %q", config.Runtime.PIDFile)
+	}
+	if config.Observability.DatasetRoot != filepath.Join(root, "observability") {
+		t.Fatalf("unexpected default observability path: %q", config.Observability.DatasetRoot)
+	}
+}
+
+func TestLoadPartialConfigurationRetainsRootedDefaults(t *testing.T) {
+	path := pathWithContent(t, `schemaVersion = 1
+
+[web]
+listen = "127.0.0.1:8090"
+`)
+	loaded, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(filepath.Dir(path))
+	if loaded.Web.Root != filepath.Join(root, "app/zentaopms/www") ||
+		loaded.Runtime.ControlSocket != filepath.Join(root, "run/runtime.sock") ||
+		loaded.Runtime.PIDFile != filepath.Join(root, "run/runtime.pid") {
+		t.Fatalf("partial configuration did not retain rooted defaults: %#v", loaded)
 	}
 }
 
@@ -115,9 +163,13 @@ func TestLoadAppliesLogAndIdentitySettings(t *testing.T) {
 controlSocket = "/run/zentao/runtime.sock"
 pidFile = "/run/zentao/runtime.pid"
 auditLog = "/var/log/zentao/audit.log"
+logLevel = "debug"
 logPath = "/var/log/zentao/runtime.log"
 logMaxBytes = 1048576
 logMaxBackups = 3
+auditLogMaxBytes = 2097152
+auditLogMaxBackups = 4
+auditLogKeepDays = 14
 nodeID = "node-a"
 clusterID = "cluster-prod-1"
 
@@ -131,7 +183,9 @@ listen = "127.0.0.1:8080"`
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Runtime.AuditLog != "/var/log/zentao/audit.log" || config.Runtime.LogMaxBytes != 1048576 || config.Runtime.LogMaxBackups != 3 {
+	if config.Runtime.AuditLog != "/var/log/zentao/audit.log" || config.Runtime.LogLevel != "debug" ||
+		config.Runtime.LogMaxBytes != 1048576 || config.Runtime.LogMaxBackups != 3 ||
+		config.Runtime.AuditLogMaxBytes != 2097152 || config.Runtime.AuditLogMaxBackups != 4 || config.Runtime.AuditLogKeepDays != 14 {
 		t.Fatalf("log settings not loaded: %#v", config.Runtime)
 	}
 	if config.Runtime.NodeID != "node-b" || config.Runtime.ClusterID != "cluster-prod-1" {
@@ -152,9 +206,41 @@ func TestValidateRejectsInvalidIdentityAndRelativeLogPath(t *testing.T) {
 		t.Fatal("expected relative logPath to be rejected")
 	}
 	config.Runtime.LogPath = "/var/log/zentao/runtime.log"
+	config.Runtime.LogLevel = "trace"
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected invalid logLevel to be rejected")
+	}
+	config.Runtime.LogLevel = "info"
 	config.Web.AccessLog = "logs/access.log"
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected relative accessLog to be rejected")
+	}
+}
+
+func TestObservabilityBridgeValidation(t *testing.T) {
+	config := DefaultForRoot("/opt/zentao")
+	config.Observability.Enabled = true
+	config.Observability.BridgeListen = "0.0.0.0:8082"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("public observability bridge must be rejected, got %v", err)
+	}
+	config.Observability.BridgeListen = "127.0.0.1:8082"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("loopback observability bridge must be accepted: %v", err)
+	}
+}
+
+func TestObservabilityBatchValidation(t *testing.T) {
+	config := DefaultForRoot("/opt/zentao")
+	config.Observability.Enabled = true
+	config.Observability.MinBatchRows = -1
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "minimum batch") {
+		t.Fatalf("negative minBatchRows must be rejected, got %v", err)
+	}
+	config.Observability.MinBatchRows = 1000
+	config.Observability.MaxFlushInterval = 0
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "maxFlushInterval") {
+		t.Fatalf("zero maxFlushInterval must be rejected, got %v", err)
 	}
 }
 
@@ -162,6 +248,7 @@ func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 	config := Default()
 	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Queue.Enabled = true
+	config.Queue.BridgeBaseURL = ""
 	if err := config.Validate(); err == nil {
 		t.Fatal("queue enabled without bridge URL must be rejected")
 	}

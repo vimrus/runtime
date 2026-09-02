@@ -54,6 +54,10 @@ readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
 
+# The synthetic app used by this test does not implement Queue Bridge.
+[queue]
+enabled = false
+
 [observability]
 enabled = true
 datasetRoot = "/shared/observability"
@@ -86,7 +90,7 @@ docker run --detach --name "${container}" \
     --volume "${work}/app:/shared:rw" \
     --volume "${work}/runtime.toml:/runtime-config/runtime.toml:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'mkdir -p /shared/logs /shared/observability /shared/spool && cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve --install-root /shared/app' >/dev/null
+    -c 'mkdir -p /shared/config /shared/logs /shared/observability /shared/spool && cp /runtime-config/runtime.toml /shared/config/runtime.toml && sed "s#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g" /opt/zentao/config/php.ini > /shared/config/php.ini && exec zentao serve --install-root /shared' >/dev/null
 
 wait_ready
 
@@ -100,7 +104,7 @@ if ! docker wait "${container}" >/dev/null 2>&1; then
     exit 1
 fi
 
-node_id="$(docker run --rm --entrypoint cat --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" /shared/app/data/node-id)"
+node_id="$(docker run --rm --entrypoint cat --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" /shared/data/node-id)"
 if [[ -z "${node_id}" ]]; then
     echo "node id was not persisted" >&2
     exit 1

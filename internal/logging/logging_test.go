@@ -96,6 +96,34 @@ func TestRotatingFileTimeBasedRotationAndKeepDays(t *testing.T) {
 	}
 }
 
+func TestRotatingFileKeepDaysTakesPrecedenceOverMaxBackups(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "runtime-node-a.jsonl")
+	rotator, err := NewRotatingFile(path, 64, 1, 0, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotator.Close()
+	for i := 0; i < 5; i++ {
+		if _, err := rotator.Write([]byte(strings.Repeat("x", 64))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rotated := 0
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "runtime-node-a.jsonl-") && strings.HasSuffix(entry.Name(), ".log") {
+			rotated++
+		}
+	}
+	if rotated < 2 {
+		t.Fatalf("keepDays must take precedence over maxBackups, rotated = %d", rotated)
+	}
+}
+
 func TestRotatingFilePruneRemovesExpiredSegments(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "runtime-node-a.jsonl")

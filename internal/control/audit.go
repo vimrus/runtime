@@ -7,6 +7,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/vimrus/runtime/internal/logging"
 )
 
 // AuditEntry records one administrative operation for the local control plane.
@@ -33,12 +35,21 @@ func (DiscardAuditor) Record(AuditEntry) {}
 
 // FileAuditor appends newline-delimited JSON entries to a local audit log.
 type FileAuditor struct {
-	mu   sync.Mutex
-	path string
-	file *os.File
+	mu       sync.Mutex
+	path     string
+	file     *os.File
+	rotating *logging.RotatingFile
 }
 
 func NewFileAuditor(path string) (*FileAuditor, error) {
+	return NewFileAuditorWithRetention(path, 0, 0, 0)
+}
+
+// NewFileAuditorWithRetention opens the audit log with built-in size rotation
+// and retention. maxBytes <= 0 disables size rotation, maxBackups limits the
+// number of rotated segments, and keepDays (when positive) takes precedence
+// over maxBackups.
+func NewFileAuditorWithRetention(path string, maxBytes int64, maxBackups int, keepDays int) (*FileAuditor, error) {
 	if path == "" {
 		return &FileAuditor{}, nil
 	}
@@ -48,15 +59,15 @@ func NewFileAuditor(path string) (*FileAuditor, error) {
 			return nil, fmt.Errorf("create audit log directory: %w", err)
 		}
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	rotating, err := logging.NewRotatingFile(path, maxBytes, maxBackups, 0, keepDays)
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
-	return &FileAuditor{path: path, file: file}, nil
+	return &FileAuditor{path: path, rotating: rotating}, nil
 }
 
 func (a *FileAuditor) Record(entry AuditEntry) {
-	if a == nil || a.file == nil {
+	if a == nil || (a.file == nil && a.rotating == nil) {
 		return
 	}
 	data, err := json.Marshal(entry)
@@ -65,6 +76,12 @@ func (a *FileAuditor) Record(entry AuditEntry) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.rotating != nil {
+		if _, err := a.rotating.Write(append(data, '\n')); err == nil {
+			_ = a.rotating.Sync()
+		}
+		return
+	}
 	if _, err := a.file.Write(append(data, '\n')); err == nil {
 		_ = a.file.Sync()
 	}
@@ -72,6 +89,9 @@ func (a *FileAuditor) Record(entry AuditEntry) {
 
 func (a *FileAuditor) Close() error {
 	if a == nil || a.file == nil {
+		if a != nil && a.rotating != nil {
+			return a.rotating.Close()
+		}
 		return nil
 	}
 	a.mu.Lock()

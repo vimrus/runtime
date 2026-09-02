@@ -63,6 +63,18 @@ jobs:
           scripts/ci/make-synthetic-app-package.sh "${appdir}"
           tests/e2e/access-log-smoke.sh "${appdir}"
 
+      - name: Observability bridge smoke
+        run: tests/e2e/observability-bridge-smoke.sh
+
+      - name: Observability dual-node smoke
+        run: tests/e2e/observability-dual-node-smoke.sh
+
+      - name: Observability read-only smoke
+        run: tests/e2e/observability-readonly-smoke.sh
+
+      - name: Observability fault-recovery smoke
+        run: tests/e2e/observability-fault-recovery-smoke.sh
+
       - name: Upload Runtime artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

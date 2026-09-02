@@ -79,6 +79,44 @@ func TestNormalizeRedactsCredentialsInMessage(t *testing.T) {
 	}
 }
 
+func TestNormalizeRejectsUnregisteredMetricName(t *testing.T) {
+	_, err := Normalize(Event{
+		ClusterID: "c", NodeID: "n", BootID: "b", Source: "php",
+		Kind: KindMetrics, MetricName: "user.supplied.name", MetricKind: "counter",
+	})
+	if err == nil {
+		t.Fatal("unregistered metric name must be rejected")
+	}
+}
+
+func TestNormalizeRejectsInvalidMetricKind(t *testing.T) {
+	_, err := Normalize(Event{
+		ClusterID: "c", NodeID: "n", BootID: "b", Source: "php",
+		Kind: KindMetrics, MetricName: "observability_events_received_total", MetricKind: "histogram",
+	})
+	if err == nil {
+		t.Fatal("metric kind histogram must be rejected until schema support exists")
+	}
+}
+
+func TestMetricRegistryIsStableAndRejectsUnknownNames(t *testing.T) {
+	names := MetricNames()
+	if len(names) == 0 {
+		t.Fatal("metric registry must not be empty")
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i] < names[i-1] {
+			t.Fatalf("metric registry is not sorted: %v", names)
+		}
+	}
+	if !AllowedMetricName("observability_events_received_total") {
+		t.Fatal("registered metric name was rejected")
+	}
+	if AllowedMetricName("user.supplied.name") {
+		t.Fatal("unregistered metric name was accepted")
+	}
+}
+
 func TestPublisherRejectsNilWriter(t *testing.T) {
 	root := t.TempDir()
 	_, err := NewPublisher(Config{DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"), NodeID: "n", ClusterID: "c", BootID: "b"}, nil)
@@ -169,6 +207,55 @@ func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 	}
 }
 
+func TestPublisherAddBatchRejectsPartialAcceptance(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingWriter{}
+	publisher, err := NewPublisher(Config{
+		DatasetRoot:   filepath.Join(root, "dataset"),
+		SpoolPath:     filepath.Join(root, "spool"),
+		NodeID:        "node-a",
+		ClusterID:     "cluster-a",
+		BootID:        "boot-a",
+		MaxBatchRows:  100,
+		MaxBatchBytes: 1 << 20,
+	}, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now := time.Now().UTC()
+	valid := Event{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "php", Kind: KindLogs, EventTime: now, Message: "ok"}
+	invalid := valid
+	invalid.ClusterID = ""
+
+	if _, err := publisher.AddBatch(ctx, []Event{valid, invalid}); err == nil {
+		t.Fatal("batch containing an invalid event must be rejected")
+	}
+	publisher.mu.Lock()
+	buffered := len(publisher.buffer[KindLogs])
+	publisher.mu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("rejected batch left %d events buffered", buffered)
+	}
+
+	accepted, err := publisher.AddBatch(ctx, []Event{valid, valid})
+	if err != nil || accepted != 2 {
+		t.Fatalf("valid batch not accepted: accepted=%d err=%v", accepted, err)
+	}
+	if err := publisher.FlushAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	writer.mu.Lock()
+	written := len(writer.written)
+	writer.mu.Unlock()
+	if written == 0 {
+		t.Fatal("valid batch was not published")
+	}
+}
+
 func TestPublisherDoesNotExposeTempFilesAsParquet(t *testing.T) {
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
@@ -183,7 +270,7 @@ func TestPublisherDoesNotExposeTempFilesAsParquet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.Add(context.Background(), Event{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindMetrics, EventTime: time.Now().UTC(), MetricName: "http.requests"}); err != nil {
+	if err := publisher.Add(context.Background(), Event{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindMetrics, EventTime: time.Now().UTC(), MetricName: "observability_events_received_total", MetricKind: "counter"}); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a crash before rename: the temp file must not match *.parquet.
@@ -251,6 +338,152 @@ func TestPublisherDoesNotCreateMissingDatasetRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "spool")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPublisherDropsBatchWhenSpoolQuotaExceeded(t *testing.T) {
+	root := t.TempDir()
+	dataset := filepath.Join(root, "dataset")
+	if err := os.Mkdir(dataset, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(Config{
+		DatasetRoot:   dataset,
+		SpoolPath:     filepath.Join(root, "spool"),
+		NodeID:        "node-a",
+		ClusterID:     "cluster-a",
+		BootID:        "boot-a",
+		MaxSpoolBytes: 1,
+		MaxBatchRows:  1,
+		MaxBatchBytes: 1 << 20,
+	}, &recordingWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = publisher.Add(context.Background(), Event{
+		ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+		Source: "runtime", Kind: KindLogs, Message: "quota test",
+	})
+	if err == nil {
+		t.Fatal("publish must fail when spool quota is exceeded")
+	}
+	if publisher.Dropped() != 1 {
+		t.Fatalf("dropped = %d, want 1", publisher.Dropped())
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "spool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("quota-rejected batch must not remain in spool, found %d files", len(entries))
+	}
+}
+
+func TestPublisherSelfMetricEventsAreRegisteredAndDeltaBased(t *testing.T) {
+	root := t.TempDir()
+	dataset := filepath.Join(root, "dataset")
+	if err := os.Mkdir(dataset, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(Config{
+		DatasetRoot:   dataset,
+		SpoolPath:     filepath.Join(root, "spool"),
+		NodeID:        "node-a",
+		ClusterID:     "cluster-a",
+		BootID:        "boot-a",
+		MaxBatchRows:  100,
+		MaxBatchBytes: 1 << 20,
+	}, &recordingWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := publisher.Add(ctx, Event{
+		ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+		Source: "runtime", Kind: KindLogs, Message: "self metric test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.FlushAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	first := publisher.SelfMetricEvents(time.Now())
+	if len(first) == 0 {
+		t.Fatal("self metric events must not be empty")
+	}
+	values := make(map[string]float64)
+	for _, event := range first {
+		if !AllowedMetricName(event.MetricName) {
+			t.Fatalf("self metric %q is not registered", event.MetricName)
+		}
+		if event.Value != nil {
+			values[event.MetricName] = *event.Value
+		}
+	}
+	if values["observability_events_received_total"] < 1 {
+		t.Fatalf("received delta = %v, want >= 1", values["observability_events_received_total"])
+	}
+	if values["observability_batch_rows"] != 1 {
+		t.Fatalf("batch rows = %v, want 1", values["observability_batch_rows"])
+	}
+
+	second := publisher.SelfMetricEvents(time.Now())
+	for _, event := range second {
+		if event.MetricName == "observability_events_received_total" && event.Value != nil && *event.Value != 0 {
+			t.Fatalf("second received delta = %v, want 0", *event.Value)
+		}
+	}
+}
+
+func TestPublisherShouldFlushBatchingPolicy(t *testing.T) {
+	root := t.TempDir()
+	dataset := filepath.Join(root, "dataset")
+	if err := os.Mkdir(dataset, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(Config{
+		DatasetRoot:      dataset,
+		SpoolPath:        filepath.Join(root, "spool"),
+		NodeID:           "node-a",
+		ClusterID:        "cluster-a",
+		BootID:           "boot-a",
+		MaxBatchRows:     100,
+		MaxBatchBytes:    1 << 20,
+		MinBatchRows:     10,
+		MinBatchBytes:    1 << 20,
+		FlushInterval:    time.Second,
+		MaxFlushInterval: 10 * time.Second,
+	}, &recordingWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publisher.shouldFlush(0) {
+		t.Fatal("empty buffer must not flush")
+	}
+	event := Event{
+		ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+		Source: "runtime", Kind: KindLogs, Message: "batch policy",
+	}
+	publisher.mu.Lock()
+	publisher.buffer[KindLogs] = append(publisher.buffer[KindLogs], event)
+	publisher.mu.Unlock()
+	if publisher.shouldFlush(0) {
+		t.Fatal("small buffer must not flush before minimum batch size")
+	}
+	publisher.mu.Lock()
+	for i := 0; i < 9; i++ {
+		publisher.buffer[KindLogs] = append(publisher.buffer[KindLogs], event)
+	}
+	publisher.mu.Unlock()
+	if !publisher.shouldFlush(0) {
+		t.Fatal("buffer at minimum rows must flush")
+	}
+	publisher.mu.Lock()
+	publisher.buffer[KindLogs] = nil
+	publisher.mu.Unlock()
+	if !publisher.shouldFlush(20 * time.Second) {
+		t.Fatal("max flush interval must force a flush")
 	}
 }
 

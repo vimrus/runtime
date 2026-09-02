@@ -78,3 +78,12 @@ func TestClaimLeaseDoesNotContainPayload(t *testing.T) {
 		t.Fatalf("claim response exposes payload: %s", data)
 	}
 }
+
+func TestScheduleRequestRequiresIdentity(t *testing.T) {
+	if err := (ScheduleRequest{Schema: SchemaVersion, NodeID: "node-a", InstanceID: "instance-a"}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (ScheduleRequest{Schema: SchemaVersion, NodeID: "", InstanceID: "instance-a"}).Validate(); err == nil {
+		t.Fatal("schedule request without node identity must fail")
+	}
+}

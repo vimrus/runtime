@@ -29,11 +29,18 @@ type Runtime struct {
 	PIDFile       string        `json:"pidFile" toml:"pidFile"`
 	DrainTimeout  time.Duration `json:"drainTimeout" toml:"drainTimeout"`
 	AuditLog      string        `json:"auditLog,omitempty" toml:"auditLog,omitempty"`
+	LogLevel      string        `json:"logLevel,omitempty" toml:"logLevel,omitempty"`
 	LogPath       string        `json:"logPath,omitempty" toml:"logPath,omitempty"`
 	LogMaxBytes   int64         `json:"logMaxBytes,omitempty" toml:"logMaxBytes,omitempty"`
 	LogMaxBackups int           `json:"logMaxBackups,omitempty" toml:"logMaxBackups,omitempty"`
-	NodeID        string        `json:"nodeID,omitempty" toml:"nodeID,omitempty"`
-	ClusterID     string        `json:"clusterID,omitempty" toml:"clusterID,omitempty"`
+	// AuditLogMaxBytes/Backups/KeepDays control the built-in audit rotation.
+	// When AuditLogKeepDays is positive it takes precedence over
+	// AuditLogMaxBackups, matching the Runtime JSONL retention semantics.
+	AuditLogMaxBytes   int64  `json:"auditLogMaxBytes,omitempty" toml:"auditLogMaxBytes,omitempty"`
+	AuditLogMaxBackups int    `json:"auditLogMaxBackups,omitempty" toml:"auditLogMaxBackups,omitempty"`
+	AuditLogKeepDays   int    `json:"auditLogKeepDays,omitempty" toml:"auditLogKeepDays,omitempty"`
+	NodeID             string `json:"nodeID,omitempty" toml:"nodeID,omitempty"`
+	ClusterID          string `json:"clusterID,omitempty" toml:"clusterID,omitempty"`
 }
 
 type Web struct {
@@ -68,18 +75,23 @@ type QueueWorker struct {
 }
 
 type Observability struct {
-	Enabled              bool          `json:"enabled" toml:"enabled"`
-	DatasetRoot          string        `json:"datasetRoot" toml:"datasetRoot"`
-	SpoolPath            string        `json:"spoolPath" toml:"spoolPath"`
-	MaxSpoolBytes        int64         `json:"maxSpoolBytes" toml:"maxSpoolBytes"`
-	MaxBatchRows         int           `json:"maxBatchRows" toml:"maxBatchRows"`
-	MaxBatchBytes        int64         `json:"maxBatchBytes" toml:"maxBatchBytes"`
-	FlushInterval        time.Duration `json:"flushInterval" toml:"flushInterval"`
-	MetricsDays          int           `json:"metricsDays" toml:"metricsDays"`
-	LogDays              int           `json:"logDays" toml:"logDays"`
-	JSONLConvertInterval time.Duration `json:"jsonlConvertInterval,omitempty" toml:"jsonlConvertInterval,omitempty"`
-	JSONLConvertSources  []string      `json:"jsonlConvertSources,omitempty" toml:"jsonlConvertSources,omitempty"`
-	JSONLKeepDays        int           `json:"jsonlKeepDays,omitempty" toml:"jsonlKeepDays,omitempty"`
+	Enabled                 bool          `json:"enabled" toml:"enabled"`
+	BridgeListen            string        `json:"bridgeListen,omitempty" toml:"bridgeListen,omitempty"`
+	DatasetRoot             string        `json:"datasetRoot" toml:"datasetRoot"`
+	SpoolPath               string        `json:"spoolPath" toml:"spoolPath"`
+	MaxSpoolBytes           int64         `json:"maxSpoolBytes" toml:"maxSpoolBytes"`
+	MaxBatchRows            int           `json:"maxBatchRows" toml:"maxBatchRows"`
+	MaxBatchBytes           int64         `json:"maxBatchBytes" toml:"maxBatchBytes"`
+	MinBatchRows            int           `json:"minBatchRows,omitempty" toml:"minBatchRows,omitempty"`
+	MinBatchBytes           int64         `json:"minBatchBytes,omitempty" toml:"minBatchBytes,omitempty"`
+	FlushInterval           time.Duration `json:"flushInterval" toml:"flushInterval"`
+	MaxFlushInterval        time.Duration `json:"maxFlushInterval,omitempty" toml:"maxFlushInterval,omitempty"`
+	MetricsDays             int           `json:"metricsDays" toml:"metricsDays"`
+	LogDays                 int           `json:"logDays" toml:"logDays"`
+	JSONLConvertInterval    time.Duration `json:"jsonlConvertInterval,omitempty" toml:"jsonlConvertInterval,omitempty"`
+	JSONLConvertSources     []string      `json:"jsonlConvertSources,omitempty" toml:"jsonlConvertSources,omitempty"`
+	JSONLKeepDays           int           `json:"jsonlKeepDays,omitempty" toml:"jsonlKeepDays,omitempty"`
+	JSONLDeleteAfterConvert bool          `json:"jsonlDeleteAfterConvert,omitempty" toml:"jsonlDeleteAfterConvert,omitempty"`
 }
 
 type Overrides struct {
@@ -111,20 +123,27 @@ func Default() Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
 		Runtime: Runtime{
-			ControlSocket: defaultControlSocket(),
-			PIDFile:       defaultPIDFile(),
-			DrainTimeout:  30 * time.Second,
-			LogMaxBytes:   16 * 1024 * 1024,
-			LogMaxBackups: 5,
+			ControlSocket:      defaultControlSocket(),
+			PIDFile:            defaultPIDFile(),
+			DrainTimeout:       30 * time.Second,
+			LogLevel:           "info",
+			LogPath:            "logs/runtime.log",
+			LogMaxBytes:        16 * 1024 * 1024,
+			LogMaxBackups:      5,
+			AuditLogMaxBytes:   16 * 1024 * 1024,
+			AuditLogMaxBackups: 5,
 		},
 		Web: Web{
-			Listen:            "127.0.0.1:8080",
+			Root:              "app/zentaopms/www",
+			Listen:            "0.0.0.0:8080",
 			Threads:           4,
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       30 * time.Second,
 			MaxHeaderBytes:    16 * 1024,
 		},
 		Queue: Queue{
+			Enabled:           true,
+			BridgeBaseURL:     "http://127.0.0.1:8081/internal/runtime/queue/v1",
 			RequestTimeout:    5 * time.Second,
 			ClaimBatch:        8,
 			LeaseSeconds:      60,
@@ -137,32 +156,59 @@ func Default() Config {
 			},
 		},
 		Observability: Observability{
-			MaxSpoolBytes:        1024 * 1024 * 1024,
-			MaxBatchRows:         10000,
-			MaxBatchBytes:        16 * 1024 * 1024,
-			FlushInterval:        60 * time.Second,
-			MetricsDays:          30,
-			LogDays:              7,
-			JSONLConvertInterval: time.Hour,
-			JSONLConvertSources:  []string{"access", "runtime"},
-			JSONLKeepDays:        7,
+			BridgeListen:            "127.0.0.1:8082",
+			DatasetRoot:             "observability",
+			SpoolPath:               "spool/observability",
+			MaxSpoolBytes:           1024 * 1024 * 1024,
+			MaxBatchRows:            10000,
+			MaxBatchBytes:           16 * 1024 * 1024,
+			MinBatchRows:            1000,
+			MinBatchBytes:           1024 * 1024,
+			FlushInterval:           60 * time.Second,
+			MaxFlushInterval:        10 * time.Minute,
+			MetricsDays:             30,
+			LogDays:                 7,
+			JSONLConvertInterval:    time.Hour,
+			JSONLConvertSources:     []string{"access", "runtime"},
+			JSONLKeepDays:           7,
+			JSONLDeleteAfterConvert: true,
 		},
 	}
 }
 
-func Load(path string, environ []string) (Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("read runtime configuration: %w", err)
+// DefaultForRoot returns the default configuration rooted at the Runtime
+// installation directory. Paths in TOML can override these values, while
+// omitted fields continue to use this installation-local layout.
+func DefaultForRoot(root string) Config {
+	config := Default()
+	if root == "" {
+		return config
 	}
+	config.Runtime.ControlSocket = filepath.Join(root, "run", "runtime.sock")
+	config.Runtime.PIDFile = filepath.Join(root, "run", "runtime.pid")
+	config.Runtime.LogPath = filepath.Join(root, "logs", "runtime.log")
+	config.Web.Root = filepath.Join(root, "app", "zentaopms", "www")
+	config.Observability.DatasetRoot = filepath.Join(root, "observability")
+	config.Observability.SpoolPath = filepath.Join(root, "spool", "observability")
+	return config
+}
 
-	config, err := decode(data)
-	if err != nil {
-		return Config{}, err
-	}
+func Load(path string, environ []string) (Config, error) {
 	configRoot, err := filepath.Abs(filepath.Dir(filepath.Dir(path)))
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve runtime configuration root: %w", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return Config{}, fmt.Errorf("read runtime configuration: %w", err)
+	}
+
+	config := DefaultForRoot(configRoot)
+	if err == nil {
+		config, err = decode(data, config)
+		if err != nil {
+			return Config{}, err
+		}
 	}
 	if err := config.resolvePaths(configRoot); err != nil {
 		return Config{}, err
@@ -201,17 +247,21 @@ func (c *Config) resolvePaths(root string) error {
 	return nil
 }
 
-func decode(data []byte) (Config, error) {
+func decode(data []byte, config Config) (Config, error) {
 	type rawRuntime struct {
-		ControlSocket *string `toml:"controlSocket"`
-		PIDFile       *string `toml:"pidFile"`
-		DrainTimeout  *string `toml:"drainTimeout"`
-		AuditLog      *string `toml:"auditLog"`
-		LogPath       *string `toml:"logPath"`
-		LogMaxBytes   *int64  `toml:"logMaxBytes"`
-		LogMaxBackups *int    `toml:"logMaxBackups"`
-		NodeID        *string `toml:"nodeID"`
-		ClusterID     *string `toml:"clusterID"`
+		ControlSocket      *string `toml:"controlSocket"`
+		PIDFile            *string `toml:"pidFile"`
+		DrainTimeout       *string `toml:"drainTimeout"`
+		AuditLog           *string `toml:"auditLog"`
+		LogLevel           *string `toml:"logLevel"`
+		LogPath            *string `toml:"logPath"`
+		LogMaxBytes        *int64  `toml:"logMaxBytes"`
+		LogMaxBackups      *int    `toml:"logMaxBackups"`
+		AuditLogMaxBytes   *int64  `toml:"auditLogMaxBytes"`
+		AuditLogMaxBackups *int    `toml:"auditLogMaxBackups"`
+		AuditLogKeepDays   *int    `toml:"auditLogKeepDays"`
+		NodeID             *string `toml:"nodeID"`
+		ClusterID          *string `toml:"clusterID"`
 	}
 	type rawWeb struct {
 		Root              *string `toml:"root"`
@@ -242,18 +292,23 @@ func decode(data []byte) (Config, error) {
 		Workers           *[]rawQueueWorker `toml:"workers"`
 	}
 	type rawObservability struct {
-		Enabled              *bool    `toml:"enabled"`
-		DatasetRoot          *string  `toml:"datasetRoot"`
-		SpoolPath            *string  `toml:"spoolPath"`
-		MaxSpoolBytes        *int64   `toml:"maxSpoolBytes"`
-		MaxBatchRows         *int     `toml:"maxBatchRows"`
-		MaxBatchBytes        *int64   `toml:"maxBatchBytes"`
-		FlushInterval        *string  `toml:"flushInterval"`
-		MetricsDays          *int     `toml:"metricsDays"`
-		LogDays              *int     `toml:"logDays"`
-		JSONLConvertInterval *string  `toml:"jsonlConvertInterval"`
-		JSONLConvertSources  []string `toml:"jsonlConvertSources"`
-		JSONLKeepDays        *int     `toml:"jsonlKeepDays"`
+		Enabled                 *bool    `toml:"enabled"`
+		BridgeListen            *string  `toml:"bridgeListen"`
+		DatasetRoot             *string  `toml:"datasetRoot"`
+		SpoolPath               *string  `toml:"spoolPath"`
+		MaxSpoolBytes           *int64   `toml:"maxSpoolBytes"`
+		MaxBatchRows            *int     `toml:"maxBatchRows"`
+		MaxBatchBytes           *int64   `toml:"maxBatchBytes"`
+		MinBatchRows            *int     `toml:"minBatchRows"`
+		MinBatchBytes           *int64   `toml:"minBatchBytes"`
+		FlushInterval           *string  `toml:"flushInterval"`
+		MaxFlushInterval        *string  `toml:"maxFlushInterval"`
+		MetricsDays             *int     `toml:"metricsDays"`
+		LogDays                 *int     `toml:"logDays"`
+		JSONLConvertInterval    *string  `toml:"jsonlConvertInterval"`
+		JSONLConvertSources     []string `toml:"jsonlConvertSources"`
+		JSONLKeepDays           *int     `toml:"jsonlKeepDays"`
+		JSONLDeleteAfterConvert *bool    `toml:"jsonlDeleteAfterConvert"`
 	}
 	type rawConfig struct {
 		SchemaVersion *int              `toml:"schemaVersion"`
@@ -263,7 +318,6 @@ func decode(data []byte) (Config, error) {
 		Observability *rawObservability `toml:"observability"`
 	}
 
-	config := Default()
 	var raw rawConfig
 	decoder := toml.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
@@ -290,6 +344,9 @@ func decode(data []byte) (Config, error) {
 		if raw.Runtime.AuditLog != nil {
 			config.Runtime.AuditLog = *raw.Runtime.AuditLog
 		}
+		if raw.Runtime.LogLevel != nil {
+			config.Runtime.LogLevel = *raw.Runtime.LogLevel
+		}
 		if raw.Runtime.LogPath != nil {
 			config.Runtime.LogPath = *raw.Runtime.LogPath
 		}
@@ -298,6 +355,15 @@ func decode(data []byte) (Config, error) {
 		}
 		if raw.Runtime.LogMaxBackups != nil {
 			config.Runtime.LogMaxBackups = *raw.Runtime.LogMaxBackups
+		}
+		if raw.Runtime.AuditLogMaxBytes != nil {
+			config.Runtime.AuditLogMaxBytes = *raw.Runtime.AuditLogMaxBytes
+		}
+		if raw.Runtime.AuditLogMaxBackups != nil {
+			config.Runtime.AuditLogMaxBackups = *raw.Runtime.AuditLogMaxBackups
+		}
+		if raw.Runtime.AuditLogKeepDays != nil {
+			config.Runtime.AuditLogKeepDays = *raw.Runtime.AuditLogKeepDays
 		}
 		if raw.Runtime.NodeID != nil {
 			config.Runtime.NodeID = *raw.Runtime.NodeID
@@ -416,6 +482,9 @@ func decode(data []byte) (Config, error) {
 		if raw.Observability.Enabled != nil {
 			config.Observability.Enabled = *raw.Observability.Enabled
 		}
+		if raw.Observability.BridgeListen != nil {
+			config.Observability.BridgeListen = *raw.Observability.BridgeListen
+		}
 		if raw.Observability.DatasetRoot != nil {
 			config.Observability.DatasetRoot = *raw.Observability.DatasetRoot
 		}
@@ -431,12 +500,25 @@ func decode(data []byte) (Config, error) {
 		if raw.Observability.MaxBatchBytes != nil {
 			config.Observability.MaxBatchBytes = *raw.Observability.MaxBatchBytes
 		}
+		if raw.Observability.MinBatchRows != nil {
+			config.Observability.MinBatchRows = *raw.Observability.MinBatchRows
+		}
+		if raw.Observability.MinBatchBytes != nil {
+			config.Observability.MinBatchBytes = *raw.Observability.MinBatchBytes
+		}
 		if raw.Observability.FlushInterval != nil {
 			value, err := time.ParseDuration(*raw.Observability.FlushInterval)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse observability.flushInterval: %w", err)
 			}
 			config.Observability.FlushInterval = value
+		}
+		if raw.Observability.MaxFlushInterval != nil {
+			value, err := time.ParseDuration(*raw.Observability.MaxFlushInterval)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse observability.maxFlushInterval: %w", err)
+			}
+			config.Observability.MaxFlushInterval = value
 		}
 		if raw.Observability.MetricsDays != nil {
 			config.Observability.MetricsDays = *raw.Observability.MetricsDays
@@ -456,6 +538,9 @@ func decode(data []byte) (Config, error) {
 		}
 		if raw.Observability.JSONLKeepDays != nil {
 			config.Observability.JSONLKeepDays = *raw.Observability.JSONLKeepDays
+		}
+		if raw.Observability.JSONLDeleteAfterConvert != nil {
+			config.Observability.JSONLDeleteAfterConvert = *raw.Observability.JSONLDeleteAfterConvert
 		}
 	}
 	return config, nil
@@ -664,6 +749,14 @@ func (c Config) Validate() error {
 	if c.Runtime.LogMaxBytes < 0 || c.Runtime.LogMaxBackups < 0 {
 		return fmt.Errorf("runtime.logMaxBytes and runtime.logMaxBackups must not be negative")
 	}
+	switch c.Runtime.LogLevel {
+	case "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("runtime.logLevel must be one of debug, info, warn or error")
+	}
+	if c.Runtime.AuditLogMaxBytes < 0 || c.Runtime.AuditLogMaxBackups < 0 || c.Runtime.AuditLogKeepDays < 0 {
+		return fmt.Errorf("runtime audit log limits must not be negative")
+	}
 	for name, value := range map[string]string{"nodeID": c.Runtime.NodeID, "clusterID": c.Runtime.ClusterID} {
 		if value != "" && !validIdentity(value) {
 			return fmt.Errorf("runtime.%s contains unsupported characters", name)
@@ -706,6 +799,14 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Observability.Enabled {
+		host, port, err := net.SplitHostPort(c.Observability.BridgeListen)
+		if err != nil || (host != "localhost" && host != "127.0.0.1" && host != "::1") {
+			return fmt.Errorf("observability.bridgeListen must use a loopback address")
+		}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return fmt.Errorf("observability.bridgeListen must include a valid port")
+		}
 		if c.Observability.DatasetRoot == "" || !filepath.IsAbs(c.Observability.DatasetRoot) {
 			return fmt.Errorf("observability.datasetRoot must be an absolute path when enabled")
 		}
@@ -715,8 +816,14 @@ func (c Config) Validate() error {
 		if c.Observability.MaxSpoolBytes <= 0 || c.Observability.MaxBatchRows <= 0 || c.Observability.MaxBatchBytes <= 0 {
 			return fmt.Errorf("observability limits must be positive")
 		}
+		if c.Observability.MinBatchRows < 0 || c.Observability.MinBatchBytes < 0 {
+			return fmt.Errorf("observability minimum batch limits must not be negative")
+		}
 		if c.Observability.FlushInterval <= 0 || c.Observability.MetricsDays <= 0 || c.Observability.LogDays <= 0 {
 			return fmt.Errorf("observability intervals and retention must be positive")
+		}
+		if c.Observability.MaxFlushInterval <= 0 {
+			return fmt.Errorf("observability.maxFlushInterval must be positive")
 		}
 		if c.Observability.JSONLConvertInterval <= 0 || c.Observability.JSONLKeepDays <= 0 {
 			return fmt.Errorf("observability jsonl convert interval and keep days must be positive")
@@ -754,9 +861,13 @@ func RestartRequired(current, candidate Config) bool {
 		current.Runtime.ControlSocket != candidate.Runtime.ControlSocket ||
 		current.Runtime.PIDFile != candidate.Runtime.PIDFile ||
 		current.Runtime.AuditLog != candidate.Runtime.AuditLog ||
+		current.Runtime.LogLevel != candidate.Runtime.LogLevel ||
 		current.Runtime.LogPath != candidate.Runtime.LogPath ||
 		current.Runtime.LogMaxBytes != candidate.Runtime.LogMaxBytes ||
 		current.Runtime.LogMaxBackups != candidate.Runtime.LogMaxBackups ||
+		current.Runtime.AuditLogMaxBytes != candidate.Runtime.AuditLogMaxBytes ||
+		current.Runtime.AuditLogMaxBackups != candidate.Runtime.AuditLogMaxBackups ||
+		current.Runtime.AuditLogKeepDays != candidate.Runtime.AuditLogKeepDays ||
 		current.Runtime.NodeID != candidate.Runtime.NodeID ||
 		current.Runtime.ClusterID != candidate.Runtime.ClusterID ||
 		current.Queue.Enabled != candidate.Queue.Enabled ||
@@ -771,16 +882,21 @@ func RestartRequired(current, candidate Config) bool {
 		current.Queue.DrainTimeout != candidate.Queue.DrainTimeout ||
 		!equalWorkers(current.Queue.Workers, candidate.Queue.Workers) ||
 		current.Observability.Enabled != candidate.Observability.Enabled ||
+		current.Observability.BridgeListen != candidate.Observability.BridgeListen ||
 		current.Observability.DatasetRoot != candidate.Observability.DatasetRoot ||
 		current.Observability.SpoolPath != candidate.Observability.SpoolPath ||
 		current.Observability.FlushInterval != candidate.Observability.FlushInterval ||
 		current.Observability.MaxSpoolBytes != candidate.Observability.MaxSpoolBytes ||
 		current.Observability.MaxBatchRows != candidate.Observability.MaxBatchRows ||
 		current.Observability.MaxBatchBytes != candidate.Observability.MaxBatchBytes ||
+		current.Observability.MinBatchRows != candidate.Observability.MinBatchRows ||
+		current.Observability.MinBatchBytes != candidate.Observability.MinBatchBytes ||
+		current.Observability.MaxFlushInterval != candidate.Observability.MaxFlushInterval ||
 		current.Observability.MetricsDays != candidate.Observability.MetricsDays ||
 		current.Observability.LogDays != candidate.Observability.LogDays ||
 		current.Observability.JSONLConvertInterval != candidate.Observability.JSONLConvertInterval ||
 		current.Observability.JSONLKeepDays != candidate.Observability.JSONLKeepDays ||
+		current.Observability.JSONLDeleteAfterConvert != candidate.Observability.JSONLDeleteAfterConvert ||
 		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources)
 }
 

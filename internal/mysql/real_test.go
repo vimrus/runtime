@@ -21,7 +21,7 @@ func TestRealMySQLInitializeStartStop(t *testing.T) {
 		Binary:         binary,
 		DataDir:        filepath.Join(root, "data"),
 		SocketPath:     filepath.Join(root, "mysql.sock"),
-		Port:           13307,
+		Port:           freeTCPPort(t),
 		LogPath:        filepath.Join(root, "logs", "mysql.log"),
 		SecretsFile:    filepath.Join(root, "secrets", "root"),
 		StartupTimeout: 90 * time.Second,

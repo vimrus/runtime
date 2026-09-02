@@ -9,7 +9,7 @@ Type=simple
 User=zentao
 Group=zentao
 ExecStart=/opt/zentao/bin/zentao serve
-ExecReload=/opt/zentao/bin/zentao reload --control-socket /run/zentao/runtime.sock
+ExecReload=/opt/zentao/bin/zentao reload --control-socket /opt/zentao/run/runtime.sock
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=45
@@ -19,7 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/zentao/data /opt/zentao/config /opt/zentao/logs /opt/zentao/spool /opt/zentao/observability /run/zentao
+ReadWritePaths=/opt/zentao/data /opt/zentao/config /opt/zentao/logs /opt/zentao/spool /opt/zentao/observability /opt/zentao/run
 
 [Install]
 WantedBy=multi-user.target

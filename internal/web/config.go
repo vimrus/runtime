@@ -14,15 +14,16 @@ import (
 )
 
 type Options struct {
-	Root              string
-	Listen            string
-	Threads           int
-	ReadHeaderTimeout time.Duration
-	IdleTimeout       time.Duration
-	MaxHeaderBytes    int
-	AccessLogPath     string
-	AccessLogKeepDays int
-	QueueBridge       QueueBridgeOptions
+	Root                string
+	Listen              string
+	Threads             int
+	ReadHeaderTimeout   time.Duration
+	IdleTimeout         time.Duration
+	MaxHeaderBytes      int
+	AccessLogPath       string
+	AccessLogKeepDays   int
+	QueueBridge         QueueBridgeOptions
+	ObservabilityBridge ObservabilityBridgeOptions
 }
 
 // QueueBridgeOptions configures the private loopback listener that exposes
@@ -31,6 +32,15 @@ type QueueBridgeOptions struct {
 	Enabled bool
 	Listen  string
 	Token   string
+}
+
+// ObservabilityBridgeOptions configures the private loopback listener that
+// receives bounded, versioned telemetry events from the PHP application.
+type ObservabilityBridgeOptions struct {
+	Enabled bool
+	Listen  string
+	Token   string
+	Sink    EventSink
 }
 
 // Config builds the smallest useful Classic-mode Caddy configuration.
@@ -95,7 +105,7 @@ func Config(options Options) *caddy.Config {
 			bridgeListen = "127.0.0.1:8081"
 		}
 		bridgeRoutes := caddyhttp.RouteList{}
-		for _, endpoint := range []string{"capabilities", "claim", "execute", "heartbeat", "reap", "stats", "control"} {
+		for _, endpoint := range []string{"capabilities", "claim", "execute", "heartbeat", "reap", "stats", "control", "schedule"} {
 			bridgeRoutes = append(bridgeRoutes, caddyhttp.Route{
 				MatcherSetsRaw: []caddy.ModuleMap{{
 					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/queue/v1/" + endpoint}, nil),
@@ -120,6 +130,28 @@ func Config(options Options) *caddy.Config {
 		}
 		servers["queuebridge"] = bridgeServer
 	}
+	if options.ObservabilityBridge.Enabled {
+		observabilityListen := options.ObservabilityBridge.Listen
+		if observabilityListen == "" {
+			observabilityListen = "127.0.0.1:8082"
+		}
+		observabilityServer := &caddyhttp.Server{
+			Listen:            []string{observabilityListen},
+			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
+			IdleTimeout:       caddy.Duration(options.IdleTimeout),
+			MaxHeaderBytes:    options.MaxHeaderBytes,
+			Routes: caddyhttp.RouteList{{
+				MatcherSetsRaw: []caddy.ModuleMap{{
+					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/observability/v1/events"}, nil),
+				}},
+				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(ObservabilityIngest{
+					Token: options.ObservabilityBridge.Token,
+					Sink:  options.ObservabilityBridge.Sink,
+				}, "handler", "zentao_observability_ingest", nil)},
+			}},
+		}
+		servers["observability"] = observabilityServer
+	}
 
 	persist := false
 	if options.AccessLogPath != "" {
@@ -129,6 +161,16 @@ func Config(options Options) *caddy.Config {
 		Admin: &caddy.AdminConfig{
 			Disabled: true,
 			Config:   &caddy.ConfigSettings{Persist: &persist},
+		},
+		// Caddy emits informational warnings during normal HTTP startup when
+		// TLS is not configured. Keep those out of the user's console while
+		// retaining real errors.
+		Logging: &caddy.Logging{
+			Logs: map[string]*caddy.CustomLog{
+				caddy.DefaultLoggerName: {
+					BaseLog: caddy.BaseLog{Level: "ERROR"},
+				},
+			},
 		},
 		AppsRaw: caddy.ModuleMap{
 			"http": caddyconfig.JSON(caddyhttp.App{Servers: servers}, nil),
@@ -147,27 +189,50 @@ func Config(options Options) *caddy.Config {
 		// Hourly rolling creates many small segments; keep enough backups to
 		// honor the day-based retention before MaxBackups trims them.
 		rollKeep := keepDays*24 + 1
-		config.Logging = &caddy.Logging{
-			Logs: map[string]*caddy.CustomLog{
-				"access": {
-					BaseLog: caddy.BaseLog{
-						WriterRaw: caddyconfig.JSONModuleObject(logging.FileWriter{
-							Filename:         options.AccessLogPath,
-							Roll:             &roll,
-							RollSizeMB:       64,
-							RollAtMinutes:    []int{0},
-							RollKeepDays:     keepDays,
-							RollKeep:         rollKeep,
-							RollCompression:  "none",
-							BackupTimeFormat: "2006-01-02T15-04-05.000",
-						}, "output", "file", nil),
-						EncoderRaw: caddyconfig.JSONModuleObject(logging.JSONEncoder{}, "format", "json", nil),
-						Level:      "DEBUG",
-					},
-					Include: []string{"http.log.access", "http.log.error"},
-				},
+		config.Logging.Logs["access"] = &caddy.CustomLog{
+			BaseLog: caddy.BaseLog{
+				WriterRaw: caddyconfig.JSONModuleObject(logging.FileWriter{
+					Filename:         options.AccessLogPath,
+					Roll:             &roll,
+					RollSizeMB:       64,
+					RollAtMinutes:    []int{0},
+					RollKeepDays:     keepDays,
+					RollKeep:         rollKeep,
+					RollCompression:  "none",
+					BackupTimeFormat: "2006-01-02T15-04-05.000",
+				}, "output", "file", nil),
+				EncoderRaw: accessLogEncoderRaw(),
+				Level:      "DEBUG",
 			},
+			Include: []string{"http.log.access", "http.log.error"},
 		}
 	}
 	return config
+}
+
+// accessLogEncoderRaw returns a Caddy filter encoder that keeps the JSON
+// access format but redacts well-known sensitive query parameters from
+// request.uri before the line is written.
+func accessLogEncoderRaw() json.RawMessage {
+	redactedQueryParams := []string{
+		"token", "password", "passwd", "secret", "session", "session_id",
+		"api_key", "apikey", "access_key", "authorization", "signature", "sign",
+	}
+	actions := make([]map[string]any, 0, len(redactedQueryParams))
+	for _, parameter := range redactedQueryParams {
+		actions = append(actions, map[string]any{
+			"type":      "replace",
+			"parameter": parameter,
+			"value":     "[REDACTED]",
+		})
+	}
+	fields := map[string]json.RawMessage{
+		"request>uri": caddyconfig.JSONModuleObject(struct {
+			Actions []map[string]any `json:"actions"`
+		}{Actions: actions}, "filter", "query", nil),
+	}
+	return caddyconfig.JSONModuleObject(logging.FilterEncoder{
+		WrappedRaw: caddyconfig.JSONModuleObject(logging.JSONEncoder{}, "format", "json", nil),
+		FieldsRaw:  fields,
+	}, "format", "filter", nil)
 }

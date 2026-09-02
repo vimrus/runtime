@@ -2,13 +2,12 @@
 
 ## 配置文件
 
-`config/runtime.example.toml` 是带注释的模板，Runtime 不会自动读取。复制后命名为 `runtime.toml`；应用、日志和观测目录等相对路径会按安装根目录解析，无需把安装前缀写入每一项。系统级 socket 和 PID 路径仍按平台约定使用绝对路径。
+Runtime 内置系统默认配置。`config/runtime.example.toml` 是带注释的可选覆盖模板；只有需要修改监听地址、线程数、队列或观测选项时，才复制为同目录的 `config/runtime.toml`。未提供 `runtime.toml` 时直接使用内置默认值。应用、日志和观测目录等相对路径会按实际 Runtime 根目录自动解析。
 
-Linux 在 Runtime 根目录下创建 `config/runtime.toml`：
+需要覆盖默认值时，在 Runtime 根目录执行：
 
 ```bash
 sudo install -m 0640 config/runtime.example.toml config/runtime.toml
-sudo editor config/runtime.toml
 ```
 
 Windows 也在 Runtime 根目录下创建 `config\runtime.toml`；`C:\Program Files\ZenTao` 只是默认安装示例。
@@ -17,15 +16,15 @@ Windows 也在 Runtime 根目录下创建 `config\runtime.toml`；`C:\Program Fi
 
 ## Docker Compose
 
-在仓库根目录创建配置：
+未提供配置文件时直接使用镜像内置默认值：
 
 ```bash
-cp config/runtime.example.toml config/runtime.toml
-$EDITOR config/runtime.toml
 docker compose -f packaging/docker/compose.yaml up -d web
 ```
 
-Compose 将宿主机配置只读挂载到容器 `/opt/zentao/config/runtime.toml`。数据库连接通过 `ZT_DB_*` 环境变量配置。
+默认配置即可启动，Web 默认监听 `0.0.0.0:8080`（所有 IPv4 网卡）。只有需要自定义监听地址、线程数、队列或观测选项时，才编辑 `runtime.toml`。
+
+需要覆盖默认值时，将宿主机的 `runtime.toml` 只读挂载到容器 `/opt/zentao/config/runtime.toml`。数据库连接通过 `ZT_DB_*` 环境变量配置。
 
 以下数据使用命名卷持久化，删除容器不会丢失：
 

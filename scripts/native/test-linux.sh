@@ -45,7 +45,7 @@ docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/r
     | jq --exit-status '.status == "ready"' >/dev/null
 docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/ \
     | jq --exit-status '.zts == true and .ioncube == true and (.php | startswith("8.4."))' >/dev/null
-docker exec "${container}" php --ri 'ionCube Loader' | grep -F 'ionCube Loader'
+docker exec "${container}" zentao php-cli -- --ri 'ionCube Loader' | grep -F 'ionCube Loader'
 docker exec "${container}" zentao version \
     | jq --exit-status '.mode == "classic" and .php_zts == true and .zend_signals == false and .duckdb == "v2.10505.0"' >/dev/null
 
@@ -53,5 +53,9 @@ mkdir -p "${synthetic_dir}/open"
 "${repo_root}/scripts/ci/make-synthetic-app-package.sh" "${synthetic_dir}/open" >/dev/null
 "${repo_root}/tests/e2e/access-log-smoke.sh" "${synthetic_dir}/open"
 "${repo_root}/tests/e2e/jsonl-parquet-smoke.sh"
+"${repo_root}/tests/e2e/observability-bridge-smoke.sh"
+"${repo_root}/tests/e2e/observability-dual-node-smoke.sh"
+"${repo_root}/tests/e2e/observability-readonly-smoke.sh"
+"${repo_root}/tests/e2e/observability-fault-recovery-smoke.sh"
 
 echo "Linux ${RUNTIME_ARCH} smoke tests passed"

@@ -34,8 +34,6 @@ services:
     volumes:
       - zentao-app:/opt/zentao/app
       - zentao-data:/opt/zentao/data
-      # Create config/runtime.toml from config/runtime.example.toml first.
-      - ../../config/runtime.toml:/opt/zentao/config/runtime.toml:ro
       - zentao-observability:/opt/zentao/observability
       - zentao-spool:/opt/zentao/spool/observability
       - zentao-logs:/opt/zentao/logs

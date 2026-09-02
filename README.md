@@ -20,11 +20,10 @@ Runtime 不直接访问禅道业务数据库。数据库连接由 PHP 应用和�
 
 ### Linux
 
-请在 Runtime 根目录执行。首次启动前，从模板创建配置并按实际路径修改：
+请在 Runtime 根目录执行。Runtime 没有 `runtime.toml` 时使用内置默认配置；需要覆盖默认值时再从模板创建配置：
 
 ```bash
 sudo install -m 0640 config/runtime.example.toml config/runtime.toml
-sudo editor config/runtime.toml
 ```
 
 准备好应用发布目录后启动：
@@ -44,12 +43,13 @@ sudo systemctl status zentao
 
 ### Docker Compose
 
-首次启动前，从模板创建仓库根目录下的配置文件：
+需要覆盖 Docker 默认配置时，从模板创建配置文件：
 
 ```bash
 cp config/runtime.example.toml config/runtime.toml
-$EDITOR config/runtime.toml
 ```
+
+默认配置会自动按 Runtime 根目录解析路径，Web 默认监听 `0.0.0.0:8080`；只有需要自定义监听地址、线程数或可选组件时才需要编辑它。
 
 仅启动 Web（连接外部数据库）：
 
@@ -78,7 +78,7 @@ docker compose -f packaging/docker/compose.yaml --profile full up -d
   spool/observability/     观测故障时的本地 spool
 ```
 
-默认配置文件位于 Runtime 根目录的 `config/runtime.toml`；标准安装示例分别为 Linux `/opt/zentao/config/runtime.toml` 和 Windows `C:\Program Files\ZenTao\config\runtime.toml`。
+默认配置文件位于 Runtime 根目录的 `config/runtime.toml`；文件不存在时使用内置默认值。标准安装示例分别为 Linux `/opt/zentao/config/runtime.toml` 和 Windows `C:\Program Files\ZenTao\config\runtime.toml`。
 
 ## 子命令
 
@@ -172,6 +172,7 @@ zentao.exe service install
 - 产品/部署设计：[docs/design/](./docs/design/)
 - 开发与验证：[docs/development/](./docs/development/)
 - 配置与安全：[docs/configuration-and-security.md](./docs/configuration-and-security.md)
+- 多节点部署：[docs/deployment/multi-node.md](./docs/deployment/multi-node.md)
 - 编译与打包：[docs/build-and-package.md](./docs/build-and-package.md)
 - 文档索引：[docs/README.md](./docs/README.md)
 

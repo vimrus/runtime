@@ -28,6 +28,13 @@ fi
 
 cp "${index}" "${index}.zentao-orig"
 
+# Classic mode reuses the PHP process between requests.  Reset the response
+# status at the start of every request so a previous redirect cannot leak into
+# a later JSON/API response.
+if ! grep -q "Classic mode response status" "${index}"; then
+    sed -i '0,/^{$/s//{\n    \/\* Classic mode response status must not leak between requests. \*\/\n    http_response_code(200);/' "${index}"
+fi
+
 # 1. Only treat FrankenPHP as worker-mode when FRANKENPHP_WORKER is present.
 sed -i \
     "s|if(php_sapi_name() == 'frankenphp')|if(php_sapi_name() == 'frankenphp' \&\& isset(\$_SERVER['FRANKENPHP_WORKER']))|" \

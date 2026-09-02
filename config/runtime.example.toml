@@ -1,32 +1,40 @@
 # Runtime configuration. Relative paths are resolved from the installation root.
-# Copy this file to config/runtime.toml before starting Runtime.
+# Optional overrides. Runtime uses these system defaults when runtime.toml is absent.
 # Durations use Go syntax, for example 30s, 5m, or 1h.
 # Configuration is strict: unknown keys and unsupported schema versions are errors.
 # Configuration schema version.
 schemaVersion = 1
 
 [runtime]
-# Linux Unix socket or Windows Named Pipe used by control commands.
-controlSocket = "/run/zentao/runtime.sock"
-# PID file used by lifecycle commands and service management.
-pidFile = "/run/zentao/runtime.pid"
+# Omit controlSocket and pidFile to use the platform defaults.
 # Grace period for draining HTTP requests and workers during shutdown.
 drainTimeout = "30s"
+# Runtime log level: debug, info, warn or error.
+logLevel = "info"
 # Runtime log directory and file. Relative paths use the installation root.
 logPath = "logs/runtime.log"
 # Maximum size of one Runtime log file in bytes; 0 disables the limit.
 logMaxBytes = 16777216
-# Number of rotated Runtime log files to keep.
+# Number of rotated Runtime log files to keep when jsonlKeepDays is 0.
+# When observability.jsonlKeepDays is positive, day-based retention takes
+# precedence and logMaxBackups no longer trims Runtime JSONL segments.
 logMaxBackups = 5
+# Audit log path; empty uses logs/audit-<nodeID>.jsonl.
+# auditLog = ""
+# Built-in audit rotation: size threshold, rotated backups and day retention.
+# When auditLogKeepDays is positive it takes precedence over auditLogMaxBackups.
+auditLogMaxBytes = 16777216
+auditLogMaxBackups = 5
+auditLogKeepDays = 0
 # Stable node name used in log and observability records; empty enables auto-generation.
-nodeID = "node-a"
+nodeID = ""
 # Cluster identifier shared by nodes in the same deployment.
-clusterID = "cluster-prod-1"
+clusterID = ""
 
 [web]
 # PHP application document root, relative to the installation root.
 root = "app/zentaopms/www"
-# HTTP bind address and port.
+# HTTP bind address and port. 0.0.0.0 listens on all IPv4 interfaces.
 listen = "0.0.0.0:8080"
 # Number of PHP worker threads.
 threads = 4
@@ -39,7 +47,7 @@ maxHeaderBytes = 16384
 
 [queue]
 # Enable the PHP Queue Bridge worker engine.
-enabled = false
+enabled = true
 # Local PHP Queue Bridge URL; required when queue is enabled.
 bridgeBaseURL = "http://127.0.0.1:8081/internal/runtime/queue/v1"
 # Shared secret for authenticating Queue Bridge requests.
@@ -69,29 +77,11 @@ minPoll = "50ms"
 # Maximum adaptive polling interval.
 maxPoll = "5s"
 
-[[queue.workers]]
-# Worker channel name.
-name = "mail"
-# Maximum concurrent jobs for this worker.
-concurrency = 4
-# Minimum adaptive polling interval.
-minPoll = "50ms"
-# Maximum adaptive polling interval.
-maxPoll = "5s"
-
-[[queue.workers]]
-# Worker channel name.
-name = "slow"
-# Maximum concurrent jobs for this worker.
-concurrency = 1
-# Minimum adaptive polling interval.
-minPoll = "50ms"
-# Maximum adaptive polling interval.
-maxPoll = "5s"
-
 [observability]
 # Enable metrics, logs, and Parquet publishing.
-enabled = true
+enabled = false
+# Private loopback listener for PHP telemetry events.
+bridgeListen = "127.0.0.1:8082"
 # Root directory for published Parquet datasets.
 datasetRoot = "observability"
 # Local spool directory used when publishing is temporarily unavailable.
@@ -102,8 +92,14 @@ maxSpoolBytes = 1073741824
 maxBatchRows = 10000
 # Maximum encoded bytes in one Parquet batch.
 maxBatchBytes = 16777216
+# Minimum buffered rows/bytes before a Parquet batch is flushed; small
+# batches are held until maxFlushInterval to avoid many tiny Parquet files.
+minBatchRows = 1000
+minBatchBytes = 1048576
 # Interval between flushes to the Parquet dataset.
 flushInterval = "60s"
+# Upper bound for how long buffered events may wait before a flush.
+maxFlushInterval = "10m"
 # Number of days to retain metrics.
 metricsDays = 30
 # Number of days to retain logs.
@@ -114,3 +110,6 @@ jsonlConvertInterval = "1h"
 jsonlConvertSources = ["access", "runtime"]
 # Number of days to retain source JSONL files.
 jsonlKeepDays = 7
+# Remove sealed JSONL segments after successful conversion and state save.
+# Disable only when raw JSONL must be retained for compliance or debugging.
+jsonlDeleteAfterConvert = true

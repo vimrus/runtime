@@ -23,6 +23,7 @@ RUN apt-get update \
         libssl-dev \
         libxml2-dev \
         libzip-dev \
+        patchelf \
         patch \
         pkg-config \
         re2c \
@@ -100,8 +101,10 @@ RUN mkdir -p /opt/zentao/php/lib/ioncube \
     && diff -u /tmp/expected-loader-symbols.txt /tmp/ioncube-loader-symbols.txt
 
 COPY packaging/runtime/php.ini /opt/zentao/config/php.ini
+COPY config/runtime.example.toml /opt/zentao/config/runtime.example.toml
 RUN mkdir -p /opt/zentao/config/conf.d /opt/zentao/bin \
     && test "$(/opt/zentao/php/bin/php-config --vernum)" -ge 80400 \
+    && ZENTAO_RUNTIME_PHP_ROOT=/opt/zentao /opt/zentao/php/bin/php -c /opt/zentao/config/php.ini -r 'exit(extension_loaded("Zend OPcache") && ini_get("opcache.enable") == "1" ? 0 : 1);' \
     && nm -D /opt/zentao/php/lib/libphp.so \
         | awk '$3 ~ /^zend_signal_(globals_id|globals_offset|handler_unblock)$/ {print $3}' \
         | sort -u \
@@ -113,6 +116,8 @@ ARG GOPROXY=https://proxy.golang.org,direct
 RUN GOPROXY="${GOPROXY}" go mod download
 COPY cmd ./cmd
 COPY internal ./internal
+COPY config ./config
+COPY scripts/package/bundle-runtime-libs.sh /build/bundle-runtime-libs.sh
 
 RUN go test ./internal/config ./internal/lifecycle ./internal/health ./internal/control \
     ./internal/logging ./internal/queue/bridge ./internal/queue/fake \
@@ -124,12 +129,15 @@ RUN go test ./internal/config ./internal/lifecycle ./internal/health ./internal/
 RUN go test -tags duckdb ./internal/observability/duckdb
 
 RUN export CGO_CFLAGS="$(/opt/zentao/php/bin/php-config --includes)" \
-    && export CGO_LDFLAGS="-L/opt/zentao/php/lib -Wl,-rpath,/opt/zentao/php/lib -lphp $(/opt/zentao/php/bin/php-config --ldflags) $(/opt/zentao/php/bin/php-config --libs)" \
+    && export CGO_LDFLAGS="-L/opt/zentao/php/lib -Wl,-rpath,\$ORIGIN/../php/lib,--disable-new-dtags -lphp $(/opt/zentao/php/bin/php-config --ldflags) $(/opt/zentao/php/bin/php-config --libs)" \
     && go build \
         -tags "duckdb nobadger nomysql nopgx nowatcher nobrotli nomercure" \
         -ldflags "-s -w -X main.runtimeVersion=runtime -X main.frankenPHPVersion=${FRANKENPHP_VERSION} -X main.caddyVersion=${CADDY_VERSION}" \
         -o /opt/zentao/bin/zentao \
         ./cmd/zentao-runtime
+
+RUN bash /build/bundle-runtime-libs.sh /opt/zentao
+RUN patchelf --force-rpath --set-rpath '$ORIGIN/../lib' /opt/zentao/php/bin/php
 
 RUN find \
         /opt/zentao/php/include \

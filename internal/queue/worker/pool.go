@@ -43,14 +43,16 @@ type Pool struct {
 	config Config
 	logger *slog.Logger
 
-	mu       sync.Mutex
-	sems     map[string]chan struct{}
-	wake     chan struct{}
-	running  bool
-	stopOnce sync.Once
-	stop     chan struct{}
-	done     chan struct{}
-	wg       sync.WaitGroup
+	mu          sync.Mutex
+	sems        map[string]chan struct{}
+	wake        chan struct{}
+	running     bool
+	fatal       chan struct{}
+	fatalClosed bool
+	stop        chan struct{}
+	stopClosed  bool
+	done        chan struct{}
+	wg          sync.WaitGroup
 }
 
 func NewPool(queueBridge Bridge, leases *lease.Manager, config Config, logger *slog.Logger) (*Pool, error) {
@@ -98,9 +100,38 @@ func NewPool(queueBridge Bridge, leases *lease.Manager, config Config, logger *s
 		logger: logger,
 		sems:   sems,
 		wake:   make(chan struct{}, len(config.Channels)),
+		fatal:  make(chan struct{}),
 		stop:   make(chan struct{}),
 		done:   make(chan struct{}),
 	}, nil
+}
+
+// Fatal returns a signal for errors that make this pool unsafe to continue,
+// such as a lost global Runtime execution-mode lease.
+func (p *Pool) Fatal() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fatal
+}
+
+// SignalFatal stops claiming new work for a fatal bridge response observed by
+// another part of the queue engine, such as the scheduler or reaper.
+func (p *Pool) SignalFatal(code string) { p.signalFatal(code) }
+
+func (p *Pool) signalFatal(code string) {
+	if code != bridge.ErrorExecutionModeConflict {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.fatalClosed {
+		close(p.fatal)
+		p.fatalClosed = true
+	}
+	if !p.stopClosed {
+		close(p.stop)
+		p.stopClosed = true
+	}
 }
 
 // Wake requests an immediate claim cycle for all queues. It is best-effort:
@@ -127,15 +158,18 @@ func (p *Pool) Run(ctx context.Context) {
 	// lifecycle channels because closed channels cannot be reused.
 	p.stop = make(chan struct{})
 	p.done = make(chan struct{})
-	p.stopOnce = sync.Once{}
+	p.fatal = make(chan struct{})
+	p.fatalClosed = false
+	p.stopClosed = false
 	p.running = true
+	stop := p.stop
 	p.mu.Unlock()
 
 	for _, queue := range p.config.Channels {
 		p.wg.Add(1)
 		go func(queue QueueConfig) {
 			defer p.wg.Done()
-			p.claimLoop(ctx, queue)
+			p.claimLoop(ctx, queue, stop)
 		}(queue)
 	}
 	done := p.done
@@ -154,22 +188,33 @@ func (p *Pool) Run(ctx context.Context) {
 // configured drain timeout; remaining jobs are cancelled and left for lease
 // recovery.
 func (p *Pool) Stop() error {
-	p.stopOnce.Do(func() { close(p.stop) })
+	p.mu.Lock()
+	if !p.running {
+		p.mu.Unlock()
+		return nil
+	}
+	stop := p.stop
+	done := p.done
+	if !p.stopClosed {
+		close(stop)
+		p.stopClosed = true
+	}
+	p.mu.Unlock()
 	select {
-	case <-p.done:
+	case <-done:
 		return nil
 	case <-time.After(p.config.DrainTimeout):
 		return fmt.Errorf("worker drain exceeded %s", p.config.DrainTimeout)
 	}
 }
 
-func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
+func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig, stop <-chan struct{}) {
 	interval := queue.MinPoll
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-p.stop:
+		case <-stop:
 			return
 		case <-p.wake:
 			interval = queue.MinPoll
@@ -211,6 +256,10 @@ func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
 		}
 		if response.Error != nil {
 			p.logger.Warn("queue claim rejected", slog.String("channel", queue.Name), slog.String("code", response.Error.Code))
+			p.signalFatal(response.Error.Code)
+			if response.Error.Code == bridge.ErrorExecutionModeConflict {
+				return
+			}
 			interval = backoff(interval, queue.MaxPoll)
 			if !sleepCtx(ctx, interval) {
 				return
@@ -230,7 +279,7 @@ func (p *Pool) claimLoop(ctx context.Context, queue QueueConfig) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-p.stop:
+			case <-stop:
 				return
 			case sem <- struct{}{}:
 				p.wg.Add(1)
@@ -272,6 +321,7 @@ func (p *Pool) execute(parent context.Context, claimed bridge.Lease) {
 	}
 	if response.Error != nil {
 		p.logger.Warn("queue execute rejected", slog.String("job", claimed.UUID), slog.String("code", response.Error.Code))
+		p.signalFatal(response.Error.Code)
 		return
 	}
 	p.logger.Info("queue job finished", slog.String("job", claimed.UUID), slog.String("channel", claimed.Channel), slog.String("result", string(response.Result)))

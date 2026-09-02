@@ -17,6 +17,7 @@ type fakeBridge struct {
 	claims      []bridge.ClaimRequest
 	execute     []bridge.ExecuteRequest
 	lease       bridge.Lease
+	claimResp   bridge.ClaimResponse
 	executeResp bridge.ExecuteResponse
 }
 
@@ -25,10 +26,42 @@ func (b *fakeBridge) Claim(_ context.Context, request bridge.ClaimRequest) (brid
 	defer b.mu.Unlock()
 	b.claimCount++
 	b.claims = append(b.claims, request)
+	if b.claimResp.Error != nil {
+		return b.claimResp, nil
+	}
 	if b.claimCount > 1 {
 		return bridge.ClaimResponse{Schema: bridge.SchemaVersion}, nil
 	}
 	return bridge.ClaimResponse{Schema: bridge.SchemaVersion, Leases: []bridge.Lease{b.lease}}, nil
+}
+
+func TestPoolStopsOnExecutionModeConflict(t *testing.T) {
+	queueBridge := &fakeBridge{claimResp: bridge.ClaimResponse{
+		Schema: bridge.SchemaVersion,
+		Error:  &bridge.Error{Code: bridge.ErrorExecutionModeConflict, Message: "runtime lease lost"},
+	}}
+	manager := lease.NewManager("node-a", "instance-a", "worker-a", queueBridge, time.Minute, 1)
+	p, err := NewPool(queueBridge, manager, Config{
+		NodeID: "node-a", InstanceID: "instance-a", WorkerID: "worker-a", ClaimBatch: 1,
+		DrainTimeout: time.Second, Channels: []QueueConfig{{Name: "mail", MinPoll: time.Millisecond, MaxPoll: time.Millisecond}},
+	}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Run(context.Background())
+	select {
+	case <-p.Fatal():
+	case <-time.After(time.Second):
+		t.Fatal("pool did not signal execution mode conflict")
+	}
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	queueBridge.mu.Lock()
+	defer queueBridge.mu.Unlock()
+	if queueBridge.claimCount != 1 {
+		t.Fatalf("claim calls after mode conflict = %d, want 1", queueBridge.claimCount)
+	}
 }
 
 func (b *fakeBridge) Execute(_ context.Context, request bridge.ExecuteRequest) (bridge.ExecuteResponse, error) {

@@ -10,6 +10,19 @@ import (
 	"time"
 )
 
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
 func writeFakeMysqld(t *testing.T, path string) {
 	t.Helper()
 	script := `#!/bin/sh
@@ -95,7 +108,7 @@ func TestStartStopLifecycle(t *testing.T) {
 	socket := filepath.Join(root, "mysql.sock")
 	supervisor, err := New(Config{
 		Binary: binary, DataDir: filepath.Join(root, "data"), SocketPath: socket,
-		Port: 13306, LogPath: filepath.Join(root, "logs", "mysql.log"), SecretsFile: filepath.Join(root, "secrets", "root"),
+		Port: freeTCPPort(t), LogPath: filepath.Join(root, "logs", "mysql.log"), SecretsFile: filepath.Join(root, "secrets", "root"),
 		StartupTimeout: 5 * time.Second, StopTimeout: 5 * time.Second,
 	})
 	if err != nil {

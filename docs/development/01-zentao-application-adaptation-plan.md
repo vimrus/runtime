@@ -97,7 +97,7 @@
 
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
-| Z-QUEUE-07 | P0 | PHP Queue Client | framework/lib | enqueue、delay、cancel 和查询接口 | Z-QUEUE-01 | 业务事务可与任务创建原子提交，不隐式开启嵌套事务 |
+| Z-QUEUE-07 | P0 | PHP Queue Client | `module/cron/model.php` | enqueue、delay、cancel 和查询接口 | Z-QUEUE-01 | 业务事务可与任务创建原子提交，不隐式开启嵌套事务 |
 | Z-QUEUE-08 | P0 | Handler 注册协议 | module/lib | Handler 名称、Payload 版本、超时和幂等约束 | Z-QUEUE-02 | 禁止传入任意 PHP 路由、类名、Shell 或文件路径 |
 | Z-QUEUE-09 | P0 | 幂等基础设施 | Queue Service/业务模块 | `idempotencyKey`、去重和副作用记录模式 | Z-QUEUE-07 | 重复投递或租约恢复不会产生不可控重复副作用 |
 | Z-QUEUE-10 | P1 | 首批 Handler 迁移 | cron、邮件或 Webhook 等首批模块 | 低风险任务的新 Handler | Z-QUEUE-08/09 | 新旧消费者不能同时处理同一任务类型，可独立回滚 |
@@ -145,6 +145,13 @@ Session 和附件的 NFS/Redis 高可用由部署方负责，禅道代码只负�
 | Z-OBS-05 | P2 | 首批业务度量 | 经评审的模块 | 低频度量事件 | Z-OBS-04 | 参与事务和权限判断的数据仍以业务数据库为事实来源 |
 
 PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受控事件，由 Runtime 负责本地 spool、Parquet 发布、查询和保留。
+
+实施状态（2026-09-02）：`zentaopms/lib/observability/observability.class.php`
+已落地为最低公共实现，配合 Runtime 的私有 Observability Bridge
+（`/internal/runtime/observability/v1/events`）完成 Schema v1 事件发送、
+脱敏、批次和超时限制；Runtime 与 PHP 侧已落地固定度量注册表
+（`internal/observability/registry.go` + `METRIC_REGISTRY`）。Z-OBS-03 的
+日志脱敏规范、Z-OBS-05 的首批业务度量仍按评审节奏实施。
 
 ## 11. 阶段 5：安装、升级和版本矩阵
 

@@ -13,10 +13,12 @@ import (
 )
 
 type recordingWriter struct {
-	events []observability.Event
+	events  []observability.Event
+	batches int
 }
 
 func (w *recordingWriter) WriteParquet(_ context.Context, _ observability.Kind, targetPath string, events []observability.Event) (int64, error) {
+	w.batches++
 	w.events = append(w.events, events...)
 	data, _ := json.Marshal(events)
 	return int64(len(data)), os.WriteFile(targetPath, data, 0o600)
@@ -123,11 +125,92 @@ func TestConvertOnceProcessesOwnNodeSegmentsIdempotently(t *testing.T) {
 	if len(writer.events) != 2 {
 		t.Fatalf("published events = %d, want 2", len(writer.events))
 	}
+	if writer.batches != 1 {
+		t.Fatalf("parquet batches = %d, want 1", writer.batches)
+	}
 	second, err := converter.ConvertOnce(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if second.Segments != 0 || second.Events != 0 {
 		t.Fatalf("second conversion must be idempotent: %#v", second)
+	}
+}
+
+func TestConvertOnceDeletesSegmentsAfterSuccessfulConversion(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logsDir := filepath.Join(root, "logs")
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	access := filepath.Join(logsDir, "access-node-a-2026-08-20T01-00-00.000-time.jsonl")
+	if err := os.WriteFile(access, []byte(`{"ts":1,"logger":"http.log.access","msg":"handled request","request":{"uri":"/a"},"status":200,"duration":0.1}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingWriter{}
+	publisher, err := observability.NewPublisher(observability.Config{
+		DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"),
+		NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		MaxBatchRows: 100, MaxBatchBytes: 1 << 20,
+	}, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	converter, err := New(Config{
+		LogsDir: logsDir, NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		Sources: []string{"access"}, Publisher: publisher, DeleteAfterConvert: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := converter.ConvertOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Segments != 1 || result.Events != 1 {
+		t.Fatalf("unexpected conversion result: %#v", result)
+	}
+	if _, err := os.Stat(access); !os.IsNotExist(err) {
+		t.Fatalf("sealed segment must be deleted after conversion, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logsDir, ".jsonl-state-node-a.json")); err != nil {
+		t.Fatalf("converter state must still exist after deletion: %v", err)
+	}
+}
+
+func TestReadRecentReturnsActiveAndUnconvertedSegments(t *testing.T) {
+	root := t.TempDir()
+	logsDir := filepath.Join(root, "logs")
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	active := filepath.Join(logsDir, "access-node-a.jsonl")
+	partial := `{"ts":1,"logger":"http.log.access","msg":"ok","request":{"uri":"/a"},"status":200,"duration":0.1}` + "\n" + `{"ts":2,"logger":"http.log.access","msg":"partial`
+	if err := os.WriteFile(active, []byte(partial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	segment := filepath.Join(logsDir, "runtime-node-a.jsonl-20260820T010000.000000000Z.log")
+	if err := os.WriteFile(segment, []byte(`{"ts":3,"level":"info","msg":"runtime started"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(logsDir, "access-node-b.jsonl")
+	if err := os.WriteFile(other, []byte(`{"ts":4,"logger":"http.log.access","msg":"other","request":{"uri":"/b"},"status":200,"duration":0.1}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	events, malformed, err := ReadRecent(Config{
+		LogsDir: logsDir, NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		Sources: []string{"access", "runtime"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want 2", len(events))
+	}
+	if malformed != 1 {
+		t.Fatalf("malformed = %d, want 1 (partial trailing line)", malformed)
 	}
 }

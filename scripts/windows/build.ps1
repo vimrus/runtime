@@ -138,7 +138,13 @@ Copy-Item (Join-Path $vcpkgRoot "installed\x64-windows\bin\*.dll") (Join-Path $S
 
 New-Item -ItemType Directory -Force -Path (Join-Path $Staging "config\conf.d"), (Join-Path $Staging "licenses") | Out-Null
 Copy-Item (Join-Path $RepoRoot "config\runtime.example.toml") (Join-Path $Staging "config\runtime.example.toml")
-Copy-Item (Join-Path $RepoRoot "packaging\runtime\php.ini") (Join-Path $Staging "config\php.ini")
+$iniRoot = $Staging.Replace('\', '/')
+$phpIni = Get-Content (Join-Path $RepoRoot "packaging\runtime\php.ini") -Raw
+$phpIni = $phpIni.Replace('/opt/zentao', $iniRoot)
+$phpIni = $phpIni -replace '(?m)^zend_extension=.*ioncube_loader_lin_8\.4_ts\.so$', "zend_extension=$iniRoot/runtime/ioncube_loader_win_8.4.dll"
+$phpIni = $phpIni -replace '(?m)^zend_extension=.*opcache\.so$', "zend_extension=$iniRoot/runtime/ext/php_opcache.dll"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path $Staging "config\php.ini"), $phpIni, $utf8NoBom)
 
 & (Join-Path $Staging "runtime\php.exe") -v | Out-Null
 $ioncubeDll = (Resolve-Path (Join-Path $Staging "runtime\ioncube_loader_win_8.4.dll")).Path

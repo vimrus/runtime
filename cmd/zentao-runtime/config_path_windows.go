@@ -5,6 +5,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/vimrus/runtime/internal/config"
 )
 
 func defaultInstallRoot() string {
@@ -17,4 +19,12 @@ func defaultInstallRoot() string {
 
 func defaultConfigPath() string {
 	return filepath.Join(defaultInstallRoot(), "config", "runtime.toml")
+}
+
+func defaultControlSocketPath() string {
+	return config.Default().Runtime.ControlSocket
+}
+
+func defaultPIDFilePath() string {
+	return config.Default().Runtime.PIDFile
 }

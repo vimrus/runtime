@@ -48,6 +48,11 @@ threads = 4
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
+
+# This smoke test verifies PHP hosting only. Its staged application need not
+# expose the private Queue Bridge, so do not inherit the production default.
+[queue]
+enabled = false
 EOF
 
 docker run --detach --name "${container}" \
@@ -55,7 +60,7 @@ docker run --detach --name "${container}" \
     --volume "${work}/app:/shared:rw" \
     --volume "${work}/runtime.toml:/runtime-config/runtime.toml:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve --install-root /shared/app' >/dev/null
+    -c 'mkdir -p /shared/config && cp /runtime-config/runtime.toml /shared/config/runtime.toml && sed "s#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g" /opt/zentao/config/php.ini > /shared/config/php.ini && exec zentao serve --install-root /shared' >/dev/null
 
 ready=0
 for _ in $(seq 1 30); do

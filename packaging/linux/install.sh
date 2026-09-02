@@ -61,12 +61,12 @@ install -d -m 0750 "${prefix_stage}/config" \
     "${prefix_stage}/logs" \
     "${prefix_stage}/spool/observability" \
     "${prefix_stage}/observability" \
-    "${prefix_stage}/backups"
-install -d -m 0700 "$(stage /run/zentao)"
+    "${prefix_stage}/backups" \
+    "${prefix_stage}/run"
 if [[ "${DRY_RUN}" != "1" ]]; then
     chown -R zentao:zentao "${prefix_stage}/config" "${prefix_stage}/data" \
         "${prefix_stage}/logs" "${prefix_stage}/spool" "${prefix_stage}/observability" \
-        "${prefix_stage}/backups" "$(stage /run/zentao)"
+        "${prefix_stage}/backups" "${prefix_stage}/run"
 fi
 install -d -m 0755 "$(stage /etc/systemd/system)" "$(stage /etc/logrotate.d)"
 

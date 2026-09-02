@@ -19,6 +19,7 @@ type Bridge struct {
 	ReapResponse         bridge.ReapResponse
 	StatsResponse        bridge.StatsResponse
 	ControlResponse      bridge.ControlResponse
+	ScheduleResponse     bridge.ScheduleResponse
 
 	CapabilitiesRequests []bridge.CapabilitiesRequest
 	ClaimRequests        []bridge.ClaimRequest
@@ -27,6 +28,7 @@ type Bridge struct {
 	ReapRequests         []bridge.ReapRequest
 	StatsRequests        []bridge.StatsRequest
 	ControlRequests      []bridge.ControlRequest
+	ScheduleRequests     []bridge.ScheduleRequest
 }
 
 func New() *Bridge {
@@ -38,6 +40,7 @@ func New() *Bridge {
 		ReapResponse:         bridge.ReapResponse{Schema: bridge.SchemaVersion},
 		StatsResponse:        bridge.StatsResponse{Schema: bridge.SchemaVersion},
 		ControlResponse:      bridge.ControlResponse{Schema: bridge.SchemaVersion, Applied: true},
+		ScheduleResponse:     bridge.ScheduleResponse{Schema: bridge.SchemaVersion},
 	}
 }
 
@@ -124,4 +127,17 @@ func (b *Bridge) Control(_ context.Context, request bridge.ControlRequest) (brid
 		return bridge.ControlResponse{}, fmt.Errorf("validate fake control response: %w", err)
 	}
 	return b.ControlResponse, nil
+}
+
+func (b *Bridge) Schedule(_ context.Context, request bridge.ScheduleRequest) (bridge.ScheduleResponse, error) {
+	if err := request.Validate(); err != nil {
+		return bridge.ScheduleResponse{}, fmt.Errorf("validate fake schedule request: %w", err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.ScheduleRequests = append(b.ScheduleRequests, request)
+	if err := b.ScheduleResponse.Validate(); err != nil {
+		return bridge.ScheduleResponse{}, fmt.Errorf("validate fake schedule response: %w", err)
+	}
+	return b.ScheduleResponse, nil
 }

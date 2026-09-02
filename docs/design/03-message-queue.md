@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | Runtime 侧已实施；PHP Queue Service 待禅道适配 |
+| 状态 | Runtime 与禅道 PHP Queue Service 已实施；跨部署矩阵验收进行中 |
 | 日期 | 2026-08-17 |
 | Runtime Host | 自研 Go 程序 `zentao-runtime` |
 | Go 编排 | 标准 Go Worker Pool；Watermill Core 作为 POC 对照项 |
@@ -49,7 +49,7 @@ POC 需要将它与标准 Go Worker Pool 对比，只有确实减少生命周期
 - `../../zentaopms/module/cron/model.php`
 - `../../zentaopms/db/zentao.sql`
 
-当前流程为：
+旧版本流程（已废弃）为：
 
 ```text
 Scheduler 插入 zt_queue(status=wait)
@@ -423,8 +423,9 @@ state(active|paused|draining), startedDate, version, editedDate
 ```
 
 `tokenHash` 只存 Bridge 随机凭据的 HMAC 哈希，不存明文。普通 Worker 通过条件
-更新 CAS 竞争不同任务，不需要选举“队列主节点”；Scheduler 等单例角色如需
-Leader Lease，可复用本表增加 `role/leaderEnd` 列，Go 不直接更新该表。
+更新 CAS 竞争不同任务，不需要选举“队列主节点”；Scheduler 等单例角色使用本表的
+唯一保留行 `nodeID = '__runtime_scheduler__'` 和 `role/leaderEnd` 列选举。leader
+不能写在实际节点行上，否则不同节点会更新不同的行而失去全局 CAS。Go 不直接更新该表。
 
 ### 10.5 索引
 
@@ -858,8 +859,9 @@ Scheduler Leader: 根据计划产生任务
 All Queue Workers: 并发消费已产生任务
 ```
 
-Scheduler 通过 PHP Queue Service 和 DAO 在 `zt_servernode` 上维护 Leader Lease
-（`role/leaderUntil` 列）。Go 不直接更新该表。Leader 崩溃后其他节点接管。
+Scheduler 通过 PHP Queue Service 和 DAO 在 `zt_servernode` 的
+`__runtime_scheduler__` 保留行上维护 Leader Lease（`role/leaderEnd` 列）。Go 不直接
+更新该表。Leader 崩溃后其他节点通过条件更新接管。
 每个周期任务使用确定性的幂等键：
 
 ```text
@@ -1123,7 +1125,7 @@ Go 包中不得出现数据库 Driver、SQL、数据库连接池或数据库凭�
 ### 21.2 PHP Queue Module
 
 ```text
-zentaopms/module/runtimequeue/
+zentaopms/module/cron/model.php (统一 Queue Client 与 Queue Bridge DAO)
   control.php         private Bridge entrypoints and management actions
   model.php           Queue Service orchestration
   tao.php             portable Queue DAO operations
@@ -1132,7 +1134,7 @@ zentaopms/module/runtimequeue/
   test/               state, Bridge and concurrency tests
 
 zentaopatch/innovation/
-  extension/runtimequeue/  database-specific DDL/capability overrides when required
+  extension/cron/  database-specific DDL/capability overrides when required
 ```
 
 实际模块位置需要结合版本包含关系确认。Portable CAS 放在公共 PHP 层；数据库专属快速路径
@@ -1148,22 +1150,21 @@ zentaopatch/innovation/
 - `zt_job` 已被 CI 模块占用，不能用作新队列表名。
 - 旧协议（`cron/type/command/execId` 消费循环）整体废弃；`zt_cron` 调度保留，
   入队与消费改为新 Queue Service。
-- 新旧状态语义差异通过直接重建表解决，不做原地双语义并存。
-- 旧数据不保留：升级直接 `DROP TABLE zt_queue` 并创建新结构，然后创建
-  `zt_queueexec` 与 `zt_servernode`。
-- 回滚依赖升级前的整库/表备份，不保留旧表数据。
+- 新旧状态语义差异通过重建表解决，不做原地双语义并存。当前升级脚本会先将旧表
+  改名为临时迁移表，把 `wait/doing/done` 映射为 `queued/retrying/succeeded`（删除的
+  任务映射为 `canceled`），再创建新结构并写入 `zt_queueexec`、`zt_servernode`。
+  迁移完成后删除临时表；升级前仍必须由 DBA 完成整库/表备份，以支持失败回滚。
 
 ### 22.2 一次性切换
 
 ```text
-Phase 0: 删除旧 zt_queue 并创建新结构，新建 zt_queueexec/zt_servernode，
-         默认禁用
-Phase 1: 实现 PHP Queue Service、Portable CAS 与 Bridge 7 端点，
+Phase 0: 迁移旧 zt_queue 到新结构，新建 zt_queueexec/zt_servernode，默认禁用
+Phase 1: 实现 PHP Queue Service、Portable CAS 与 Bridge 8 端点，
          Runtime 集成冒烟（领取→执行→ACK→重试→reap）
 Phase 2: 改造 cron 入队（zt_cron 调度保留，任务走新队列），
-         删除旧 consumeTasks/consumeTask 消费循环
+         将旧消费逻辑限制为 RoadRunner/Web 兼容入口
 Phase 3: 上线管理界面、指标、Retry 和 Dead Letter
-Phase 4: 确认稳定后删除旧消费代码
+Phase 4: 确认稳定后保留并维护 RoadRunner/Web 兼容入口
 ```
 
 同一业务任务不能同时被新旧 Consumer 执行。升级 SQL 与现有 update 文件惯例
