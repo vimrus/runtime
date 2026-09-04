@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | Runtime Cache Service 设计基线；PHP 客户端和首批业务接入待实施 |
+| 状态 | Go 侧 Runtime Cache Service、Bridge v1 与 PHP CacheService 已实施；首批业务模块接入待灰度 |
 | 服务归属 | Runtime Host 内嵌 Cache Service |
 | 数据库访问 | Runtime 不连接禅道业务数据库 |
 | 首版后端 | 进程内有界内存缓存，重启后可丢失 |
@@ -15,7 +15,7 @@
 
 Runtime 提供统一的缓存服务和客户端协议。缓存不再使用禅道业务数据库缓存表，Go 不连接 MySQL、PostgreSQL、达梦或其他禅道业务数据库，也不复制 PHP DAO 的连接和方言体系。
 
-首版缓存是 Runtime 进程内的有界内存存储：按 namespace/key 做摘要，支持显式 `get`、`set`、`delete`、TTL、容量限制、LRU/过期淘汰和故障降级。Runtime 重启、进程崩溃、节点切换或主动清理都可以清空缓存；业务正确性不能依赖缓存内容。
+Runtime 进程内缓存是有界内存存储：按 namespace/key 做摘要，支持显式 `get`、`set`、`delete`、TTL、容量限制、LRU/过期淘汰和故障降级。多节点共享业务缓存时使用外部 Redis；Runtime 重启、进程崩溃、节点切换或主动清理都可以清空本机缓存；业务正确性不能依赖缓存内容。
 
 缓存访问必须经过本机私有 Bridge。公共 Web 请求不能直接访问管理端点，缓存协议拒绝任意 SQL、文件路径、序列化对象和未注册操作。多节点每个节点拥有独立缓存，不能用缓存实现跨节点锁、计数器或一致性广播。
 
@@ -189,4 +189,66 @@ Runtime 启动时创建空缓存；reload 默认保留缓存，后端或容量�
 
 ## 13. 后续演进
 
-可以增加本地磁盘后端或外部 Redis 适配，但必须保持 Cache Client 语义、失败按 miss、显式操作和多节点不依赖缓存一致性。后端切换通过 capability 和配置版本协商完成，不能让业务代码感知具体存储实现。
+PHP CacheService 已提供外部 Redis 共享后端（`redisCacheBackend`，key 统一加
+`zentao:cache:` 前缀），后续可以增加本地磁盘后端，但必须保持 Cache Client
+语义、失败按 miss、显式操作和多节点不依赖缓存一致性。后端切换通过装配层
+完成，不能让业务代码感知具体存储实现。
+
+## 14. 实施状态
+
+- 依赖：`github.com/dgraph-io/ristretto v0.2.0` 已锁定并写入 `versions.lock.json`。
+- Go 实现：`internal/cache`（有界 TTL/字节配额、命中/未命中统计）、
+  `internal/cache/bridge.go`（capabilities/get/set/delete 批量协议）。
+- HTTP Bridge：`internal/web/cache.go` 提供 `zentao_cache_bridge` Caddy 模块，
+  默认监听 `127.0.0.1:8083`，每次启动随机 Token，环境变量
+  `ZENTAO_CACHE_URL/TOKEN/SCHEMA` 供 PHP 读取。
+- 配置：`[cache] enabled/listen/maxCostBytes/maxValueBytes`。
+- 验证：`internal/cache` 单元测试、Cache Bridge e2e
+  （`tests/e2e/cache-bridge-smoke.sh`）通过。
+- PHP CacheService：`service/cache/cache.service.php` 提供请求内 L0、
+  namespace 版本失效（`clear()`）、后端异常降级；后端顺序为 Redis →
+  Runtime Bridge → Null，miss 由业务门面回源 DB。Cache Bridge e2e 通过
+  PHP Service 客户端验证。
+- 后端：`redisCacheBackend` 使用统一 JSON 信封区分 string/json 值；
+  `runtimeCacheBackend` 读取 `ZENTAO_CACHE_URL/TOKEN/SCHEMA`；
+  `nullCacheBackend` 恒 miss。后端错误由 CacheService 捕获并按 miss 处理。
+- 业务门面：`service/cache/cached.facade.php` 提供 DB 回源、TTL 回写、
+  单键删除与 namespace 版本失效；缓存内容为**实体基础行 map**
+  （id => 行），过滤、排序、格式化和权限视图过滤由业务层完成，避免
+  用户间串数据和派生 key 爆炸。
+- 首批门面模板：`service/user/user.cache.php`、`service/product/product.cache.php`、
+  `service/project/project.cache.php` 提供 `baseRows()` 与变更后版本失效。
+- 装配：`runtimeService::cacheFromConfig($config)` 按 Redis →
+  Runtime Bridge → Null 顺序选择后端；`config/cache.php` 增加
+  `cache->service`（enable/user/ttl）开关，默认关闭。
+- 真实接入（默认关闭，环境变量
+  `ZT_SERVICE_CACHE_ENABLE/PROJECT/USER` 开启）：
+  - `projectModel::getPairs()`：共享项目基础行 map + 当前用户 view 过滤，
+    36 个 vision/params/权限组合与原始 SQL 结果一致；项目
+    create/update/batchUpdate/start/suspend/activate/close/delete 后按
+    namespace 版本失效。
+  - `userModel::getPairs()`：共享用户安全字段行 map（不含 password/邮箱
+    等敏感列），角色优先排序与“当前用户置顶”在业务层完成；18 个常用
+    params 组合与原始 SQL 结果一致。覆盖范围限制为活跃用户展示路径
+    （maxCount/追加账号/显示已删除等场景继续回源 DB），用户
+    create/batchCreate/update/batchUpdate/updatePassword/resetPassword/
+    delete 后按 namespace 版本失效。
+  - `productModel::getPairs()`：共享产品基础行 map（保留 isClosed、
+    program/line/order 排序语义，view 过滤在业务层），管理员 11 个与
+    非管理员 4 个 mode/program/shadow 组合与原始 SQL 结果一致；append
+    追加等动态参数场景回源 DB，产品 create/update/batchUpdate/close/
+    activate/updateOrder/delete 后按 namespace 版本失效。
+- Cache Bridge e2e（`tests/e2e/cache-bridge-smoke.sh`）通过，覆盖
+  namespace 版本失效与 `cachedFacade` 装配文件。
+- phpredis 6.3.0 已加入 runtime 镜像（`versions.lock.json` 锁定 commit 与
+  archive SHA-256，Dockerfile 构建并默认加载）；真实 Redis e2e
+  （`tests/e2e/redis-cache-smoke.sh`）通过，覆盖共享 set/get、
+  namespace 版本失效与删除。
+- 真实 zentaopms + MySQL + Redis 业务灰度验证通过：启用 user Service
+  Cache 后跨进程首次调用填充 Redis；DB 直接修改用户名称但未失效时，新
+  进程命中 Redis 返回旧值；`afterUserChanged()` 提升 namespace 版本后新
+  进程回源 DB 返回新值（Redis 中可见 `__version__` 与 `v1:` 前缀新键）。
+  project Service Cache 在相同真实环境下同样验证通过（改项目名未失效
+  命中旧值，`afterProjectChanged()` 后回源新值）；product Service Cache
+  相同验证通过（改产品名未失效命中旧值，`afterProductChanged()` 后回源
+  新值）。

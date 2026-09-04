@@ -24,6 +24,7 @@ type Options struct {
 	AccessLogKeepDays   int
 	QueueBridge         QueueBridgeOptions
 	ObservabilityBridge ObservabilityBridgeOptions
+	CacheBridge         CacheBridgeOptions
 }
 
 // QueueBridgeOptions configures the private loopback listener that exposes
@@ -41,6 +42,14 @@ type ObservabilityBridgeOptions struct {
 	Listen  string
 	Token   string
 	Sink    EventSink
+}
+
+// CacheBridgeOptions configures the private loopback listener for the Cache
+// Bridge.
+type CacheBridgeOptions struct {
+	Enabled bool
+	Listen  string
+	Token   string
 }
 
 // Config builds the smallest useful Classic-mode Caddy configuration.
@@ -111,7 +120,7 @@ func Config(options Options) *caddy.Config {
 					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/queue/v1/" + endpoint}, nil),
 				}},
 				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{
-					URI: "/index.php/cron-" + endpoint,
+					URI: "/index.php/queue-" + endpoint,
 				}, "handler", "rewrite", nil)},
 			})
 		}
@@ -140,17 +149,48 @@ func Config(options Options) *caddy.Config {
 			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
 			IdleTimeout:       caddy.Duration(options.IdleTimeout),
 			MaxHeaderBytes:    options.MaxHeaderBytes,
-			Routes: caddyhttp.RouteList{{
-				MatcherSetsRaw: []caddy.ModuleMap{{
-					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/observability/v1/events"}, nil),
-				}},
-				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(ObservabilityIngest{
-					Token: options.ObservabilityBridge.Token,
-					Sink:  options.ObservabilityBridge.Sink,
-				}, "handler", "zentao_observability_ingest", nil)},
-			}},
+			Routes: caddyhttp.RouteList{
+				{
+					MatcherSetsRaw: []caddy.ModuleMap{{
+						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/observability/v1/events"}, nil),
+					}},
+					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(ObservabilityIngest{
+						Token: options.ObservabilityBridge.Token,
+						Sink:  options.ObservabilityBridge.Sink,
+					}, "handler", "zentao_observability_ingest", nil)},
+				},
+				{
+					MatcherSetsRaw: []caddy.ModuleMap{{
+						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/observability/v1/query"}, nil),
+					}},
+					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(ObservabilityQuery{
+						Token: options.ObservabilityBridge.Token,
+					}, "handler", "zentao_observability_query", nil)},
+				},
+			},
 		}
 		servers["observability"] = observabilityServer
+	}
+	if options.CacheBridge.Enabled {
+		cacheListen := options.CacheBridge.Listen
+		if cacheListen == "" {
+			cacheListen = "127.0.0.1:8083"
+		}
+		cacheServer := &caddyhttp.Server{
+			Listen:            []string{cacheListen},
+			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
+			IdleTimeout:       caddy.Duration(options.IdleTimeout),
+			MaxHeaderBytes:    options.MaxHeaderBytes,
+			Routes: caddyhttp.RouteList{{
+				MatcherSetsRaw: []caddy.ModuleMap{{
+					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/cache/v1/*"}, nil),
+				}},
+				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(CacheBridge{
+					Token: options.CacheBridge.Token,
+				}, "handler", "zentao_cache_bridge", nil)},
+			}},
+		}
+		servers["cache"] = cacheServer
 	}
 
 	persist := false

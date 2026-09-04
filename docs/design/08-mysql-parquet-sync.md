@@ -291,3 +291,18 @@ BI 查询不再直接 glob `part-*.parquet`，而是：
 - [可观测性设计](./05-observability.md)
 - [Runtime 日志系统开发文档](../development/05-logging-system-development.md)
 - 现有 BI 同步实现：`zentaopms/module/bi/model.php`、`zentaopms/module/bi/tao.php`
+
+## 13. 实施状态（2026-09-03）
+
+- Manifest 原子读写、路径布局与 idrange 计算已落地于
+  `zentaopms/lib/parquet/parquet.class.php`。
+- BI 表双水位增量与 idrange 整分区重写（`syncBITableByWatermark`）、
+  full_snapshot（`syncBITableSnapshot`，product/user + 字段脱敏白名单）、
+  metriclib 日期分区/热窗口同步（`syncMetricLibDate`、
+  `cleanMetricLibHotWindow`）已在 `module/bi` 实现，统一入口
+  `syncParquetIncremental()` 与 cron handler `bi.syncIncremental` 可用。
+- 发布层在 Manifest 原子切换后删除旧 part；空表发布空 Manifest。
+- 真实 DuckDB CLI 已验证 CSV→Parquet、Manifest→read_parquet 查询、
+  metriclib 热窗口保留/历史清理与 task 修改捕获闭环。
+- 待验证：PostgreSQL/DM/Gauss 端到端矩阵；定期压缩合并与一致性校验
+  任务；故障注入自动化。

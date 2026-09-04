@@ -17,8 +17,8 @@ Runtime 是正式运行路径，RoadRunner 是已有常驻部署的兼容路径�
 | 模式 | 入口 | 调度 | 消费 | 启用条件 |
 |---|---|---|---|---|
 | Runtime | FrankenPHP 内部 Queue Bridge | Runtime 调用 `schedule`，PHP 生成到期任务 | Runtime Worker 调用 `claim`、`execute` | 取得有效 `runtime` 模式租约 |
-| RoadRunner | `zentaopms/roadrunner/scheduler.php`、`consumer.php` | `cron::rrSchedule()` | `cron::rrConsume()`，本地 PHP Consumer | 取得有效 `roadrunner` 租约，且没有有效 Runtime 租约 |
-| Web fallback | `cron::ajaxExec()` | AJAX 进程中的 scheduler 角色 | 同一进程中的本地 PHP Consumer | 没有有效 Runtime 和 RoadRunner 租约 |
+| RoadRunner | `zentaopms/roadrunner/scheduler.php`、`consumer.php` | `cron::rrSchedule()` | `cron::rrConsume()`，PHP 消费循环 | 取得有效 `roadrunner` 租约，且没有有效 Runtime 租约 |
+| Web fallback | `cron::ajaxExec()` | AJAX 进程中的 scheduler 角色 | 同一进程中的 PHP 消费循环 | 没有有效 Runtime 和 RoadRunner 租约 |
 
 启动决策如下：
 
@@ -67,35 +67,43 @@ queued/retrying -> running -> succeeded
                              -> canceled
 ```
 
-本地 PHP Consumer 和 Runtime Bridge 必须遵守相同的 CAS 语义。领取时检查原 `version`、状态和 `availableDate`，成功后写入 `leaseOwner`、`leaseToken`、`leaseEnd`、`heartbeatTime`、`attempts`、`startedDate` 和新 `version`，并向 `zt_queueexec` 写入一次执行记录。
+Web/RoadRunner 消费循环和 Runtime Bridge 必须遵守相同的 CAS 语义。领取时检查原 `version`、状态和 `availableDate`，成功后写入 `leaseOwner`、`leaseToken`、`leaseEnd`、`heartbeatTime`、`attempts`、`startedDate` 和新 `version`，并向 `zt_queueexec` 写入一次执行记录。
 
 任务语义为 At-least-once：进程可能在 Handler 已执行但结果尚未提交时退出，因此业务 Handler 必须幂等。Reaper 将过期的 `running` 任务改回 `retrying`；达到 `maxAttempts` 后改为 `failed`，不能永久停留在 `running`。
 
-调度使用 `handler = 'cron'`，payload 保存任务类型和 command，幂等键为 `cron:<cronID>:<scheduledAt>`，避免 scheduler 重复入队。
+调度写入 `cron` 字段（来源规则 ID），`handler = 'cron'` 为执行方式标记（不是 handler 名），payload 保存任务类型和 command，幂等键为 `cron:<cronID>:<scheduledAt>`，避免 scheduler 重复入队。
 
 ## 5. PHP 应用改造边界
 
-实现集中在 `zentaopms/module/cron`，三种入口只负责选择模式和驱动公共逻辑：
+实现按域拆分为 `zentaopms/module/cron`（定时任务系统：调度扫描、调度入队、scheduler 单例租约）与 `zentaopms/module/queue`（队列实现：状态机原语、模式租约、Bridge 协议层、消费循环），三种入口只负责选择模式和驱动公共逻辑。模块依赖 cron→queue 单向；反向依赖只有两处：消费面是 Bridge `schedule` 端点回调 `cronModel::scheduleRuntime()`，展示面是管理界面 browse 的只读规则名查询 `loadModel('cron')->getById()`：
 
-| 方法 | 职责 |
-|---|---|
-| `acquireExecutionMode()` | 申请、续租和按优先级接管模式 |
-| `executionModeActive()` | 检查模式租约 |
-| `fenceExecutionMode()` | 在队列事务中锁定并校验模式 |
-| `acquireSchedulerLease()` | 保证 scheduler 单例 |
-| `acquireConsumerLease()` | 限制 consumer 数量 |
-| `claimLocal()` | 本地 Consumer 的版本 CAS 领取 |
-| `reapLocal()` | 回收过期任务 |
-| `finishExecute()` | 写入成功、重试、失败及执行记录 |
-| `consumeLocalTasks()` | Web/RoadRunner 共用消费循环 |
+| 方法 | 所属模块 | 职责 |
+|---|---|---|
+| `acquireExecutionMode()` | queue | 申请、续租和按优先级接管模式 |
+| `executionModeActive()` | queue | 检查模式租约 |
+| `fenceExecutionMode()` | queue | 在队列事务中锁定并校验模式（cron 调度入队侧调用） |
+| `acquireConsumerLease()` | queue | 限制 consumer 数量 |
+| `acquireSchedulerLease()` | cron | 保证 Web/RoadRunner scheduler 单例 |
+| `acquireRuntimeSchedulerLease()` | cron | 保证 Runtime scheduler 跨进程单例（`__runtime_scheduler__` 保留行） |
+| `runSchedule()` | cron | 调度扫描，到期规则经 `enqueueCron()` 入队 |
+| `enqueueCron()` | cron | 调度入队事务（幂等键与 `lastTime` 推进），任务行写入复用 queue 的 `insertTask()` |
+| `scheduleRuntime()` | cron | Bridge schedule 端点的回调：竞争 leader 并执行调度扫描 |
+| `insertTask()` | queue | 通用任务行写入原语 |
+| `consume()` | queue | Web/RoadRunner 共用消费循环（cron 兼容入口经 fetch 调用） |
+| `claimNext()` | queue | 消费循环的单条任务 CAS 领取 |
+| `reap()` | queue | 回收过期任务 |
+| `finishExecute()` | queue | 写入成功、重试、失败及执行记录 |
 
 ### 5.1 代码落点
 
 | 文件 | 修改边界 |
 |---|---|
-| `zentaopms/module/cron/control.php` | Web、RoadRunner 入口及 Queue Bridge 路由；不在入口中复制队列状态机 |
-| `zentaopms/module/cron/model.php` | 模式租约、scheduler/consumer 租约、本地 CAS、执行结果和回收 |
-| `zentaopms/module/cron/config.php` | 队列批量、租约、重试和 Runtime Handler 白名单配置 |
+| `zentaopms/module/cron/control.php` | 定时任务管理页与 `ajaxExec`/`rrSchedule`/`rrConsume` 兼容入口；不持有队列消费逻辑 |
+| `zentaopms/module/cron/model.php` | 调度扫描（`runSchedule`）、调度入队事务（`enqueueCron`）、scheduler 单例租约、`scheduleRuntime` 回调 |
+| `zentaopms/module/cron/config.php` | 运行上限（`maxRunDays/maxRunTime`）配置 |
+| `zentaopms/module/queue/control.php` | 队列管理界面（browse/cancel/retry）、清理与指标运维入口、Queue Bridge 八端点、`consume` 消费循环 |
+| `zentaopms/module/queue/model.php` | CAS 领取、心跳、执行结果、回收、通道控制、`insertTask` 与模式租约等队列状态机原语 |
+| `zentaopms/module/queue/config.php` | 队列批量、租约、重试、consumer 上限（`maxConsumer`）和 Handler 白名单配置 |
 | `zentaopms/roadrunner/scheduler.php` | RoadRunner scheduler 的最小启动入口 |
 | `zentaopms/roadrunner/consumer.php` | RoadRunner consumer 的最小启动入口 |
 | `zentaopms/roadrunner/.rr.yaml` | scheduler 单例、consumer 数量、重启和执行超时策略 |
@@ -107,7 +115,7 @@ queued/retrying -> running -> succeeded
 
 ### Web fallback
 
-`ajaxExec()` 在 `PHP_SAPI === 'frankenphp'` 时立即返回，由 Runtime 接管。其他 SAPI 先检查 Runtime 和 RoadRunner 租约，再申请 `web` 租约。取得租约后，scheduler 由 `acquireSchedulerLease()` 保证单例，consumer 由 `acquireConsumerLease()` 限制并发数；每轮续租、回收过期任务，失去模式租约后退出。
+`ajaxExec()` 在 `PHP_SAPI === 'frankenphp'` 时立即返回，由 Runtime 接管。其他 SAPI 先检查 Runtime 和 RoadRunner 租约，再经 `queueModel::acquireExecutionMode()` 申请 `web` 租约。取得租约后，scheduler 由 `acquireSchedulerLease()` 保证单例，consumer 由 `queueModel::acquireConsumerLease()` 限制并发数；每轮由 `runSchedule()` 调度、`queue::consume()` 消费、`queueModel::reap()` 回收过期任务并续租，失去模式租约后退出。`ajaxExec` 与 `rrSchedule`/`rrConsume` 是历史遗留的兼容入口：常规路径是 cron 调度生成队列消息后，由队列模块自行消费。
 
 ### RoadRunner
 
@@ -115,7 +123,7 @@ queued/retrying -> running -> succeeded
 
 ### Handler 权限
 
-Runtime 仅执行注册白名单中的 Handler，拒绝 system command。Web/RoadRunner 通过 `runLegacyHandler()` 保留已有合法 ZenTao Cron 行为；system Cron 是否允许仍由 `cronSystemCall` 控制。兼容入口不得扩大 Runtime 的权限范围。
+Runtime 对 zentao 型 cron command 不做白名单校验，与 Web/RoadRunner 的 `runLegacyHandler()` 行为一致；direct handler 仍必须命中 `directHandlers`。Runtime 一律拒绝 system command；Web/RoadRunner 是否允许 system Cron 仍由 `cronSystemCall` 控制。
 
 ## 6. Runtime Queue Bridge 链路
 
@@ -134,7 +142,7 @@ Runtime 启动 Queue Engine 后按以下顺序调用 PHP Bridge：
 
 ## 7. 数据库与配置约定
 
-队列相关配置位于 `zentaopms/module/cron/config.php`，包括批量大小、租约/心跳周期、最大尝试次数、重试退避和 Runtime Handler 白名单。Runtime 侧 Bridge 地址和 Worker 参数位于 `runtime.toml`。
+队列相关配置位于 `zentaopms/module/queue/config.php`，包括批量大小、租约/心跳周期、最大尝试次数、重试退避、consumer 上限（`maxConsumer`）和 Handler 白名单；cron 运行上限（`maxRunDays/maxRunTime`）位于 `zentaopms/module/cron/config.php`。Runtime 侧 Bridge 地址和 Worker 参数位于 `runtime.toml`。
 
 新安装和升级必须提供：
 
@@ -148,7 +156,7 @@ Runtime 启动 Queue Engine 后按以下顺序调用 PHP Bridge：
 
 1. 确认三张表、保留模式节点、字段精度和索引。
 2. 实现并测试模式租约、优先级、CAS 和 fencing。
-3. 实现本地 Consumer 的领取、执行、重试、心跳和回收。
+3. 实现消费循环的领取、执行、重试、心跳和回收。
 4. 接入 Web fallback，验证 AJAX 并发与异常恢复。
 5. 接入 RoadRunner 入口和 `.rr.yaml`，验证常驻进程行为。
 6. 接入 Runtime Bridge，验证冲突停止和不降级规则。
@@ -169,8 +177,13 @@ go vet ./internal/queue/... ./internal/mysql
 # 在 zentaopms 仓库根目录执行 PHP 检查
 php -l zentaopms/module/cron/control.php
 php -l zentaopms/module/cron/model.php
-php zentaopms/module/cron/test/model/executionmode.php
+php -l zentaopms/module/queue/control.php
+php -l zentaopms/module/queue/model.php
+php zentaopms/module/queue/test/model/executionmode.php
+php zentaopms/module/queue/test/control/consume.php
 php zentaopms/module/cron/test/model/runtimescheduler.php
+php zentaopms/module/queue/test/model/queueservice.php
+php zentaopms/module/queue/test/model/queueadmin.php
 
 # 分别检查两个工作区的补丁格式
 git -C runtime diff --check
@@ -191,7 +204,7 @@ git -C zentaopms diff --check
 
 ### 当前状态
 
-已具备代码和证据：模式租约与优先级、本地 CAS、scheduler/consumer 租约、Runtime Bridge、Web `cli-server` 探针、PHP-FPM FastCGI 探针、MariaDB 队列状态流转、Go queue race、心跳传输失败处理、`nowatcher` Host 检查和 PHP lint。PHP 模型测试还覆盖了无幂等键任务的并行入队、任务超时租约、过期 ACK/Heartbeat 拒绝、本地重试/回收、RoadRunner 租约过期后 Web 接管，以及 Runtime scheduler 跨进程单例；调度端点的第二阶段物化结果也由 `runSchedule()` 的布尔返回值约束。旧 `wait/doing/done` 队列在独立迁移库中已验证为 `queued/retrying/succeeded/canceled`，`doing` 任务记录 `legacy_lease_lost`，删除标记映射为 `canceled`，旧表迁移后删除，并确认保留两个 `zt_servernode` 节点。两个并发 FPM 请求最终只有一个 scheduler 租约，consumer 租约受上限限制。RoadRunner 2.12.3 supervisor 已用仓库 `.rr.yaml` 验证：1 个 scheduler 和 4 个 consumer 首启并发申请 `__cron_mode__` 时无唯一键异常；有效 Runtime 租约存在时，RoadRunner 不创建 scheduler/consumer 角色记录；空闲 consumer 被强制终止后自动补回；执行中的 consumer 被终止后，任务先记为 `lost`，再由其他 consumer 重试并成功。该竞态修复通过回归测试覆盖：并发首次插入失败会回滚并重新竞争，而不是让 PHP 请求致命退出。另验证了全新安装首次启动时删除 `guest` 用户视图的场景，4 个 RoadRunner consumer 并发初始化均保持运行；`computeUserView()` 对首次唯一行插入使用公司行锁和事务内二次读取。
+已具备代码和证据：模式租约与优先级、消费循环 CAS、scheduler/consumer 租约、Runtime Bridge、Web `cli-server` 探针、PHP-FPM FastCGI 探针、MariaDB 队列状态流转、Go queue race、心跳传输失败处理、`nowatcher` Host 检查和 PHP lint。PHP 模型测试还覆盖了无幂等键任务的并行入队、任务超时租约、过期 ACK/Heartbeat 拒绝、消费循环重试/回收、RoadRunner 租约过期后 Web 接管，以及 Runtime scheduler 跨进程单例；调度端点的第二阶段物化结果也由 `runSchedule()` 的布尔返回值约束。旧 `wait/doing/done` 队列在独立迁移库中已验证为 `queued/retrying/succeeded/canceled`，`doing` 任务记录 `legacy_lease_lost`，删除标记映射为 `canceled`，旧表迁移后删除，并确认保留两个 `zt_servernode` 节点。两个并发 FPM 请求最终只有一个 scheduler 租约，consumer 租约受上限限制。RoadRunner 2.12.3 supervisor 已用仓库 `.rr.yaml` 验证：1 个 scheduler 和 4 个 consumer 首启并发申请 `__cron_mode__` 时无唯一键异常；有效 Runtime 租约存在时，RoadRunner 不创建 scheduler/consumer 角色记录；空闲 consumer 被强制终止后自动补回；执行中的 consumer 被终止后，任务先记为 `lost`，再由其他 consumer 重试并成功。该竞态修复通过回归测试覆盖：并发首次插入失败会回滚并重新竞争，而不是让 PHP 请求致命退出。另验证了全新安装首次启动时删除 `guest` 用户视图的场景，4 个 RoadRunner consumer 并发初始化均保持运行；`computeUserView()` 对首次唯一行插入使用公司行锁和事务内二次读取。
 
 本机执行完整 `go build ./cmd/zentao-runtime` 仍受环境缺少 `wtr/watcher-c.h` 阻断；该依赖问题不属于 Cron PHP/队列逻辑，不能用关闭 CGO 代替正式 Runtime 构建验收。
 

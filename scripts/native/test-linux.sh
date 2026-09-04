@@ -57,5 +57,7 @@ mkdir -p "${synthetic_dir}/open"
 "${repo_root}/tests/e2e/observability-dual-node-smoke.sh"
 "${repo_root}/tests/e2e/observability-readonly-smoke.sh"
 "${repo_root}/tests/e2e/observability-fault-recovery-smoke.sh"
+"${repo_root}/tests/e2e/cache-bridge-smoke.sh"
+"${repo_root}/tests/e2e/redis-cache-smoke.sh"
 
 echo "Linux ${RUNTIME_ARCH} smoke tests passed"

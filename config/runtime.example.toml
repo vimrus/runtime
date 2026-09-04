@@ -113,3 +113,13 @@ jsonlKeepDays = 7
 # Remove sealed JSONL segments after successful conversion and state save.
 # Disable only when raw JSONL must be retained for compliance or debugging.
 jsonlDeleteAfterConvert = true
+
+[cache]
+# Enable the in-process bounded memory cache and private Cache Bridge.
+enabled = true
+# Private loopback listener for the Cache Bridge.
+listen = "127.0.0.1:8083"
+# Total cache byte budget.
+maxCostBytes = 268435456
+# Maximum single value size in bytes.
+maxValueBytes = 1048576

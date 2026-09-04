@@ -8,6 +8,8 @@ import "sort"
 // nodes in a cluster agree on the same set.
 var metricRegistry = map[string]struct{}{
 	"http.request.duration":                  {},
+	"zentao_queue_backlog":                   {},
+	"zentao_queue_oldest_age_seconds":        {},
 	"observability_events_received_total":    {},
 	"observability_events_dropped_total":     {},
 	"observability_buffer_items":             {},

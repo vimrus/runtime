@@ -80,7 +80,11 @@ ready|degraded -> draining -> stopped
 任意启动阶段 -> failed
 ```
 
-`/_runtime/healthz` 和 `/_runtime/liveness` 是轻量存活探针。`/_runtime/readiness` 仅在 Caddy/FrankenPHP 成功启动后提供。完整状态通过本地 Control Plane 的 `health` 获取；`health --deep` 只允许本地调用，但当前仅返回 Runtime 生命周期派生状态，用于冻结协议和访问边界。PHP 内部请求、数据库、Session、NFS 和 PHP 业务探针将在对应 PHP 契约完成后加入。
+`/_runtime/healthz` 和 `/_runtime/liveness` 是轻量存活探针。`/_runtime/readiness` 仅在 Caddy/FrankenPHP 成功启动后提供。完整状态通过本地 Control Plane 的 `health` 获取；`health --deep` 只允许本地调用，但当前仅返回 Runtime 生命周期派生状态，用于冻结协议和访问边界。PHP 应用深探针契约已落地
+（`zentaopms/www/app-health.php`，见禅道适配计划 Z-HEALTH-01），Runtime
+`health --deep` 已注册 `app` 深探针并通过同一 Web Listener 调用
+`/app-health.php`，将 `ok|degraded|failed` 映射为组件状态；
+`queue-direct-smoke.sh` 已断言 deep health 中 app 组件为 ok。
 
 ## 4. Control Plane
 

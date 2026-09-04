@@ -1,4 +1,4 @@
-name: Linux amd64 compatibility
+name: Linux native compatibility
 
 on:
   workflow_dispatch:
@@ -75,10 +75,55 @@ jobs:
       - name: Observability fault-recovery smoke
         run: tests/e2e/observability-fault-recovery-smoke.sh
 
+      - name: Cache bridge smoke
+        run: tests/e2e/cache-bridge-smoke.sh
+
+      - name: Redis cache smoke
+        run: tests/e2e/redis-cache-smoke.sh
+
       - name: Upload Runtime artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zentao-runtime-linux-amd64-compatibility
           path: dist/runtime-linux-amd64
+          if-no-files-found: error
+          retention-days: 7
+
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Build Linux arm64 Runtime
+        env:
+          GOPROXY: https://proxy.golang.org,direct
+          DEBIAN_MIRROR: http://deb.debian.org/debian
+          DEBIAN_SECURITY_MIRROR: http://deb.debian.org/debian-security
+        run: scripts/native/build-linux.sh arm64
+
+      - name: Verify no database drivers embedded
+        run: scripts/package/verify-no-db-driver.sh dist/runtime-linux-arm64/bin/zentao
+
+      - name: Smoke test Linux arm64 (PHP / ionCube / extensions)
+        run: scripts/native/test-linux.sh arm64
+
+      - name: Verify DM8 arm64 client closure in artifact
+        run: |
+          test "$(find dist/runtime-linux-arm64/php/lib -maxdepth 1 -name 'libdm*.so' | wc -l)" -eq 19
+          test -f dist/runtime-linux-arm64/php/lib/dependencies/libssl.so
+          test -f dist/runtime-linux-arm64/config/dm_svc.conf
+
+      - name: Generate manifest and SBOM
+        run: |
+          scripts/package/generate-manifest.sh dist/runtime-linux-arm64
+          scripts/package/generate-sbom.sh dist/runtime-linux-arm64
+
+      - name: Upload Runtime artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: zentao-runtime-linux-arm64-compatibility
+          path: dist/runtime-linux-arm64
           if-no-files-found: error
           retention-days: 7

@@ -244,6 +244,21 @@ func TestObservabilityBatchValidation(t *testing.T) {
 	}
 }
 
+func TestCacheDefaultsAndValidation(t *testing.T) {
+	config := DefaultForRoot("/opt/zentao")
+	if !config.Cache.Enabled || config.Cache.Listen != "127.0.0.1:8083" || config.Cache.MaxCostBytes <= 0 || config.Cache.MaxValueBytes <= 0 {
+		t.Fatalf("unexpected cache defaults: %#v", config.Cache)
+	}
+	config.Cache.Listen = "0.0.0.0:8083"
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("public cache listen must be rejected, got %v", err)
+	}
+	config.Cache.Listen = "127.0.0.1:8083"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("loopback cache listen must be accepted: %v", err)
+	}
+}
+
 func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 	config := Default()
 	config.Web.Root = "/opt/zentao/app/zentaopms/www"

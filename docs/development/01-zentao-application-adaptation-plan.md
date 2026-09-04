@@ -80,6 +80,16 @@
 
 阶段门槛：禅道应用在没有新队列、缓存和可观测性功能时，也能在 Runtime PoC 中完成安装、登录和基础页面访问。
 
+实施状态（2026-09-03，Z-HEALTH-01）：应用深探针入口
+`zentaopms/www/app-health.php` 已落地。它只读取安装与数据库配置，ping
+主库并返回 `ok|degraded|failed` 与稳定错误码
+（`config_missing/app_not_installed/db_driver_unsupported/db_unreachable/
+db_ok`），不加载全量应用上下文、不启动 Session、不输出配置或凭据；
+MySQL 可达与不可达两种路径均验证通过。Runtime `health --deep` 对该入口
+的调用已实施：`health --deep` 注册 `app` 深探针并经同一 Web Listener 调用
+`/app-health.php`，把 `ok|degraded|failed` 映射为组件状态；
+`queue-direct-smoke.sh` 联合断言 deep health 中 app 组件为 ok。
+
 ## 7. 阶段 1：可靠任务队列基础
 
 ### 7.1 数据与协议
@@ -97,7 +107,7 @@
 
 | ID | 优先级 | 工作项 | 主要代码范围 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|---|
-| Z-QUEUE-07 | P0 | PHP Queue Client | `module/cron/model.php` | enqueue、delay、cancel 和查询接口 | Z-QUEUE-01 | 业务事务可与任务创建原子提交，不隐式开启嵌套事务 |
+| Z-QUEUE-07 | P0 | PHP Queue Client | `service/queue/*`、`module/queue/model.php` | enqueue、delay、cancel 和查询接口 | Z-QUEUE-01 | 业务事务可与任务创建原子提交，不隐式开启嵌套事务 |
 | Z-QUEUE-08 | P0 | Handler 注册协议 | module/lib | Handler 名称、Payload 版本、超时和幂等约束 | Z-QUEUE-02 | 禁止传入任意 PHP 路由、类名、Shell 或文件路径 |
 | Z-QUEUE-09 | P0 | 幂等基础设施 | Queue Service/业务模块 | `idempotencyKey`、去重和副作用记录模式 | Z-QUEUE-07 | 重复投递或租约恢复不会产生不可控重复副作用 |
 | Z-QUEUE-10 | P1 | 首批 Handler 迁移 | cron、邮件或 Webhook 等首批模块 | 低风险任务的新 Handler | Z-QUEUE-08/09 | 新旧消费者不能同时处理同一任务类型，可独立回滚 |
@@ -168,7 +178,7 @@ PHP 不直接写共享 Parquet，也不操作 DuckDB 文件。PHP 只发送受�
 
 实施前应先按禅道技术文档和实际调用链再次确认，以下仅作为初始调查范围：
 
-- 当前队列：`zentaopms/module/cron/control.php`、`model.php` 和相关安装 SQL。
+- 队列相关代码：`zentaopms/module/cron/`（定时规则与调度）、`zentaopms/module/queue/`（队列状态机与 Bridge）和相关安装 SQL。
 - 通用运行能力：`zentaopms/framework`、`zentaopms/lib`。
 - Web 与安装入口：`zentaopms/www/index.php`、`install.php`、`api.php`。
 - 数据库公共 DAO：`zentaopms/lib/base/dao`。
@@ -330,9 +340,9 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
 
 ### 18.2 队列现状与改造入口（Z-QUEUE-01..13）
 
-- 当前队列表：`zentaopms/db/zentao.sql:1665-1678` 的 `zt_queue`
+- 改造前的旧队列表：`zentaopms/db/zentao.sql` 的旧 `zt_queue`
   （字段 `cron/type/command/status/execId/createdDate/deleted`）。
-- 当前消费者：`zentaopms/module/cron/control.php`
+- 改造前的旧消费者：`zentaopms/module/cron/control.php`
   - `consumeTasks()`：约 369 行起，直接 `SELECT ... WHERE status='wait'
     ORDER BY createdDate`。
   - `consumeTask()`：约 386 行起，条件更新 `doing + execId` →
@@ -402,7 +412,7 @@ Runtime 是否可用，不得在无 Runtime 环境时报错。
   版本由包内 `VERSION` 识别。查找使用
   `scripts/ci/find-app-package.sh <edition>`。
 
-### 18.6 FrankenPHP Classic mode 兼容（Z-ENV-02，当前阻塞联合测试）
+### 18.6 FrankenPHP Classic mode 兼容（Z-ENV-02，正式修复已实施）
 
 真实应用包（ipd5.5 已核实）的 `zentaopms/www/index.php` 末尾使用：
 
@@ -421,7 +431,7 @@ else
 `frankenphp_handle_request() called while not in worker mode`，导致 500。
 正确判断方式是 FrankenPHP 官方 profile 使用的 `FRANKENPHP_WORKER` 环境变量。
 
-禅道侧正式修复建议（待实施）：
+禅道侧正式修复（已实施）：
 
 ```php
 if(php_sapi_name() == 'frankenphp' && isset($_SERVER['FRANKENPHP_WORKER']))
@@ -434,6 +444,41 @@ else
 }
 ```
 
+实施状态（2026-09-03）：正式修复已按上述逻辑合入
+`zentaopms/www/index.php`（请求开始重置 `http_response_code(200)`，
+仅在 `FRANKENPHP_WORKER` 存在时进入 worker 循环）。Runtime 集成环境的
+`scripts/ci/patch-classic-mode.sh` 保留为兼容历史发布版本的临时 shim；
+已含正式修复的新版本应用不再需要该补丁。
+
 Runtime 集成环境生成时会对暂存副本应用最小兼容补丁
 （`scripts/ci/patch-classic-mode.sh`，只改 `app/zentaopms/www/index.php`，
 不改原始 zip），作为正式修复前的临时 shim；正式修复后应移除该补丁逻辑。
+
+## 19. 实施状态摘要（2026-09-03）
+
+以下状态以本工作树为准（zentaopms 与 runtime 均未提交、未 push）：
+
+已完成（有真实环境验证）：
+
+- Z-ENV-01/02：runtimeService 能力检测、Classic mode 正式修复与联合回归。
+- Z-CACHE-01～04：Cache Bridge 客户端、Redis/Runtime/Null 后端、namespace
+  版本失效；user/project/product 首批业务门面（基础行 map + view 业务层
+  过滤），真实 MySQL/Redis 跨进程验证。
+- Z-OBS-01～04：Observability 事件客户端、日志脱敏/注册表、MetricService
+  flush、LogService 接入错误处理。
+- Z-QUEUE-01～09（核心）：Queue Bridge 八端点、Portable CAS、租约/心跳/
+  完成/重试、cron 生产者迁移、direct handler 协议；真实 MySQL 契约测试与
+  Runtime Worker 联合执行 e2e 通过。
+- Z-QUEUE-12/13、Z-QUEUE-11（最小版）：清理、指标、管理列表/取消/重试。
+- Z-HEALTH-01：应用深探针与 Runtime `health --deep` 接线。
+
+待完成（依赖业务决策或外部环境）：
+
+- Z-QUEUE-10：邮件/Webhook 等更多业务 Handler 迁移与回滚策略。
+- Z-QUEUE-11：后台菜单归属、权限点与界面完整审计。
+- Z-INSTALL/UPGRADE/MIGRATE：队列旧表迁移升级 SQL 已实现并独立验证
+  （含 deleted enum 比较修复）；安装向导与完整升级回归仍在集成矩阵范围。
+- Z-DB-01：PostgreSQL/DM/Gauss 队列契约矩阵（zentaopatch/innovation 的
+  mysql2pgsql 迁移工具可作 PG 验证入口）。
+- Z-E2E-01：跨仓库 CI 联合矩阵（需真实应用包与 MySQL/PG service）。
+- MetricService::run 的批量计算/状态/重试编排迁移。

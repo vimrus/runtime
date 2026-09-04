@@ -249,6 +249,21 @@ DuckDB 侧不引入任何数据库 Scanner/Extension，三平台行为一致。
   `cleanMetricLibHotWindow` 提供热窗口清理（今年/本月/本周/今天，无日期保留）。
 - BI 同步：`syncBITableByWatermark` 已按白名单 + 双水位取数 + idrange 整分区
   重写实现，并更新 `zt_duckdbsync` 水位。
+- 统一增量编排：`biModel::syncParquetIncremental()` 已提供（BI 白名单表
+  双水位 + metriclib 按日期/热窗口同步），cron handler 白名单含
+  `bi.syncIncremental`；修复了同步器写死 `editedDate` 的问题（22.6 业务表
+  使用 `lastEditedDate`，按表可配置），异常路径会释放 `zt_duckdbsync` 锁。
+- full_snapshot：`biModel::syncBITableSnapshot()` 已实现（按 idrange 整表
+  重写、空表发布空 Manifest），product 与 user 已纳入默认快照表；user
+  按 `parquetSnapshotFields` 白名单只写入 id/company/dept/account/realname/
+  avatar/type/role/visions/clientStatus/deleted，password、邮箱、电话等
+  敏感列不进入分析副本（真实 DuckDB 验证列集合）；发布层会在 Manifest
+  切换后删除不再引用的旧 part。
+- metriclib 热窗口闭环：滚出热窗口的日期同步到 history 分区并从 MySQL
+  删除，热窗口（今年/本月/本周/今天）保留在 current 分区；真实 DuckDB
+  CLI 端到端验证通过。
+- 待支持：PostgreSQL/DM/Gauss 端到端同步矩阵；更多小表快照白名单可按
+  `parquetSnapshotFields` 扩展。
 - 查询路由：`buildParquetQuery(domain, table, dateRange, where)` 已按
   metrics/bi 分域从 Manifest 生成只读 `read_parquet` SQL；logs 域由 Runtime
   `zentao logs` 负责。

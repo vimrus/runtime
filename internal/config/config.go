@@ -22,6 +22,7 @@ type Config struct {
 	Web           Web           `json:"web" toml:"web"`
 	Queue         Queue         `json:"queue,omitempty" toml:"queue,omitempty"`
 	Observability Observability `json:"observability,omitempty" toml:"observability,omitempty"`
+	Cache         Cache         `json:"cache,omitempty" toml:"cache,omitempty"`
 }
 
 type Runtime struct {
@@ -92,6 +93,14 @@ type Observability struct {
 	JSONLConvertSources     []string      `json:"jsonlConvertSources,omitempty" toml:"jsonlConvertSources,omitempty"`
 	JSONLKeepDays           int           `json:"jsonlKeepDays,omitempty" toml:"jsonlKeepDays,omitempty"`
 	JSONLDeleteAfterConvert bool          `json:"jsonlDeleteAfterConvert,omitempty" toml:"jsonlDeleteAfterConvert,omitempty"`
+}
+
+type Cache struct {
+	Enabled       bool     `json:"enabled" toml:"enabled"`
+	Listen        string   `json:"listen,omitempty" toml:"listen,omitempty"`
+	MaxCostBytes  int64    `json:"maxCostBytes,omitempty" toml:"maxCostBytes,omitempty"`
+	MaxValueBytes int64    `json:"maxValueBytes,omitempty" toml:"maxValueBytes,omitempty"`
+	Namespaces    []string `json:"namespaces,omitempty" toml:"namespaces,omitempty"`
 }
 
 type Overrides struct {
@@ -172,6 +181,12 @@ func Default() Config {
 			JSONLConvertSources:     []string{"access", "runtime"},
 			JSONLKeepDays:           7,
 			JSONLDeleteAfterConvert: true,
+		},
+		Cache: Cache{
+			Enabled:       true,
+			Listen:        "127.0.0.1:8083",
+			MaxCostBytes:  256 * 1024 * 1024,
+			MaxValueBytes: 1024 * 1024,
 		},
 	}
 }
@@ -310,12 +325,20 @@ func decode(data []byte, config Config) (Config, error) {
 		JSONLKeepDays           *int     `toml:"jsonlKeepDays"`
 		JSONLDeleteAfterConvert *bool    `toml:"jsonlDeleteAfterConvert"`
 	}
+	type rawCache struct {
+		Enabled       *bool    `toml:"enabled"`
+		Listen        *string  `toml:"listen"`
+		MaxCostBytes  *int64   `toml:"maxCostBytes"`
+		MaxValueBytes *int64   `toml:"maxValueBytes"`
+		Namespaces    []string `toml:"namespaces"`
+	}
 	type rawConfig struct {
 		SchemaVersion *int              `toml:"schemaVersion"`
 		Runtime       *rawRuntime       `toml:"runtime"`
 		Web           *rawWeb           `toml:"web"`
 		Queue         *rawQueue         `toml:"queue"`
 		Observability *rawObservability `toml:"observability"`
+		Cache         *rawCache         `toml:"cache"`
 	}
 
 	var raw rawConfig
@@ -541,6 +564,23 @@ func decode(data []byte, config Config) (Config, error) {
 		}
 		if raw.Observability.JSONLDeleteAfterConvert != nil {
 			config.Observability.JSONLDeleteAfterConvert = *raw.Observability.JSONLDeleteAfterConvert
+		}
+	}
+	if raw.Cache != nil {
+		if raw.Cache.Enabled != nil {
+			config.Cache.Enabled = *raw.Cache.Enabled
+		}
+		if raw.Cache.Listen != nil {
+			config.Cache.Listen = *raw.Cache.Listen
+		}
+		if raw.Cache.MaxCostBytes != nil {
+			config.Cache.MaxCostBytes = *raw.Cache.MaxCostBytes
+		}
+		if raw.Cache.MaxValueBytes != nil {
+			config.Cache.MaxValueBytes = *raw.Cache.MaxValueBytes
+		}
+		if raw.Cache.Namespaces != nil {
+			config.Cache.Namespaces = raw.Cache.Namespaces
 		}
 	}
 	return config, nil
@@ -834,6 +874,19 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	if c.Cache.Enabled {
+		host, port, err := net.SplitHostPort(c.Cache.Listen)
+		if err != nil || (host != "localhost" && host != "127.0.0.1" && host != "::1") {
+			return fmt.Errorf("cache.listen must use a loopback address")
+		}
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return fmt.Errorf("cache.listen must include a valid port")
+		}
+		if c.Cache.MaxCostBytes <= 0 || c.Cache.MaxValueBytes <= 0 {
+			return fmt.Errorf("cache maxCostBytes and maxValueBytes must be positive")
+		}
+	}
 	return nil
 }
 
@@ -897,7 +950,12 @@ func RestartRequired(current, candidate Config) bool {
 		current.Observability.JSONLConvertInterval != candidate.Observability.JSONLConvertInterval ||
 		current.Observability.JSONLKeepDays != candidate.Observability.JSONLKeepDays ||
 		current.Observability.JSONLDeleteAfterConvert != candidate.Observability.JSONLDeleteAfterConvert ||
-		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources)
+		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources) ||
+		current.Cache.Enabled != candidate.Cache.Enabled ||
+		current.Cache.Listen != candidate.Cache.Listen ||
+		current.Cache.MaxCostBytes != candidate.Cache.MaxCostBytes ||
+		current.Cache.MaxValueBytes != candidate.Cache.MaxValueBytes ||
+		!equalStrings(current.Cache.Namespaces, candidate.Cache.Namespaces)
 }
 
 func equalWorkers(left, right []QueueWorker) bool {

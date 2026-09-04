@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
 # Verify the private PHP Observability Bridge: token authentication, schema
-# validation, bounded event ingestion, and publication to the node-owned
-# Parquet partition.
+# validation, bounded event ingestion, publication to the node-owned Parquet
+# partition, and the read-only log viewer query bridge (D7).
 #
 # Usage: observability-bridge-smoke.sh [app-package|app-dir]
 
@@ -34,6 +34,7 @@ if [[ -f "${staged_release}/www/index.php" ]]; then
     "${repo_root}/scripts/ci/patch-classic-mode.sh" "${staged_release}" >/dev/null || true
 fi
 cp "${repo_root}/tests/fixtures/php/obs.php" "${web_root}/obs.php"
+cp "${repo_root}/tests/fixtures/php/obs-env.php" "${web_root}/obs-env.php"
 
 cat > "${work}/runtime.toml" <<EOF
 schemaVersion = 1
@@ -109,5 +110,31 @@ docker exec "${container}" sh -c "find /shared/observability/logs/schema=v1 -typ
     || { echo "PHP event was not published to node partition" >&2; exit 1; }
 docker exec "${container}" sh -c "find /shared/observability/metrics/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' 2>/dev/null | grep -q ." \
     || { echo "PHP metric was not published to node partition" >&2; exit 1; }
+
+env_response="$(docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/obs-env.php)"
+query_token="$(echo "${env_response}" | jq -r '.token')"
+log_mode="$(echo "${env_response}" | jq -r '.mode')"
+query_url="$(echo "${env_response}" | jq -r '.query')"
+[[ "${log_mode}" == "flush" ]] || { echo "ZENTAO_LOG_MODE not flush: ${log_mode} (${env_response})" >&2; exit 1; }
+[[ "${query_url}" == */internal/runtime/observability/v1/query ]] \
+    || { echo "unexpected query URL: ${query_url}" >&2; exit 1; }
+
+query_response=""
+for _ in $(seq 1 10); do
+    query_response="$(docker exec "${container}" curl --fail --silent \
+        -H "X-Zentao-Observability-Token: ${query_token}" \
+        -H "X-Zentao-Observability-Schema: 1" \
+        -H "Content-Type: application/json" \
+        -d '{"schemaVersion":1,"filters":{"level":"info","message":"bridge smoke","offset":0,"limit":10}}' \
+        "http://127.0.0.1:8082/internal/runtime/observability/v1/query")"
+    if echo "${query_response}" | jq -e '.list | length > 0' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
+echo "${query_response}" | jq -e '.total > 0 and .truncated == false' >/dev/null \
+    || { echo "query bridge response invalid: ${query_response}" >&2; exit 1; }
+echo "${query_response}" | jq -e '[.list[].message] | any(contains("bridge smoke"))' >/dev/null \
+    || { echo "query bridge did not return ingested event: ${query_response}" >&2; exit 1; }
 
 echo "observability bridge smoke passed"

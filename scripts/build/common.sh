@@ -45,6 +45,17 @@ verify_lock() {
         (.duckdb.go_binding.version | type == "string" and length > 0) and
         (.duckdb.commit | test("^[0-9a-f]{40}$")) and
         (.phpredis.commit | test("^[0-9a-f]{40}$")) and
+        (.phpredis.archive_sha256 | test("^[0-9a-f]{64}$")) and
+        (.dm8.version | type == "string" and length > 0) and
+        (.dm8.php | type == "string" and length > 0) and
+        (.dm8.linux_amd64.pdo_driver_sha256 | test("^[0-9a-f]{64}$")) and
+        (.dm8.linux_amd64.dpi_sha256 | test("^[0-9a-f]{64}$")) and
+        (.dm8.linux_amd64.client_components | type == "number" and . >= 18) and
+        (.dm8.linux_amd64.checksum_file | type == "string" and length > 0) and
+        (.dm8.linux_arm64.pdo_driver_sha256 | test("^[0-9a-f]{64}$")) and
+        (.dm8.linux_arm64.dpi_sha256 | test("^[0-9a-f]{64}$")) and
+        (.dm8.linux_arm64.client_components | type == "number" and . >= 18) and
+        (.dm8.linux_arm64.checksum_file | type == "string" and length > 0) and
         (.mysql.linux_amd64.url | startswith("https://")) and
         (.mysql.linux_amd64.archive_sha256 | test("^[0-9a-f]{64}$")) and
         (.mysql.linux_arm64.url | startswith("https://")) and
@@ -80,7 +91,9 @@ docker_build_args() {
         --build-arg "IONCUBE_ARCHIVE_SHA256=$(lock_value ".ioncube.${ioncube_key}.archive_sha256")" \
         --build-arg "IONCUBE_LOADER=$(lock_value ".ioncube.${ioncube_key}.loader")" \
         --build-arg "IONCUBE_LOADER_SHA256=$(lock_value ".ioncube.${ioncube_key}.loader_sha256")" \
-        --build-arg "LOADER_ARCH=${RUNTIME_ARCH}"
+        --build-arg "LOADER_ARCH=${RUNTIME_ARCH}" \
+        --build-arg "PHPREDIS_COMMIT=$(lock_value '.phpredis.commit')" \
+        --build-arg "PHPREDIS_ARCHIVE_SHA256=$(lock_value '.phpredis.archive_sha256')"
 }
 
 build_runtime_image() {

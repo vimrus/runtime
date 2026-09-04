@@ -24,6 +24,7 @@ frankenphp_version="$(jq -r '.frankenphp.version' "${lock}")"
 caddy_version="$(jq -r '.caddy.version' "${lock}")"
 duckdb_version="$(jq -r '.duckdb.go_binding.version' "${lock}")"
 ioncube_version="$(jq -r '.ioncube.version' "${lock}")"
+dm8_version="$(jq -r '.dm8.version' "${lock}")"
 
 (
     cd "${repo_root}"
@@ -34,6 +35,7 @@ ioncube_version="$(jq -r '.ioncube.version' "${lock}")"
     --arg caddy "${caddy_version}" \
     --arg duckdb "${duckdb_version}" \
     --arg ioncube "${ioncube_version}" \
+    --arg dm8 "${dm8_version}" \
     '{
         bomFormat: "CycloneDX",
         specVersion: "1.5",
@@ -49,7 +51,8 @@ ioncube_version="$(jq -r '.ioncube.version' "${lock}")"
             {type: "library", name: "frankenphp", version: $frankenphp},
             {type: "library", name: "caddy", version: $caddy},
             {type: "library", name: "duckdb-go", version: $duckdb},
-            {type: "library", name: "ioncube-loader", version: $ioncube}
+            {type: "library", name: "ioncube-loader", version: $ioncube},
+            {type: "library", name: "dm8-pdo-driver", version: $dm8}
         ])
     }' > "${staging}/sbom.json"
 

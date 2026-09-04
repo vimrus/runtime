@@ -43,10 +43,10 @@ POC 需要将它与标准 Go Worker Pool 对比，只有确实减少生命周期
 
 ### 3.1 当前实现
 
-当前定时任务队列位于：
+当前定时任务与任务队列位于：
 
-- `../../zentaopms/module/cron/control.php`
-- `../../zentaopms/module/cron/model.php`
+- `../../zentaopms/module/cron/`（定时规则调度、调度入队、scheduler 单例租约）
+- `../../zentaopms/module/queue/`（队列状态机原语、执行模式租约、Queue Bridge 协议层、消费循环与管理界面）
 - `../../zentaopms/db/zentao.sql`
 
 旧版本流程（已废弃）为：
@@ -1125,13 +1125,17 @@ Go 包中不得出现数据库 Driver、SQL、数据库连接池或数据库凭�
 ### 21.2 PHP Queue Module
 
 ```text
-zentaopms/module/cron/model.php (统一 Queue Client 与 Queue Bridge DAO)
-  control.php         private Bridge entrypoints and management actions
-  model.php           Queue Service orchestration
-  tao.php             portable Queue DAO operations
-  zen.php             validation, retry policy and result mapping
-  handler/            registered business handler adapters
-  test/               state, Bridge and concurrency tests
+zentaopms/module/cron/  定时任务系统：规则界面、调度扫描与 scheduler 单例租约
+  control.php         定时任务管理页、ajaxExec/rrSchedule/rrConsume 兼容入口
+  model.php           runSchedule 调度扫描、enqueueCron 调度入队（持有事务与 lastTime）、
+                      acquireSchedulerLease/acquireRuntimeSchedulerLease、scheduleRuntime（Bridge 回调）
+
+zentaopms/module/queue/  队列实现：状态机原语、执行模式租约、Bridge 协议层、消费循环与管理界面
+  control.php         browse/cancel/retry 管理页、pruneFinished/reportMetrics 运维入口、
+                      Bridge 八端点、consume 消费循环
+  model.php           insertTask 通用入队、claim/claimNext、heartbeat、完成、reap、通道控制、
+                      模式租约与围栏（acquireExecutionMode/fenceExecutionMode/acquireConsumerLease）
+  test/               state, Bridge, execution-mode and concurrency tests
 
 zentaopatch/innovation/
   extension/cron/  database-specific DDL/capability overrides when required
@@ -1330,13 +1334,70 @@ ZenTao Queue Management
 两个应用节点的客户。当未来客户的吞吐或隔离需求超过业务数据库队列边界时，可以在保持
 PHP Handler Contract 的基础上增加 Redis、NATS 或其他传输，而不重写禅道业务 Handler。
 
-## 28. 实施状态（2026-08-19）
+## 28. 实施状态（2026-09-02）
 
 - Queue Bridge v1 DTO、Fake Bridge 与 Go 客户端已实现并测试；本机传输的
   鉴权、批量和版本协商见 `docs/queue-bridge-v1-contract.md`。
 - 有界 Worker Pool、租约/fencing、Wakeup 与自适应轮询、Reaper 和
   Scheduler 注册表已实现并接入 Host；`runtime.toml` 的 `queue` 配置段已
   冻结默认值。
-- PHP Queue Service、DAO、管理界面与首批 Handler 迁移属于
-  `docs/development/01-zentao-application-adaptation-plan.md`，尚未实施；真实 MySQL/
-  PostgreSQL 上的并发与崩溃恢复契约测试在禅道侧实施后执行。
+- PHP Queue Bridge 已实现：协议层（八端点路由、loopback + 随机 Token +
+  Schema 双重校验、请求大小/批量/未知字段拒绝）与状态机 DAO 原语
+  （Portable CAS 领取、租约心跳、完成/重试/reap 与通道控制）全部在
+  `module/queue`，capabilities/claim/execute/heartbeat/reap/stats/control/
+  schedule 八端点契约不变；Runtime 监听器把
+  `/internal/runtime/queue/v1/<endpoint>` 重写为 `/index.php/queue-<endpoint>`。
+- cron 生产者已迁移：`cronModel::enqueueCron()` 在调度事务内持有模式租约
+  围栏与 `zt_cron.lastTime` 推进，任务行的写入复用 `queueModel::insertTask()`
+  通用入队原语（幂等键等 cron 语义留在 cron 模型）；`queueService` 提供业务
+  入队/状态/取消/重试接口（Handler 白名单与幂等键在服务内校验落库，不依赖
+  模块模型）。模块依赖 cron→queue 单向，反向依赖只有两处：Bridge schedule
+  端点回调 `cronModel::scheduleRuntime()`，与管理界面 browse 的只读规则名
+  查询 `loadModel('cron')->getById()`。
+- 升级迁移 SQL（Z-QUEUE-01/UPGRADE）：`db/update22.6.sql` 将旧
+  wait/doing/done 队列按 `deleted`/`status` 映射为新
+  queued/retrying/succeeded/canceled 并写入幂等键，随后创建
+  `zt_queueexec`/`zt_servernode`；修复了 `deleted = 1` 对 enum 按索引比较
+  导致任务被误映射为 canceled 的问题，并用旧表结构 + 四类旧状态行独立
+  验证映射正确。
+- 运维 cron 默认注册：新装（`db/zentao.sql`）与 22.6 升级
+  （`db/update22.6.sql`）均默认注册 `queue.reportMetrics`（每 5 分钟）
+  与 `queue.pruneFinished`（每天 3:30），SQL 语法与执行已验证。
+- Runtime 与 PHP 的真实 MySQL 契约测试（`module/queue/test/model` 下
+  queueservice/queueadmin/executionmode、`module/cron/test/model` 下
+  runtimescheduler、`module/queue/test/control` 下 consume 用例）已具备，
+  并在真实 MySQL 上本地执行通过（入队/状态/取消、执行模式租约、消费循环、
+  Runtime scheduler 跨进程单例），CI 单测镜像同样执行。
+- Handler 注册协议最小落地：`directHandlers` 白名单允许业务队列以
+  handler 名直接执行（首个为幂等的 `bi.syncIncremental`），Execute 对
+  direct handler 按 module.method fetch 执行、payload 作为参数；
+  queueService/schedulerService 入队、状态与幂等去重已用真实 MySQL 契约
+  验证。
+- Runtime Worker 联合执行已手动验证：真实 zentaopms + MySQL + Runtime
+  容器内，`bi.syncIncremental` direct 任务经 claim→execute→完成，任务
+  状态从 queued 转为 succeeded。联合环境适配要点：`zt_config` 版本需与
+  `config->version` 一致、安装后的 `install.php/upgrade.php` 需要移除、
+  桥接端点需登记在 `config/privilege.php` 的 openMethods（已有）。
+- 自动化联合脚本 `tests/e2e/queue-direct-smoke.sh` 已提供并在本机通过：
+  自动创建临时 MySQL 库、导入应用 Schema、补齐 company/version、插入
+  direct 任务，启动 Runtime 后等待任务转为 succeeded。CI 联合矩阵接入
+  依赖真实应用包与 MySQL service（Z-E2E-01）。
+- 队列清理（Z-QUEUE-12 核心）：`queueControl::pruneFinished()` 经
+  `queueService::pruneFinished()` 分批删除超过保留期的
+  succeeded/failed/canceled 任务与对应执行记录（有界批次、不长时间锁表），
+  `queue.pruneFinished` 已注册为 direct handler；真实 MySQL 验证只清理
+  过期记录、保留近期任务。
+- 队列指标（Z-QUEUE-13 最小闭环）：注册表增加低基数 gauge
+  `zentao_queue_backlog`（channel+status）与
+  `zentao_queue_oldest_age_seconds`；`queueService::metrics()` 聚合积压/
+  最老等待秒数/重试数，`queue.reportMetrics` direct handler 周期性
+  上报；真实 MySQL 验证聚合结果正确。
+- 队列管理界面（Z-QUEUE-11 最小版）：queue 模块提供 `browse` 管理页
+  （分页列表 ID/Handler/状态/尝试/可执行时间/错误码），入口链接挂在
+  cron 定时任务后台；支持取消请求与手动重试（`queue/cancel`、`queue/retry`，
+  `queueService::retry()` 重置租约与 attempts），真实 MySQL 验证列表与
+  重试重置正确（正式单测 `module/queue/test/model/queueadmin.php` 已纳入，
+  不依赖 zenData）；界面文案已覆盖 zh-cn/en/zh-tw/de/fr。权限点
+  `queue-browse/cancel/retry` 已登记 group 资源与系统设置导航包。
+- 尚未实施：队列管理完整审计完善、更多业务 Handler 迁移与 CI 联合矩阵
+  接入（Z-QUEUE-10、Z-E2E-01）。

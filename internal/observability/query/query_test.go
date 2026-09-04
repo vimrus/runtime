@@ -70,3 +70,44 @@ func TestBuildDefaultsZeroTimeRange(t *testing.T) {
 		t.Fatalf("unexpected range: %v - %v", start, end)
 	}
 }
+
+func TestBuildLogsFieldFiltersAndOffset(t *testing.T) {
+	config := Config{DatasetRoot: "/data", MaxDays: 7, MaxRows: 1000, Threads: 2, Timeout: 5 * time.Second}
+	template, params, limit, err := Build(config, Options{
+		Kind:            observability.KindLogs,
+		Start:           time.Now().UTC().Add(-time.Hour),
+		End:             time.Now().UTC(),
+		FieldValues:     map[string]string{"topic": "error", "module": "common", "requestID": "req-1"},
+		MessageContains: "boom",
+		Limit:           20,
+		Offset:          40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{"json_extract_string(fields, '$.topic') = ?", "json_extract_string(fields, '$.module') = ?", "json_extract_string(fields, '$.requestID') = ?", "contains(lower(message), lower(?))", "OFFSET 40"} {
+		if !strings.Contains(template, fragment) {
+			t.Fatalf("template missing %q: %s", fragment, template)
+		}
+	}
+	if limit != 20 {
+		t.Fatalf("limit = %d, want 20", limit)
+	}
+	if len(params) != 6 {
+		t.Fatalf("params = %v, want 6", params)
+	}
+	countTemplate, _, err := BuildCount(config, Options{Kind: observability.KindLogs, Start: time.Now().Add(-time.Hour), End: time.Now(), FieldValues: map[string]string{"topic": "cron"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(countTemplate, "SELECT COUNT(*)") || !strings.Contains(countTemplate, "json_extract_string(fields, '$.topic') = ?") {
+		t.Fatalf("count template invalid: %s", countTemplate)
+	}
+}
+
+func TestBuildRejectsUnsafeFieldKey(t *testing.T) {
+	config := Config{DatasetRoot: "/data", MaxDays: 7, MaxRows: 10, Threads: 1, Timeout: time.Second}
+	if _, _, _, err := Build(config, Options{Kind: observability.KindLogs, FieldValues: map[string]string{"topic'; DROP TABLE x;--": "error"}}); err == nil {
+		t.Fatal("unsafe field key must be rejected")
+	}
+}

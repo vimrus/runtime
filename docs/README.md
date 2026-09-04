@@ -19,6 +19,8 @@
 - [部署与高可用](./design/06-deployment-and-ha.md)：单机、Docker、双节点和外部负载均衡。
 - [构建与发布](./design/07-build-and-release.md)：原生构建、制品组装、供应链和发布。
 - [MySQL 到 Parquet 增量同步](./design/08-mysql-parquet-sync.md)：支持修改与一致性的 BI 分析副本设计。
+- [DuckDB 统一数据方案](./design/09-unified-duckdb-design.md)：日志/度量库/BI 三域统一查询与同步。
+- [禅道 Service 层设计](./design/10-service-layer.md)：定时/缓存/队列/日志/度量的服务化封装。
 
 ### 契约
 

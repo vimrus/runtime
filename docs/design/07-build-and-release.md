@@ -192,6 +192,26 @@ phpredis:
     url: <fixed-source-or-binary-artifact-url>
     sha256: <required>
 
+dm8:
+  version: <reference-build-date>
+  php: "8.4"
+  api: 20240924
+  thread_safety: zts
+  license: proprietary-redistribution-approval-required
+  linux_amd64:
+    package: dm8_20260710_x86_CentOS7_64
+    pdo_driver_sha256: <required>
+    dpi_sha256: <required>
+    client_components: <count>
+    checksum_file: SHA256SUMS
+  linux_arm64:
+    package: dm8_20260708_FTarm2000_kylin10_sp1_64
+    pdo_driver_sha256: <required>
+    dpi_sha256: <required>
+    client_components: <count>
+    checksum_file: SHA256SUMS
+  vendor: packaging/runtime/third-party/dm8
+
 mysql:
   version: 8.4.x
   linux_amd64:
@@ -235,6 +255,58 @@ PHP extensions and versions
 compiler/linker/Go versions
 build timestamp in UTC
 ```
+
+### 6.4 达梦 DM8 PHP PDO 驱动（vendored）
+
+达梦不提供稳定的公共下载 URL，官方介质只随安装包分发。为避免每次构建
+重新解包介质，DM8 PHP 8.4 ZTS PDO 驱动和客户端接口库作为受控二进制入库：
+
+```text
+packaging/runtime/third-party/dm8/
+  README.md
+  SHA256SUMS
+  php-8.4-zts/linux-amd64/
+    php84ts_pdo_dm.so   # PDO 驱动，注册 PDO driver "dm"
+  php-8.4-zts/linux-arm64/
+    php84ts_pdo_dm.so   # 同上（aarch64，FT-2000/Kylin 介质）
+  dpi/linux-amd64/
+    libdmdpi.so         # 客户端接口库，pdo_dm 启动时按名 dlopen
+    components/         # 达梦官方 PHP 组件清单（18 个中除 libdmdpi 外的
+                        # 17 个）+ libdmtlog.so（libdmcomm NEEDED 闭包）
+    dependencies/       # drivers/dpi/dependencies 自带的 libssl.so/libcrypto.so
+  dpi/linux-arm64/      # 与 linux-amd64 同构，介质见 versions.lock.json
+    libdmdpi.so
+    components/
+    dependencies/
+```
+
+约束：
+
+- 只允许放入从官方介质提取且与 PHP 8.4 ZTS（API `20240924`）匹配的
+  amd64/arm64 制品；换介质或驱动版本必须同步更新 `versions.lock.json` 中的
+  SHA256 与 `README.md` 来源记录。
+- Dockerfile 使用 `COPY` 读取仓库内二进制，构建时执行
+  `sha256sum --check --strict SHA256SUMS` 强制校验，不执行任何下载；DM
+  目录按 `LOADER_ARCH`（amd64/arm64）选择 `linux-<arch>`。
+- 扩展装载到 `/opt/zentao/php/lib/php/extensions/no-debug-zts-20240924/`，
+  `libdmdpi.so` 与 `components/` 下组件平铺到 `/opt/zentao/php/lib/`
+  （php CLI RPATH `$ORIGIN/../lib`、各组件 DT_RPATH `$ORIGIN` 都指向该目录），
+  `dependencies/` 复制到 `/opt/zentao/php/lib/dependencies/`（libdmdpi
+  DT_RPATH 含 `$ORIGIN/dependencies`）。组件集是官方 PHP FAQ 的 18 库清单；
+  实测只带 `libdmdpi.so` 会在建连时报 `[-70089] Encryption module failed
+  to load`，补齐 dependencies 后进入正常建连流程。
+- DM 客户端默认从 `/etc/dm_svc.conf` 读取 `TIME_ZONE/LANGUAGE/CHAR_CODE`
+  等全局参数；Docker 镜像写入 `/etc/dm_svc.conf` 并把同一文件放到
+  `/opt/zentao/config/dm_svc.conf`，Runtime 入口给 PHP 进程设置
+  `DM_SVC_PATH=<installRoot>/config`，原生/信创部署不需要 root 权限写
+  `/etc`。Runtime 启动会自检该文件，缺失时自动写入默认内容（已有文件不
+  覆盖），用户无需手工配置。缺 `CHAR_CODE=(PG_UTF8)` 会出现中文乱码，缺
+  `TIME_ZONE=(480)` 时间函数会偏移。
+- 当前支持 Linux amd64（CentOS 7 介质 20260710）与 Linux arm64
+  （FT-2000/Kylin 10 SP1 介质 20260708）；Windows 需要厂商另行提供并经
+  同样流程入库后才允许在对应平台打包。
+- 达梦二进制为厂商专有制品，再分发范围需获得授权，manifest/SBOM 中按
+  `proprietary-redistribution-approval-required` 记录。
 
 ## 7. Workflow 拆分
 
@@ -487,6 +559,10 @@ Runtime 需要包含：
 - PHP 动态扩展。
 - PHP Redis 扩展 `redis.so`，用于部署方选择 Redis Session 的场景。
 - ionCube TS Loader。
+- DM8 PHP 8.4 ZTS PDO 驱动 `pdo_dm.so`、客户端组件闭包
+  （`libdmdpi.so` + 官方 PHP 组件清单 18 库 + `libdmtlog.so`）与
+  `dependencies/libssl.so + libcrypto.so`（信创场景，见 6.4；Linux
+  amd64/arm64）。
 - 非基础系统提供且允许再分发的共享库。
 
 DuckDB 优先静态链接到 `zentao-runtime`；若目标平台或官方 Binding 必须动态链接，则对应 DuckDB/C++ Runtime 必须进入明确的依赖允许列表和 staging。两种方式都必须在 manifest 中记录，不能在运行时下载 DuckDB 或 Parquet Extension。
@@ -988,6 +1064,8 @@ Runtime revision 用于 PHP、FrankenPHP、ionCube 或打包脚本升级，但�
 - DuckDB 在三个目标平台加载并完成 Parquet 读写；Linux 双节点共享数据集协议验证成功。
 - 开源版 MySQL/PostgreSQL 安装测试成功。
 - 付费版解密测试成功。
+- DM8 PDO 驱动在支持平台加载成功（`php -m` 出现 `pdo_dm`，`PDO` 驱动列表
+  包含 `dm`），且 PHP DAO 信创契约在真实 DM8 实例验证成功。
 - Runtime/Full 包安装测试成功。
 - Docker 两个架构原生启动成功。
 - SBOM、SHA256 和签名生成成功。
@@ -1198,7 +1276,7 @@ links to test reports and SBOM
 
 1. 目标 GitHub 仓库是否能使用 `ubuntu-24.04-arm` 和 `windows-2025`。
 2. GitHub 仓库是公开还是私有，以及 Actions 分钟数和 artifact 配额。
-3. ionCube、MySQL 和依赖共享库的再分发范围。
+3. ionCube、MySQL、DM8 驱动/客户端库和依赖共享库的再分发范围。
 4. 付费版应用 artifact 的来源和保留策略。
 5. Windows 代码签名服务和证书托管方式。
 6. 容器镜像发布到 GHCR 还是现有企业 Registry。

@@ -60,7 +60,7 @@ RoadRunner 只在没有有效 Runtime 模式租约时允许启动。
 
 - AJAX 请求启动兼容 scheduler/consumer；
 - scheduler 负责生成到期任务；
-- consumer 负责本地领取和执行任务；
+- consumer 负责领取和执行任务；
 - 进程继续使用 `ignore_user_abort(true)` 和 `set_time_limit(0)`。
 
 Web fallback 只在没有有效 Runtime 或 RoadRunner 租约时启用。
@@ -115,7 +115,7 @@ queued/retrying -> running -> succeeded
                               -> canceled
 ```
 
-本地 Web/RoadRunner Consumer 也必须使用 `version + status` CAS 抢占，并设置：
+Web/RoadRunner 的消费循环也必须使用 `version + status` CAS 抢占，并设置：
 
 - `leaseOwner`；
 - `leaseToken`；
@@ -127,16 +127,17 @@ queued/retrying -> running -> succeeded
 
 ## 6. PHP 应用改造项
 
-### 6.1 公共本地执行器
+### 6.1 公共执行器
 
-在 `zentaopms/module/cron` 中复用公共逻辑：
+公共逻辑按域分布在 `zentaopms/module/cron` 与 `zentaopms/module/queue`：
 
-- `runSchedule()`：生成到期任务；
-- `consumeLocalTasks()`：执行本地 Consumer 循环；
-- `claimLocal()`：本地 CAS 领取；
-- `finishExecute()`：提交状态和执行记录；
-- `reapLocal()`：回收过期租约；
-- `acquireSchedulerLease()`、`acquireConsumerLease()`：协调角色数量。
+- `runSchedule()`、`enqueueCron()`（cron）：调度扫描并生成到期任务；
+- `acquireSchedulerLease()`（cron）：保证 Web/RoadRunner scheduler 单例；
+- `consume()`（queue）：执行 Web/RoadRunner 消费循环（cron 兼容入口经 fetch 调用）；
+- `claimNext()`（queue）：消费循环的单条 CAS 领取；
+- `finishExecute()`（queue）：提交状态和执行记录；
+- `reap()`（queue）：回收过期租约；
+- `acquireExecutionMode()`、`acquireConsumerLease()`（queue）：执行模式租约与 consumer 数量协调。
 
 Web AJAX 和 RoadRunner 只负责调用这些公共方法，不各自维护一套队列逻辑。
 
@@ -167,17 +168,16 @@ PHP_SAPI === frankenphp
 
 Runtime 和兼容模式使用不同的执行入口：
 
-- Runtime 只允许注册白名单 Handler，禁止 system command；
-- Web/RoadRunner 保留旧版合法 ZenTao Cron 行为；
-- Web/RoadRunner 是否允许 system Cron 由 `cronSystemCall` 控制；
-- 兼容逻辑不能放宽 Runtime Handler 白名单。
+- Runtime 对 zentao 型 cron command 不设白名单，与 Web/RoadRunner 行为一致；
+- direct handler 在任何模式都必须命中 `directHandlers`；
+- Runtime 一律禁止 system command；Web/RoadRunner 是否允许由 `cronSystemCall` 控制。
 
 ## 7. 实施阶段
 
 | 阶段 | 工作内容 | 完成标志 |
 |---|---|---|
 | A | 冻结模式租约字段、状态和优先级 | Schema、错误码和切换规则评审通过 |
-| B | 实现统一本地 Consumer | 最新队列表下可完成 claim、执行、重试和回收 |
+| B | 实现统一消费循环 | 最新队列表下可完成 claim、执行、重试和回收 |
 | C | 接入 Web fallback | 无 Runtime/RoadRunner 时 AJAX 可执行任务 |
 | D | 恢复 RoadRunner 入口 | `rrSchedule/rrConsume` 可由原配置启动 |
 | E | 接入模式互斥 | 已完成：租约、fencing 和 Runtime 冲突停止已实现 |
@@ -223,11 +223,11 @@ Runtime 和兼容模式使用不同的执行入口：
 
 - SAPI 分流和入口权限；
 - 模式租约申请、续租、过期、抢占和 fencing version；
-- 本地 Consumer CAS 并发领取；
+- 消费循环 CAS 并发领取；
 - 成功、失败、重试、取消和最大尝试次数；
 - 过期租约回收；
 - Web/RoadRunner Handler 兼容性；
-- Runtime Handler 白名单和 system command 拒绝。
+- Runtime system command 拒绝和 direct handler 白名单。
 
 ### Web 集成测试
 
@@ -281,7 +281,7 @@ Runtime 和兼容模式使用不同的执行入口：
 
 本计划对应的代码改造已完成，当前工作区用于验证，尚未提交或 push。已确认的实现包括：
 
-- Runtime、RoadRunner、Web 使用同一套新队列表和本地 CAS 语义；
+- Runtime、RoadRunner、Web 使用同一套新队列表和 CAS 语义；
 - 执行模式通过 `__cron_mode__` 租约和 fencing 版本互斥，优先级为 Runtime > RoadRunner > Web；
 - RoadRunner 继续支持 `rrSchedule()`、`rrConsume()`，并由仓库现有的 `.rr.yaml` 管理 scheduler 和 consumer；
 - Runtime 检测到模式冲突后停止调度、领取和回收，不降级到其他入口；

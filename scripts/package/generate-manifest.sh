@@ -15,6 +15,13 @@ readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly staging="$1"
 readonly lock="${repo_root}/versions.lock.json"
 
+dm8_arch="amd64"
+case "$(basename "${staging}")" in
+    *-arm64) dm8_arch="arm64" ;;
+    *-amd64) dm8_arch="amd64" ;;
+esac
+readonly dm8_lock_key="linux_${dm8_arch}"
+
 if [[ ! -d "${staging}" ]]; then
     echo "staging directory does not exist: ${staging}" >&2
     exit 1
@@ -37,6 +44,12 @@ manifest="$(
         --arg caddyVersion "$(jq -r '.caddy.version' "${lock}")" \
         --arg duckdbVersion "$(jq -r '.duckdb.go_binding.version' "${lock}")" \
         --arg ioncubeVersion "$(jq -r '.ioncube.version' "${lock}")" \
+        --arg dm8Version "$(jq -r '.dm8.version' "${lock}")" \
+        --arg dm8Package "$(jq -r ".dm8.${dm8_lock_key}.package" "${lock}")" \
+        --arg dm8DriverSha256 "$(jq -r ".dm8.${dm8_lock_key}.pdo_driver_sha256" "${lock}")" \
+        --arg dm8DpiSha256 "$(jq -r ".dm8.${dm8_lock_key}.dpi_sha256" "${lock}")" \
+        --argjson dm8Components "$(jq -r ".dm8.${dm8_lock_key}.client_components" "${lock}")" \
+        --arg dm8Arch "${dm8_arch}" \
         --arg goVersion "$(jq -r '.go.version' "${lock}")" \
         --arg gitCommit "${git_commit}" \
         --arg gitRef "${git_ref}" \
@@ -51,6 +64,7 @@ manifest="$(
                 caddy: {version: $caddyVersion},
                 duckdb: {goBinding: $duckdbVersion},
                 ioncube: {version: $ioncubeVersion},
+                dm8: {version: $dm8Version, arch: $dm8Arch, package: $dm8Package, pdoDriverSha256: $dm8DriverSha256, dpiSha256: $dm8DpiSha256, clientComponents: $dm8Components},
                 go: {version: $goVersion}
             },
             licenses: {
@@ -59,6 +73,7 @@ manifest="$(
                 caddy: "Apache-2.0",
                 duckdb: "MIT",
                 ioncube: "proprietary-redistribution-approval-required",
+                dm8: "proprietary-redistribution-approval-required",
                 mysql: "GPL-2.0-with-linking-exception"
             }
         }'

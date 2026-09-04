@@ -8,7 +8,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -25,6 +27,7 @@ import (
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 	"github.com/dunglas/frankenphp"
 	_ "github.com/dunglas/frankenphp/caddy"
+	"github.com/vimrus/runtime/internal/cache"
 	"github.com/vimrus/runtime/internal/config"
 	"github.com/vimrus/runtime/internal/control"
 	"github.com/vimrus/runtime/internal/diagnostics"
@@ -172,6 +175,9 @@ func phpCLICommand(args []string) error {
 	}
 	if binary == "" {
 		return errors.New("PHP CLI binary not found; set ZENTAO_PHP_BIN or --php")
+	}
+	if err := ensureDMSvcConf(defaultInstallRoot()); err != nil {
+		fmt.Fprintf(os.Stderr, "runtime: warning: %v\n", err)
 	}
 	command := exec.Command(binary, flags.Args()...)
 	command.Env = append(os.Environ(), phpConfigurationEnvironment(defaultInstallRoot())...)
@@ -348,6 +354,34 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	cacheToken := ""
+	cacheBridge := web.CacheBridgeOptions{}
+	if cfg.Cache.Enabled {
+		cacheService, err := cache.New(cfg.Cache.MaxCostBytes, cfg.Cache.MaxValueBytes)
+		if err != nil {
+			return fmt.Errorf("initialize cache service: %w", err)
+		}
+		defer cacheService.Close()
+		if err := cacheService.SetRegistry(cfg.Cache.Namespaces); err != nil {
+			return fmt.Errorf("initialize cache registry: %w", err)
+		}
+		web.SetCacheService(cacheService)
+		cacheTokenBytes := make([]byte, 32)
+		if _, err := rand.Read(cacheTokenBytes); err != nil {
+			return fmt.Errorf("generate cache bridge token: %w", err)
+		}
+		cacheToken = hex.EncodeToString(cacheTokenBytes)
+		if err := os.Setenv("ZENTAO_CACHE_URL", "http://"+cfg.Cache.Listen+"/internal/runtime/cache/v1"); err != nil {
+			return fmt.Errorf("set cache bridge url: %w", err)
+		}
+		if err := os.Setenv("ZENTAO_CACHE_TOKEN", cacheToken); err != nil {
+			return fmt.Errorf("set cache bridge token: %w", err)
+		}
+		if err := os.Setenv("ZENTAO_CACHE_SCHEMA", strconv.Itoa(cache.SchemaVersion)); err != nil {
+			return fmt.Errorf("set cache schema version: %w", err)
+		}
+		cacheBridge = web.CacheBridgeOptions{Enabled: true, Listen: cfg.Cache.Listen, Token: cacheToken}
+	}
 	if cfg.Queue.Enabled {
 		// The bridge credential is generated per Runtime start: it is exposed
 		// to PHP through the environment and used by the Go bridge client.
@@ -441,8 +475,23 @@ func serve(args []string) error {
 			Token:   observabilityToken,
 			Sink:    obsPublisher,
 		}
+		if queryEngine != nil {
+			// D7：只读查询桥可用时才进入 flush 模式，避免与本地 JSONL 双写。
+			web.SetObservabilityQueryHandler(host.observabilityQueryBridge)
+			queryURL := "http://" + cfg.Observability.BridgeListen + "/internal/runtime/observability/v1/query"
+			if err := os.Setenv("ZENTAO_OBSERVABILITY_QUERY_URL", queryURL); err != nil {
+				return fmt.Errorf("set observability query url: %w", err)
+			}
+			if err := os.Setenv("ZENTAO_OBSERVABILITY_QUERY_TOKEN", observabilityToken); err != nil {
+				return fmt.Errorf("set observability query token: %w", err)
+			}
+			if err := os.Setenv("ZENTAO_LOG_MODE", "flush"); err != nil {
+				return fmt.Errorf("set log mode: %w", err)
+			}
+		}
 	}
-	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge)); err != nil {
+	host.cacheToken = cacheToken
+	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge, cacheBridge)); err != nil {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
@@ -551,6 +600,10 @@ func phpConfigurationEnvironment(installRoot string) []string {
 		"ZENTAO_RUNTIME_PHP_ROOT=" + installRoot,
 		"PHPRC=" + configDir,
 		"PHP_INI_SCAN_DIR=" + filepath.Join(configDir, "conf.d"),
+		// DM8 客户端从 DM_SVC_PATH 指向的目录读取 dm_svc.conf（默认 /etc，
+		// 原生/信创部署没有 root 写 /etc 的权限，故指向安装根下的 config；
+		// 文件缺失时由 ensureDMSvcConf 自动写入默认内容）。
+		"DM_SVC_PATH=" + configDir,
 	}
 }
 
@@ -560,6 +613,34 @@ func configurePHPEnvironment(installRoot string) error {
 		if err := os.Setenv(name, value); err != nil {
 			return fmt.Errorf("configure PHP environment: %w", err)
 		}
+	}
+	if err := ensureDMSvcConf(installRoot); err != nil {
+		// 不阻塞启动：Docker 镜像另有 /etc/dm_svc.conf，无法写入时 DM
+		// 客户端会回退默认路径。
+		fmt.Fprintf(os.Stderr, "runtime: warning: %v\n", err)
+	}
+	return nil
+}
+
+// defaultDMSvcConf 是达梦客户端连接所需的默认全局参数：东八区、中文提示、
+// UTF-8（缺 CHAR_CODE 会导致中文乱码，缺 TIME_ZONE 会导致时间偏移）。
+const defaultDMSvcConf = "TIME_ZONE=(480)\nLANGUAGE=(cn)\nCHAR_CODE=(PG_UTF8)\n"
+
+// ensureDMSvcConf 保证 <installRoot>/config/dm_svc.conf 存在：随包已有或用户
+// 自定义的配置保留原样，只有缺失时才写入默认内容，做到物理机部署开箱即用。
+func ensureDMSvcConf(installRoot string) error {
+	configDir := filepath.Join(installRoot, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("create config directory %s: %w", configDir, err)
+	}
+	path := filepath.Join(configDir, "dm_svc.conf")
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte(defaultDMSvcConf), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return nil
 }
@@ -714,6 +795,35 @@ func newHealthRegistry(cfg config.Config) *health.Registry {
 		}
 		return health.Result{Name: "app-root", Kind: health.KindApp, Status: health.StatusOK}
 	})
+	registry.Register("app", health.KindApp, false, true, func(ctx context.Context) health.Result {
+		appHealthURL := "http://" + cfg.Web.Listen + "/app-health.php"
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, appHealthURL, nil)
+		if err != nil {
+			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "invalid app health url"}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "app health unreachable"}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		if err != nil {
+			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "app health read failed"}
+		}
+		var probe struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(body, &probe) != nil || probe.Status == "" {
+			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "invalid app health response"}
+		}
+		status := health.StatusFailed
+		if probe.Status == "ok" {
+			status = health.StatusOK
+		} else if probe.Status == "degraded" {
+			status = health.StatusDegraded
+		}
+		return health.Result{Name: "app", Kind: health.KindApp, Status: status}
+	})
 	return registry
 }
 
@@ -784,6 +894,7 @@ type host struct {
 	accessLogPath      string
 	accessLogKeepDays  int
 	observabilityToken string
+	cacheToken         string
 	logsDir            string
 	jsonlSources       []string
 	collector          *diagnostics.Collector
@@ -1141,7 +1252,11 @@ func (h *host) reload() control.Response {
 			Sink:    h.obsPublisher,
 		}
 	}
-	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge))
+	cacheBridge := web.CacheBridgeOptions{}
+	if candidate.Cache.Enabled {
+		cacheBridge = web.CacheBridgeOptions{Enabled: true, Listen: candidate.Cache.Listen, Token: h.cacheToken}
+	}
+	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge, cacheBridge))
 	if err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy configuration rendering failed")
 		return control.Failure("reload_failed", "render Caddy configuration")
@@ -1162,7 +1277,7 @@ func (h *host) reload() control.Response {
 	return control.Success(map[string]any{"reloaded": true, "restartRequired": false})
 }
 
-func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions) *caddy.Config {
+func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions, cacheBridge web.CacheBridgeOptions) *caddy.Config {
 	queueBridge := web.QueueBridgeOptions{}
 	if cfg.Queue.Enabled {
 		bridgeListen := "127.0.0.1:8081"
@@ -1182,6 +1297,7 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 		AccessLogKeepDays:   accessLogKeepDays,
 		QueueBridge:         queueBridge,
 		ObservabilityBridge: observabilityBridge,
+		CacheBridge:         cacheBridge,
 	})
 }
 

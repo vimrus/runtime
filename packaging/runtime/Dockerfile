@@ -51,6 +51,7 @@ WORKDIR /build
 COPY patches/php/8.4/0001-ioncube-zend-signal-abi-shim.patch /build/php-ioncube.patch
 COPY packaging/runtime/expected-ioncube-symbols.txt /build/expected-ioncube-symbols.txt
 COPY packaging/runtime/expected-ioncube-symbols-${LOADER_ARCH}.txt /build/expected-ioncube-symbols-loader.txt
+COPY packaging/runtime/third-party/dm8 /build/dm8
 
 RUN curl --fail --location --retry 3 --output php.tar.xz "${PHP_URL}" \
     && echo "${PHP_SHA256}  php.tar.xz" | sha256sum --check --strict \
@@ -100,11 +101,40 @@ RUN mkdir -p /opt/zentao/php/lib/ioncube \
     && sed '/^$/d' /build/expected-ioncube-symbols-loader.txt > /tmp/expected-loader-symbols.txt \
     && diff -u /tmp/expected-loader-symbols.txt /tmp/ioncube-loader-symbols.txt
 
+ARG PHPREDIS_COMMIT
+ARG PHPREDIS_ARCHIVE_SHA256
+RUN echo "building phpredis ${PHPREDIS_COMMIT}" \
+    && curl --fail --location --retry 3 --output /build/phpredis.tar.gz \
+        "https://github.com/phpredis/phpredis/archive/${PHPREDIS_COMMIT}.tar.gz" \
+    && echo "${PHPREDIS_ARCHIVE_SHA256}  /build/phpredis.tar.gz" | sha256sum --check --strict \
+    && mkdir -p /build/phpredis \
+    && tar -xzf /build/phpredis.tar.gz -C /build/phpredis --strip-components=1 \
+    && cd /build/phpredis \
+    && /opt/zentao/php/bin/phpize \
+    && ./configure --with-php-config=/opt/zentao/php/bin/php-config \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /build/phpredis /build/phpredis.tar.gz
+
+RUN cd /build/dm8 \
+    && sha256sum --check --strict SHA256SUMS \
+    && strings "php-8.4-zts/linux-${LOADER_ARCH}/php84ts_pdo_dm.so" | grep -q 'API20240924,TS' \
+    && mkdir -p /opt/zentao/php/lib/php/extensions/no-debug-zts-20240924 /opt/zentao/php/lib/dependencies \
+    && cp "php-8.4-zts/linux-${LOADER_ARCH}/php84ts_pdo_dm.so" /opt/zentao/php/lib/php/extensions/no-debug-zts-20240924/pdo_dm.so \
+    && cp "dpi/linux-${LOADER_ARCH}/libdmdpi.so" "dpi/linux-${LOADER_ARCH}"/components/*.so /opt/zentao/php/lib/ \
+    && cp "dpi/linux-${LOADER_ARCH}"/dependencies/libcrypto.so "dpi/linux-${LOADER_ARCH}"/dependencies/libssl.so /opt/zentao/php/lib/dependencies/
+
 COPY packaging/runtime/php.ini /opt/zentao/config/php.ini
+COPY packaging/runtime/dm_svc.conf /opt/zentao/config/dm_svc.conf
 COPY config/runtime.example.toml /opt/zentao/config/runtime.example.toml
 RUN mkdir -p /opt/zentao/config/conf.d /opt/zentao/bin \
+    && export LD_LIBRARY_PATH=/opt/zentao/php/lib \
     && test "$(/opt/zentao/php/bin/php-config --vernum)" -ge 80400 \
-    && ZENTAO_RUNTIME_PHP_ROOT=/opt/zentao /opt/zentao/php/bin/php -c /opt/zentao/config/php.ini -r 'exit(extension_loaded("Zend OPcache") && ini_get("opcache.enable") == "1" ? 0 : 1);' \
+    && sed 's#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g' /opt/zentao/config/php.ini > /tmp/php.ini \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("Zend OPcache") && ini_get("opcache.enable") == "1" ? 0 : 1);' \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("redis") ? 0 : 1);' \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("pdo_dm") && in_array("dm", PDO::getAvailableDrivers(), true) ? 0 : 1);' \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'try { new PDO("dm:host=127.0.0.1;port=5236", "SYSDBA", "x", [PDO::ATTR_TIMEOUT=>2]); exit(2); } catch (Throwable $e) { $m = $e->getMessage(); exit((strpos($m, "-70089") !== false || stripos($m, "is missing") !== false || stripos($m, "Unable to load") !== false) ? 3 : 0); }' \
     && nm -D /opt/zentao/php/lib/libphp.so \
         | awk '$3 ~ /^zend_signal_(globals_id|globals_offset|handler_unblock)$/ {print $3}' \
         | sort -u \
@@ -138,6 +168,10 @@ RUN export CGO_CFLAGS="$(/opt/zentao/php/bin/php-config --includes)" \
 
 RUN bash /build/bundle-runtime-libs.sh /opt/zentao
 RUN patchelf --force-rpath --set-rpath '$ORIGIN/../lib' /opt/zentao/php/bin/php
+
+RUN sed 's#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g' /opt/zentao/config/php.ini > /tmp/php.ini \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("pdo_dm") && in_array("dm", PDO::getAvailableDrivers(), true) ? 0 : 1);' \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'try { new PDO("dm:host=127.0.0.1;port=5236", "SYSDBA", "x", [PDO::ATTR_TIMEOUT=>2]); exit(2); } catch (Throwable $e) { $m = $e->getMessage(); exit((strpos($m, "-70089") !== false || stripos($m, "is missing") !== false || stripos($m, "Unable to load") !== false) ? 3 : 0); }'
 
 RUN find \
         /opt/zentao/php/include \
@@ -176,6 +210,7 @@ RUN sed -i \
     && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /opt/zentao/logs
 COPY --from=builder /opt/zentao /opt/zentao
+COPY packaging/runtime/dm_svc.conf /etc/dm_svc.conf
 COPY --chmod=0755 packaging/docker/healthcheck.sh /opt/zentao/packaging/docker/healthcheck.sh
 ENV PATH="/opt/zentao/bin:/opt/zentao/php/bin:${PATH}"
 ENTRYPOINT ["/opt/zentao/bin/zentao"]

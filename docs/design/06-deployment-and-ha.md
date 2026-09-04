@@ -132,7 +132,7 @@ zentao 提供单机和多节点两种部署模式。标准多节点参考拓扑�
 | PHP Session Handler | 按 `php.ini` 使用本地文件、共享 NFS 文件或外部 Redis |
 | 共享数据库 | 业务数据、消息队列和显式缓存，不保存 Runtime Session |
 | NFS | 多节点附件、可选文件 Session，以及指标/日志共享 Parquet 数据集 |
-| 外部 Redis | 部署方选择 Redis Session 时保存 Session；不用于第一版业务缓存 |
+| 外部 Redis | 共享 Session（按 `php.ini`）与多节点业务缓存共享后端；业务缓存 miss 由业务层回源数据库 |
 | DuckDB Library | 每节点批量生成本节点不可变 Parquet part，并受控查询共享数据集 |
 | Runtime control plane | 节点配置、状态、诊断、排空和升级控制，只在管理边界内开放 |
 
@@ -152,7 +152,7 @@ Caddy 负责 L7，不负责 VIP；Keepalived 负责 VIP，不解析 HTTP。两�
 | VRRP protocol 112 | 两节点网络 | Keepalived 通告；云环境通常不支持 |
 | 数据库端口 | 数据库网络 | PHP DAO 访问数据库 |
 | `2049/tcp` | 存储网络 | NFSv4.1 |
-| Redis 端口 | Session 网络 | PHP Redis Session Handler；按客户部署配置 |
+| Redis 端口 | Session/共享缓存网络 | PHP Redis Session Handler 与业务缓存；按客户部署配置 |
 
 安全要求：
 
@@ -324,6 +324,8 @@ Runtime 不提供 Session 数据服务。PHP `php.ini` 是 Handler 和连接参�
 ### 10.4 Redis Session
 
 - 交付包必须包含与 PHP 8.4 ZTS 和目标平台匹配、经过兼容测试的 PHP Redis 扩展。
+  Runtime 镜像已内置 phpredis 6.3.0（构建版本与 SHA 由 versions.lock.json
+  锁定），`php.ini` 默认加载，`redis-cache-smoke.sh` 覆盖真实 Redis 读写。
 - Redis 地址、认证、TLS、数据库或 key prefix 通过受保护的 PHP 配置提供，不进入 Caddy JSON、健康响应或日志。
 - 必须启用并压测 phpredis Session Locking，明确锁等待、重试和锁过期参数，避免同一用户的并发请求互相覆盖。
 - 外部 Redis 的主从、Sentinel、Cluster、托管服务、备份和故障切换由部署方负责。只有 PHP Redis Handler 已验证支持的连接形式才能列入兼容矩阵。

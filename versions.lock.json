@@ -57,6 +57,7 @@
       "mysqli",
       "pdo_pgsql",
       "pgsql",
+      "pdo_dm",
       "curl",
       "gd",
       "mbstring",
@@ -100,7 +101,41 @@
     "version": "6.3.0",
     "repository": "https://github.com/phpredis/phpredis.git",
     "commit": "df4fab2de7fc327c54c94a13af2b9542e4fbd720",
+    "archive_sha256": "79ecabd899e50a6efa56d9fc28a987a25d78deecc32fdd0fa9840b1b3d83740e",
     "license": "PHP License 3.01",
+    "locked": true
+  },
+  "dm8": {
+    "version": "20260710",
+    "php": "8.4",
+    "api": "20240924",
+    "thread_safety": "zts",
+    "license": "proprietary-redistribution-approval-required",
+    "vendor": "packaging/runtime/third-party/dm8",
+    "source": "extracted from vendor DM8 installation media; no public immutable URL",
+    "linux_amd64": {
+      "package": "dm8_20260710_x86_CentOS7_64",
+      "pdo_driver_sha256": "b2b953de1e1591f08b17f3744781e12c0c88eee40712338cea10699431921930",
+      "dpi_sha256": "17cbf0b9ca84da8e82598b792598daffa9201ac1f465b683975afd92f6265403",
+      "client_components": 18,
+      "checksum_file": "SHA256SUMS",
+      "notes": "official DM PHP FAQ component list (18) plus libdmtlog.so NEEDED closure; libssl.so/libcrypto.so from drivers/dpi/dependencies"
+    },
+    "linux_arm64": {
+      "package": "dm8_20260708_FTarm2000_kylin10_sp1_64",
+      "pdo_driver_sha256": "76849588953657ee330f0ed977634e9572a95221f77c947b809c67e91d1f9624",
+      "dpi_sha256": "9069ef497d25f56d23e5de9c5038c2acaa09c112eb38260c6d92e2394ae82a05",
+      "client_components": 18,
+      "checksum_file": "SHA256SUMS",
+      "notes": "FT-2000/Kylin 10 SP1 (aarch64, glibc 2.28) media 20260708; same component closure as amd64"
+    },
+    "locked": true
+  },
+  "ristretto": {
+    "version": "v0.2.0",
+    "repository": "https://github.com/dgraph-io/ristretto.git",
+    "commit": "185461756714d72b458a7fb6cf9441a96db82dcb",
+    "license": "MIT",
     "locked": true
   },
   "mysql": {

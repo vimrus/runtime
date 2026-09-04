@@ -366,6 +366,30 @@ zentao metrics --since 1h --metric-name http.request.duration
 
 诊断包不会跟随符号链接，不包含数据库内容、请求正文或配置 Payload。由于诊断包读取原始日志，新增任何可能携带秘密的字段时必须同时评估诊断包泄漏风险。
 
+### 10.3 日志查看查询桥（D7）
+
+禅道后台“日志”查看器在 flush 模式下经 loopback 查询桥读取日志：
+
+```text
+POST http://<observability.bridgeListen>/internal/runtime/observability/v1/query
+X-Zentao-Observability-Token: <token>
+X-Zentao-Observability-Schema: 1
+{"schemaVersion":1,"filters":{"topic":"error","level":"error","module":"common",
+ "account":"admin","requestID":"...","message":"...","fromDate":"20260901",
+ "toDate":"20260904","offset":0,"limit":200}}
+```
+
+- 桥只监听 loopback；token 与 ingest 共用；拒绝任意 SQL/路径；
+- 过滤字段为白名单（topic/module/method/account/requestID/eventID/message/level/时间），
+  对应 Parquet `fields` JSON 列过滤与日志查看器统一；
+- 结果按 `eventTime` 倒序分页，返回 `list/total/truncated`，行结构与 JSONL 事件同构
+  （含 `fields`），PHP 侧 file/flush 两种模式共用同一渲染；
+- Runtime 在 DuckDB query engine 可用时设置 `ZENTAO_OBSERVABILITY_QUERY_URL` 与
+  `ZENTAO_LOG_MODE=flush`；禅道据此关闭本地 JSONL（不双写）。
+
+查询桥当前读取 Parquet（历史）并合并本节点近期 access/runtime JSONL；
+跨节点与近期未转换的 PHP bridge 事件一致性验证属于 Phase 5 验收。
+
 ## 11. 开发扩展指南
 
 ### 11.1 新增 Runtime 日志
