@@ -1,6 +1,20 @@
 ARG BUILDER_IMAGE=mcr.microsoft.com/devcontainers/go:2.1.6-1.26-bookworm
 ARG RUNTIME_IMAGE=mcr.microsoft.com/mirror/docker/library/debian:bookworm-slim
 FROM ${BUILDER_IMAGE} AS builder
+ARG DEBIAN_MIRROR=http://deb.debian.org/debian
+ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+
+# Apply the configured Debian mirrors before the first apt step: the base
+# image points at deb.debian.org, which is not reliably reachable from every
+# build network and made the PHP build hang in package downloads.
+RUN set -eux; \
+    for list in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        [ -f "${list}" ] || continue; \
+        sed -i \
+            -e "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" \
+            -e "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g" \
+            "${list}"; \
+    done
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -104,7 +118,7 @@ RUN mkdir -p /opt/zentao/php/lib/ioncube \
 ARG PHPREDIS_COMMIT
 ARG PHPREDIS_ARCHIVE_SHA256
 RUN echo "building phpredis ${PHPREDIS_COMMIT}" \
-    && curl --fail --location --retry 3 --output /build/phpredis.tar.gz \
+    && curl --http1.1 --fail --location --retry 5 --retry-delay 2 --retry-all-errors --output /build/phpredis.tar.gz \
         "https://github.com/phpredis/phpredis/archive/${PHPREDIS_COMMIT}.tar.gz" \
     && echo "${PHPREDIS_ARCHIVE_SHA256}  /build/phpredis.tar.gz" | sha256sum --check --strict \
     && mkdir -p /build/phpredis \
@@ -115,6 +129,21 @@ RUN echo "building phpredis ${PHPREDIS_COMMIT}" \
     && make -j"$(nproc)" \
     && make install \
     && rm -rf /build/phpredis /build/phpredis.tar.gz
+
+ARG APCU_COMMIT
+ARG APCU_ARCHIVE_SHA256
+RUN echo "building apcu ${APCU_COMMIT}" \
+    && curl --http1.1 --fail --location --retry 5 --retry-delay 2 --retry-all-errors --output /build/apcu.tar.gz \
+        "https://github.com/krakjoe/apcu/archive/${APCU_COMMIT}.tar.gz" \
+    && echo "${APCU_ARCHIVE_SHA256}  /build/apcu.tar.gz" | sha256sum --check --strict \
+    && mkdir -p /build/apcu \
+    && tar -xzf /build/apcu.tar.gz -C /build/apcu --strip-components=1 \
+    && cd /build/apcu \
+    && /opt/zentao/php/bin/phpize \
+    && ./configure --with-php-config=/opt/zentao/php/bin/php-config \
+    && make -j"$(nproc)" \
+    && make install \
+    && rm -rf /build/apcu /build/apcu.tar.gz
 
 RUN cd /build/dm8 \
     && sha256sum --check --strict SHA256SUMS \
@@ -133,6 +162,7 @@ RUN mkdir -p /opt/zentao/config/conf.d /opt/zentao/bin \
     && sed 's#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g' /opt/zentao/config/php.ini > /tmp/php.ini \
     && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("Zend OPcache") && ini_get("opcache.enable") == "1" ? 0 : 1);' \
     && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("redis") ? 0 : 1);' \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("apcu") && ini_get("apc.enabled") == "1" ? 0 : 1);' \
     && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("pdo_dm") && in_array("dm", PDO::getAvailableDrivers(), true) ? 0 : 1);' \
     && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'try { new PDO("dm:host=127.0.0.1;port=5236", "SYSDBA", "x", [PDO::ATTR_TIMEOUT=>2]); exit(2); } catch (Throwable $e) { $m = $e->getMessage(); exit((strpos($m, "-70089") !== false || stripos($m, "is missing") !== false || stripos($m, "Unable to load") !== false) ? 3 : 0); }' \
     && nm -D /opt/zentao/php/lib/libphp.so \

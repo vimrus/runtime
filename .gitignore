@@ -16,6 +16,7 @@ coverage-*.out
 .env
 .env.*
 !.env.example
+build.env
 *.local
 /config/runtime.toml
 

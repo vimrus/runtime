@@ -20,9 +20,17 @@ type Config struct {
 	SchemaVersion int           `json:"schemaVersion" toml:"schemaVersion"`
 	Runtime       Runtime       `json:"runtime" toml:"runtime"`
 	Web           Web           `json:"web" toml:"web"`
+	Apps          []App         `json:"apps,omitempty" toml:"apps,omitempty"`
 	Queue         Queue         `json:"queue,omitempty" toml:"queue,omitempty"`
 	Observability Observability `json:"observability,omitempty" toml:"observability,omitempty"`
-	Cache         Cache         `json:"cache,omitempty" toml:"cache,omitempty"`
+
+	// installRoot remembers the Runtime installation directory so that
+	// application defaults can be materialized without re-reading the
+	// configuration file. It is never encoded or compared directly.
+	installRoot string
+	// legacyApp marks the application entry synthesized from the deprecated
+	// web.root option so that root overrides keep working for old configs.
+	legacyApp bool
 }
 
 type Runtime struct {
@@ -34,6 +42,12 @@ type Runtime struct {
 	LogPath       string        `json:"logPath,omitempty" toml:"logPath,omitempty"`
 	LogMaxBytes   int64         `json:"logMaxBytes,omitempty" toml:"logMaxBytes,omitempty"`
 	LogMaxBackups int           `json:"logMaxBackups,omitempty" toml:"logMaxBackups,omitempty"`
+	// PHPErrorLogMaxBytes/Backups control Runtime-side copytruncate
+	// rotation of logs/php-error.log (written by the embedded PHP
+	// error_log, which cannot be signalled to reopen the file). The
+	// day-based limit reuses observability.jsonlKeepDays.
+	PHPErrorLogMaxBytes   int64 `json:"phpErrorLogMaxBytes,omitempty" toml:"phpErrorLogMaxBytes,omitempty"`
+	PHPErrorLogMaxBackups int   `json:"phpErrorLogMaxBackups,omitempty" toml:"phpErrorLogMaxBackups,omitempty"`
 	// AuditLogMaxBytes/Backups/KeepDays control the built-in audit rotation.
 	// When AuditLogKeepDays is positive it takes precedence over
 	// AuditLogMaxBackups, matching the Runtime JSONL retention semantics.
@@ -52,6 +66,49 @@ type Web struct {
 	IdleTimeout       time.Duration `json:"idleTimeout" toml:"idleTimeout"`
 	MaxHeaderBytes    int           `json:"maxHeaderBytes" toml:"maxHeaderBytes"`
 	AccessLog         string        `json:"accessLog,omitempty" toml:"accessLog,omitempty"` // deprecated: runtime now derives per-node access log paths
+}
+
+// App declares one pluggable web application. A Runtime instance can host
+// several applications on the same listener, distinguished by URL prefix.
+// Application code, data, session and temp roots are kept outside the
+// Runtime artifact so that applications can be replaced independently.
+type App struct {
+	ID      string            `json:"id" toml:"id"`
+	Path    string            `json:"path" toml:"path"`
+	Dir     string            `json:"dir" toml:"dir"`
+	WebRoot string            `json:"webRoot,omitempty" toml:"webRoot,omitempty"`
+	DataDir string            `json:"dataDir,omitempty" toml:"dataDir,omitempty"`
+	TmpDir  string            `json:"tmpDir,omitempty" toml:"tmpDir,omitempty"`
+	Env     map[string]string `json:"env,omitempty" toml:"env,omitempty"`
+	Enabled bool              `json:"enabled" toml:"enabled"`
+	Queue   AppQueue          `json:"queue,omitempty" toml:"queue,omitempty"`
+}
+
+// DefaultAppQueueBridgeURLTemplate keeps applications that still expose the
+// bridge through their normal router (PATH_INFO request mode) working when an
+// application enables queue without an explicit template.
+const DefaultAppQueueBridgeURLTemplate = "/index.php/queue-{endpoint}"
+
+// AppQueue declares how the Runtime reaches one application's private Queue
+// Bridge. The template is an in-application URL path containing exactly one
+// {endpoint} placeholder, for example:
+//
+//	queue = { enabled = true, bridgeUrlTemplate = "/bridge.php?endpoint={endpoint}" }
+//
+// Token is optional: when empty the Runtime generates one per start and
+// injects it as ZENTAO_QUEUE_TOKEN into that application only.
+type AppQueue struct {
+	Enabled           bool   `json:"enabled" toml:"enabled"`
+	BridgeURLTemplate string `json:"bridgeUrlTemplate,omitempty" toml:"bridgeUrlTemplate,omitempty"`
+	Token             string `json:"token,omitempty" toml:"token,omitempty"`
+}
+
+// DocumentRoot returns the absolute document root of the application.
+func (a App) DocumentRoot() string {
+	if a.WebRoot == "" {
+		return a.Dir
+	}
+	return filepath.Join(a.Dir, a.WebRoot)
 }
 
 type Queue struct {
@@ -95,14 +152,6 @@ type Observability struct {
 	JSONLDeleteAfterConvert bool          `json:"jsonlDeleteAfterConvert,omitempty" toml:"jsonlDeleteAfterConvert,omitempty"`
 }
 
-type Cache struct {
-	Enabled       bool     `json:"enabled" toml:"enabled"`
-	Listen        string   `json:"listen,omitempty" toml:"listen,omitempty"`
-	MaxCostBytes  int64    `json:"maxCostBytes,omitempty" toml:"maxCostBytes,omitempty"`
-	MaxValueBytes int64    `json:"maxValueBytes,omitempty" toml:"maxValueBytes,omitempty"`
-	Namespaces    []string `json:"namespaces,omitempty" toml:"namespaces,omitempty"`
-}
-
 type Overrides struct {
 	Root                 *string
 	Listen               *string
@@ -132,15 +181,17 @@ func Default() Config {
 	return Config{
 		SchemaVersion: SchemaVersion,
 		Runtime: Runtime{
-			ControlSocket:      defaultControlSocket(),
-			PIDFile:            defaultPIDFile(),
-			DrainTimeout:       30 * time.Second,
-			LogLevel:           "info",
-			LogPath:            "logs/runtime.log",
-			LogMaxBytes:        16 * 1024 * 1024,
-			LogMaxBackups:      5,
-			AuditLogMaxBytes:   16 * 1024 * 1024,
-			AuditLogMaxBackups: 5,
+			ControlSocket:         defaultControlSocket(),
+			PIDFile:               defaultPIDFile(),
+			DrainTimeout:          30 * time.Second,
+			LogLevel:              "info",
+			LogPath:               "logs/runtime.log",
+			LogMaxBytes:           16 * 1024 * 1024,
+			LogMaxBackups:         5,
+			PHPErrorLogMaxBytes:   16 * 1024 * 1024,
+			PHPErrorLogMaxBackups: 5,
+			AuditLogMaxBytes:      16 * 1024 * 1024,
+			AuditLogMaxBackups:    5,
 		},
 		Web: Web{
 			Root:              "app/zentaopms/www",
@@ -176,17 +227,11 @@ func Default() Config {
 			FlushInterval:           60 * time.Second,
 			MaxFlushInterval:        10 * time.Minute,
 			MetricsDays:             30,
-			LogDays:                 7,
+			LogDays:                 30,
 			JSONLConvertInterval:    time.Hour,
 			JSONLConvertSources:     []string{"access", "runtime"},
 			JSONLKeepDays:           7,
 			JSONLDeleteAfterConvert: true,
-		},
-		Cache: Cache{
-			Enabled:       true,
-			Listen:        "127.0.0.1:8083",
-			MaxCostBytes:  256 * 1024 * 1024,
-			MaxValueBytes: 1024 * 1024,
 		},
 	}
 }
@@ -196,6 +241,7 @@ func Default() Config {
 // omitted fields continue to use this installation-local layout.
 func DefaultForRoot(root string) Config {
 	config := Default()
+	config.installRoot = root
 	if root == "" {
 		return config
 	}
@@ -225,6 +271,9 @@ func Load(path string, environ []string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	if err := config.normalizeApps(); err != nil {
+		return Config{}, err
+	}
 	if err := config.resolvePaths(configRoot); err != nil {
 		return Config{}, err
 	}
@@ -245,6 +294,7 @@ func (c *Config) resolvePaths(root string) error {
 	if root == "" {
 		return fmt.Errorf("runtime configuration root is empty")
 	}
+	c.installRoot = root
 	resolve := func(path *string) {
 		if *path == "" || filepath.IsAbs(*path) || strings.HasPrefix(*path, `\\`) {
 			return
@@ -259,24 +309,77 @@ func (c *Config) resolvePaths(root string) error {
 	resolve(&c.Web.AccessLog)
 	resolve(&c.Observability.DatasetRoot)
 	resolve(&c.Observability.SpoolPath)
+	for index := range c.Apps {
+		app := &c.Apps[index]
+		if app.WebRoot == "" {
+			app.WebRoot = "www"
+		}
+		if app.DataDir == "" {
+			app.DataDir = filepath.Join("data", "apps", app.ID)
+		}
+		if app.TmpDir == "" {
+			app.TmpDir = filepath.Join("tmp-local", app.ID)
+		}
+		resolve(&app.Dir)
+		resolve(&app.DataDir)
+		resolve(&app.TmpDir)
+	}
 	return nil
 }
 
+// normalizeApps materializes the deprecated single-application web.root into
+// an explicit application entry so that the rest of the Runtime only deals
+// with one representation. When [[apps]] is present web.root must stay empty:
+// mixing both would silently create an undeclared application.
+func (c *Config) normalizeApps() error {
+	for index := range c.Apps {
+		if c.Apps[index].Queue.Enabled && c.Apps[index].Queue.BridgeURLTemplate == "" {
+			c.Apps[index].Queue.BridgeURLTemplate = DefaultAppQueueBridgeURLTemplate
+		}
+	}
+	if len(c.Apps) > 0 {
+		return nil
+	}
+	if c.Web.Root == "" {
+		return nil
+	}
+	app := App{
+		ID:      "zentao",
+		Path:    "/",
+		Dir:     filepath.Dir(c.Web.Root),
+		WebRoot: filepath.Base(c.Web.Root),
+		Enabled: true,
+	}
+	if c.installRoot != "" {
+		app.DataDir = filepath.Join(c.installRoot, "data", "apps", app.ID)
+		app.TmpDir = filepath.Join(c.installRoot, "tmp-local", app.ID)
+	}
+	c.Apps = []App{app}
+	c.legacyApp = true
+	return nil
+}
+
+// LegacyApp reports whether the configuration uses the deprecated single
+// application web.root form instead of explicit [[apps]] entries.
+func (c Config) LegacyApp() bool { return c.legacyApp }
+
 func decode(data []byte, config Config) (Config, error) {
 	type rawRuntime struct {
-		ControlSocket      *string `toml:"controlSocket"`
-		PIDFile            *string `toml:"pidFile"`
-		DrainTimeout       *string `toml:"drainTimeout"`
-		AuditLog           *string `toml:"auditLog"`
-		LogLevel           *string `toml:"logLevel"`
-		LogPath            *string `toml:"logPath"`
-		LogMaxBytes        *int64  `toml:"logMaxBytes"`
-		LogMaxBackups      *int    `toml:"logMaxBackups"`
-		AuditLogMaxBytes   *int64  `toml:"auditLogMaxBytes"`
-		AuditLogMaxBackups *int    `toml:"auditLogMaxBackups"`
-		AuditLogKeepDays   *int    `toml:"auditLogKeepDays"`
-		NodeID             *string `toml:"nodeID"`
-		ClusterID          *string `toml:"clusterID"`
+		ControlSocket         *string `toml:"controlSocket"`
+		PIDFile               *string `toml:"pidFile"`
+		DrainTimeout          *string `toml:"drainTimeout"`
+		AuditLog              *string `toml:"auditLog"`
+		LogLevel              *string `toml:"logLevel"`
+		LogPath               *string `toml:"logPath"`
+		LogMaxBytes           *int64  `toml:"logMaxBytes"`
+		LogMaxBackups         *int    `toml:"logMaxBackups"`
+		PHPErrorLogMaxBytes   *int64  `toml:"phpErrorLogMaxBytes"`
+		PHPErrorLogMaxBackups *int    `toml:"phpErrorLogMaxBackups"`
+		AuditLogMaxBytes      *int64  `toml:"auditLogMaxBytes"`
+		AuditLogMaxBackups    *int    `toml:"auditLogMaxBackups"`
+		AuditLogKeepDays      *int    `toml:"auditLogKeepDays"`
+		NodeID                *string `toml:"nodeID"`
+		ClusterID             *string `toml:"clusterID"`
 	}
 	type rawWeb struct {
 		Root              *string `toml:"root"`
@@ -325,20 +428,29 @@ func decode(data []byte, config Config) (Config, error) {
 		JSONLKeepDays           *int     `toml:"jsonlKeepDays"`
 		JSONLDeleteAfterConvert *bool    `toml:"jsonlDeleteAfterConvert"`
 	}
-	type rawCache struct {
-		Enabled       *bool    `toml:"enabled"`
-		Listen        *string  `toml:"listen"`
-		MaxCostBytes  *int64   `toml:"maxCostBytes"`
-		MaxValueBytes *int64   `toml:"maxValueBytes"`
-		Namespaces    []string `toml:"namespaces"`
+	type rawAppQueue struct {
+		Enabled           *bool   `toml:"enabled"`
+		BridgeURLTemplate *string `toml:"bridgeUrlTemplate"`
+		Token             *string `toml:"token"`
+	}
+	type rawApp struct {
+		ID      *string           `toml:"id"`
+		Path    *string           `toml:"path"`
+		Dir     *string           `toml:"dir"`
+		WebRoot *string           `toml:"webRoot"`
+		DataDir *string           `toml:"dataDir"`
+		TmpDir  *string           `toml:"tmpDir"`
+		Env     map[string]string `toml:"env"`
+		Enabled *bool             `toml:"enabled"`
+		Queue   *rawAppQueue      `toml:"queue"`
 	}
 	type rawConfig struct {
 		SchemaVersion *int              `toml:"schemaVersion"`
 		Runtime       *rawRuntime       `toml:"runtime"`
 		Web           *rawWeb           `toml:"web"`
+		Apps          *[]rawApp         `toml:"apps"`
 		Queue         *rawQueue         `toml:"queue"`
 		Observability *rawObservability `toml:"observability"`
-		Cache         *rawCache         `toml:"cache"`
 	}
 
 	var raw rawConfig
@@ -378,6 +490,12 @@ func decode(data []byte, config Config) (Config, error) {
 		}
 		if raw.Runtime.LogMaxBackups != nil {
 			config.Runtime.LogMaxBackups = *raw.Runtime.LogMaxBackups
+		}
+		if raw.Runtime.PHPErrorLogMaxBytes != nil {
+			config.Runtime.PHPErrorLogMaxBytes = *raw.Runtime.PHPErrorLogMaxBytes
+		}
+		if raw.Runtime.PHPErrorLogMaxBackups != nil {
+			config.Runtime.PHPErrorLogMaxBackups = *raw.Runtime.PHPErrorLogMaxBackups
 		}
 		if raw.Runtime.AuditLogMaxBytes != nil {
 			config.Runtime.AuditLogMaxBytes = *raw.Runtime.AuditLogMaxBytes
@@ -425,6 +543,58 @@ func decode(data []byte, config Config) (Config, error) {
 		if raw.Web.AccessLog != nil {
 			config.Web.AccessLog = *raw.Web.AccessLog
 		}
+	}
+	if raw.Apps != nil {
+		if raw.Web != nil && raw.Web.Root != nil {
+			return Config{}, fmt.Errorf("web.root cannot be combined with [[apps]]; configure apps[].dir instead")
+		}
+		// The installation-local legacy default must not silently become an
+		// extra application once [[apps]] is present.
+		config.Web.Root = ""
+		apps := make([]App, 0, len(*raw.Apps))
+		for index, item := range *raw.Apps {
+			app := App{Enabled: true}
+			if item.ID != nil {
+				app.ID = *item.ID
+			}
+			if item.Path != nil {
+				app.Path = *item.Path
+			}
+			if item.Dir != nil {
+				app.Dir = *item.Dir
+			}
+			if item.WebRoot != nil {
+				app.WebRoot = *item.WebRoot
+			}
+			if item.DataDir != nil {
+				app.DataDir = *item.DataDir
+			}
+			if item.TmpDir != nil {
+				app.TmpDir = *item.TmpDir
+			}
+			if item.Env != nil {
+				app.Env = item.Env
+			}
+			if item.Enabled != nil {
+				app.Enabled = *item.Enabled
+			}
+			if item.Queue != nil {
+				if item.Queue.Enabled != nil {
+					app.Queue.Enabled = *item.Queue.Enabled
+				}
+				if item.Queue.BridgeURLTemplate != nil {
+					app.Queue.BridgeURLTemplate = *item.Queue.BridgeURLTemplate
+				}
+				if item.Queue.Token != nil {
+					app.Queue.Token = *item.Queue.Token
+				}
+			}
+			if app.ID == "" {
+				return Config{}, fmt.Errorf("apps[%d].id is required", index)
+			}
+			apps = append(apps, app)
+		}
+		config.Apps = apps
 	}
 	if raw.Queue != nil {
 		if raw.Queue.Enabled != nil {
@@ -566,29 +736,20 @@ func decode(data []byte, config Config) (Config, error) {
 			config.Observability.JSONLDeleteAfterConvert = *raw.Observability.JSONLDeleteAfterConvert
 		}
 	}
-	if raw.Cache != nil {
-		if raw.Cache.Enabled != nil {
-			config.Cache.Enabled = *raw.Cache.Enabled
-		}
-		if raw.Cache.Listen != nil {
-			config.Cache.Listen = *raw.Cache.Listen
-		}
-		if raw.Cache.MaxCostBytes != nil {
-			config.Cache.MaxCostBytes = *raw.Cache.MaxCostBytes
-		}
-		if raw.Cache.MaxValueBytes != nil {
-			config.Cache.MaxValueBytes = *raw.Cache.MaxValueBytes
-		}
-		if raw.Cache.Namespaces != nil {
-			config.Cache.Namespaces = raw.Cache.Namespaces
-		}
-	}
 	return config, nil
 }
 
 func (c Config) Apply(overrides Overrides) (Config, error) {
 	if overrides.Root != nil {
+		if len(c.Apps) > 0 && !c.legacyApp {
+			return Config{}, fmt.Errorf("web.root/ZENTAO_RUNTIME_ROOT cannot be combined with [[apps]]; configure apps[].dir instead")
+		}
 		c.Web.Root = *overrides.Root
+		if c.legacyApp {
+			// Re-synthesize the legacy application from the new root.
+			c.Apps = nil
+			c.legacyApp = false
+		}
 	}
 	if overrides.Listen != nil {
 		c.Web.Listen = *overrides.Listen
@@ -652,6 +813,9 @@ func (c Config) Apply(overrides Overrides) (Config, error) {
 	}
 	if overrides.ObservabilitySpool != nil {
 		c.Observability.SpoolPath = *overrides.ObservabilitySpool
+	}
+	if err := c.normalizeApps(); err != nil {
+		return Config{}, err
 	}
 	if err := c.Validate(); err != nil {
 		return Config{}, err
@@ -757,8 +921,11 @@ func (c Config) Validate() error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported runtime configuration schemaVersion %d", c.SchemaVersion)
 	}
-	if c.Web.Root == "" || !filepath.IsAbs(c.Web.Root) {
+	if c.Web.Root != "" && !filepath.IsAbs(c.Web.Root) {
 		return fmt.Errorf("web.root must be an absolute path")
+	}
+	if err := c.validateApps(); err != nil {
+		return err
 	}
 	if _, _, err := net.SplitHostPort(c.Web.Listen); err != nil {
 		return fmt.Errorf("web.listen: %w", err)
@@ -788,6 +955,9 @@ func (c Config) Validate() error {
 	}
 	if c.Runtime.LogMaxBytes < 0 || c.Runtime.LogMaxBackups < 0 {
 		return fmt.Errorf("runtime.logMaxBytes and runtime.logMaxBackups must not be negative")
+	}
+	if c.Runtime.PHPErrorLogMaxBytes < 0 || c.Runtime.PHPErrorLogMaxBackups < 0 {
+		return fmt.Errorf("runtime.phpErrorLogMaxBytes and runtime.phpErrorLogMaxBackups must not be negative")
 	}
 	switch c.Runtime.LogLevel {
 	case "debug", "info", "warn", "error":
@@ -874,19 +1044,6 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	if c.Cache.Enabled {
-		host, port, err := net.SplitHostPort(c.Cache.Listen)
-		if err != nil || (host != "localhost" && host != "127.0.0.1" && host != "::1") {
-			return fmt.Errorf("cache.listen must use a loopback address")
-		}
-		portNumber, err := strconv.Atoi(port)
-		if err != nil || portNumber < 1 || portNumber > 65535 {
-			return fmt.Errorf("cache.listen must include a valid port")
-		}
-		if c.Cache.MaxCostBytes <= 0 || c.Cache.MaxValueBytes <= 0 {
-			return fmt.Errorf("cache maxCostBytes and maxValueBytes must be positive")
-		}
-	}
 	return nil
 }
 
@@ -903,6 +1060,159 @@ func validIdentity(value string) bool {
 	return true
 }
 
+// ActiveApps returns the applications that are enabled and therefore part of
+// the generated web configuration.
+func (c Config) ActiveApps() []App {
+	apps := make([]App, 0, len(c.Apps))
+	for _, app := range c.Apps {
+		if app.Enabled {
+			apps = append(apps, app)
+		}
+	}
+	return apps
+}
+
+// NormalizePath returns the canonical URL prefix of an application: "/" or
+// "/segment" without a trailing slash.
+func NormalizePath(value string) (string, error) {
+	path := strings.TrimSpace(value)
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("path must start with /")
+	}
+	if strings.ContainsAny(path, "\\?#") || strings.Contains(path, "//") {
+		return "", fmt.Errorf("path must be a plain URL prefix")
+	}
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		path = "/"
+	}
+	if path != "/" {
+		for _, segment := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+			if segment == "" || segment == "." || segment == ".." {
+				return "", fmt.Errorf("path contains an invalid segment")
+			}
+		}
+	}
+	return path, nil
+}
+
+func (c Config) validateApps() error {
+	seenIDs := make(map[string]struct{}, len(c.Apps))
+	seenPaths := make(map[string]string, len(c.Apps))
+	prefixes := make([]string, 0, len(c.Apps))
+	for index, app := range c.Apps {
+		where := fmt.Sprintf("apps[%d]", index)
+		if app.ID == "" {
+			return fmt.Errorf("%s.id is required", where)
+		}
+		if !validIdentity(app.ID) {
+			return fmt.Errorf("%s.id contains unsupported characters", where)
+		}
+		if _, exists := seenIDs[app.ID]; exists {
+			return fmt.Errorf("application id %q is configured more than once", app.ID)
+		}
+		seenIDs[app.ID] = struct{}{}
+
+		prefix, err := NormalizePath(app.Path)
+		if err != nil {
+			return fmt.Errorf("%s.path: %w", where, err)
+		}
+		if prefix == "/_runtime" || strings.HasPrefix(prefix, "/_runtime/") {
+			return fmt.Errorf("%s.path must not use the reserved /_runtime prefix", where)
+		}
+		if other, exists := seenPaths[prefix]; exists {
+			return fmt.Errorf("application %q and %q use the same path %q", other, app.ID, prefix)
+		}
+		seenPaths[prefix] = app.ID
+		prefixes = append(prefixes, prefix)
+
+		if app.Dir == "" || !filepath.IsAbs(app.Dir) {
+			return fmt.Errorf("%s.dir must be an absolute path", where)
+		}
+		if app.WebRoot == "" || filepath.IsAbs(app.WebRoot) || strings.Contains(app.WebRoot, "..") {
+			return fmt.Errorf("%s.webRoot must be a relative path inside the application directory", where)
+		}
+		if app.DataDir == "" || !filepath.IsAbs(app.DataDir) {
+			return fmt.Errorf("%s.dataDir must be an absolute path", where)
+		}
+		if app.TmpDir == "" || !filepath.IsAbs(app.TmpDir) {
+			return fmt.Errorf("%s.tmpDir must be an absolute path", where)
+		}
+		for name := range app.Env {
+			if name == "" || strings.ContainsAny(name, "=\x00") {
+				return fmt.Errorf("%s.env contains an invalid variable name", where)
+			}
+		}
+		if err := validateAppQueue(app.Queue); err != nil {
+			return fmt.Errorf("%s.queue: %w", where, err)
+		}
+	}
+	for _, prefix := range prefixes {
+		if prefix == "/" {
+			continue
+		}
+		for _, other := range prefixes {
+			if other != "/" && other != prefix && strings.HasPrefix(other, prefix+"/") {
+				return fmt.Errorf("application paths %q and %q must not be nested", prefix, other)
+			}
+		}
+	}
+	return nil
+}
+
+func validateAppQueue(queue AppQueue) error {
+	if !queue.Enabled {
+		return nil
+	}
+	template := queue.BridgeURLTemplate
+	if template == "" {
+		return fmt.Errorf("bridgeUrlTemplate is required when enabled")
+	}
+	if !strings.HasPrefix(template, "/") {
+		return fmt.Errorf("bridgeUrlTemplate must start with /")
+	}
+	if strings.Contains(template, "://") || strings.Contains(template, "..") {
+		return fmt.Errorf("bridgeUrlTemplate must be an in-application URL path")
+	}
+	if strings.ContainsAny(template, " \t\r\n") {
+		return fmt.Errorf("bridgeUrlTemplate must not contain whitespace")
+	}
+	if strings.Count(template, "{endpoint}") != 1 {
+		return fmt.Errorf("bridgeUrlTemplate must contain exactly one {endpoint} placeholder")
+	}
+	return nil
+}
+
+func equalApps(left, right []App) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].ID != right[index].ID ||
+			left[index].Path != right[index].Path ||
+			left[index].Dir != right[index].Dir ||
+			left[index].WebRoot != right[index].WebRoot ||
+			left[index].DataDir != right[index].DataDir ||
+			left[index].TmpDir != right[index].TmpDir ||
+			left[index].Enabled != right[index].Enabled ||
+			left[index].Queue != right[index].Queue {
+			return false
+		}
+		if len(left[index].Env) != len(right[index].Env) {
+			return false
+		}
+		for name, value := range left[index].Env {
+			if right[index].Env[name] != value {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func RestartRequired(current, candidate Config) bool {
 	if candidate.Runtime.NodeID == "" {
 		candidate.Runtime.NodeID = current.Runtime.NodeID
@@ -911,6 +1221,7 @@ func RestartRequired(current, candidate Config) bool {
 		current.Web.Root != candidate.Web.Root ||
 		current.Web.Listen != candidate.Web.Listen ||
 		current.Web.Threads != candidate.Web.Threads ||
+		!equalApps(current.Apps, candidate.Apps) ||
 		current.Runtime.ControlSocket != candidate.Runtime.ControlSocket ||
 		current.Runtime.PIDFile != candidate.Runtime.PIDFile ||
 		current.Runtime.AuditLog != candidate.Runtime.AuditLog ||
@@ -918,6 +1229,8 @@ func RestartRequired(current, candidate Config) bool {
 		current.Runtime.LogPath != candidate.Runtime.LogPath ||
 		current.Runtime.LogMaxBytes != candidate.Runtime.LogMaxBytes ||
 		current.Runtime.LogMaxBackups != candidate.Runtime.LogMaxBackups ||
+		current.Runtime.PHPErrorLogMaxBytes != candidate.Runtime.PHPErrorLogMaxBytes ||
+		current.Runtime.PHPErrorLogMaxBackups != candidate.Runtime.PHPErrorLogMaxBackups ||
 		current.Runtime.AuditLogMaxBytes != candidate.Runtime.AuditLogMaxBytes ||
 		current.Runtime.AuditLogMaxBackups != candidate.Runtime.AuditLogMaxBackups ||
 		current.Runtime.AuditLogKeepDays != candidate.Runtime.AuditLogKeepDays ||
@@ -950,12 +1263,7 @@ func RestartRequired(current, candidate Config) bool {
 		current.Observability.JSONLConvertInterval != candidate.Observability.JSONLConvertInterval ||
 		current.Observability.JSONLKeepDays != candidate.Observability.JSONLKeepDays ||
 		current.Observability.JSONLDeleteAfterConvert != candidate.Observability.JSONLDeleteAfterConvert ||
-		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources) ||
-		current.Cache.Enabled != candidate.Cache.Enabled ||
-		current.Cache.Listen != candidate.Cache.Listen ||
-		current.Cache.MaxCostBytes != candidate.Cache.MaxCostBytes ||
-		current.Cache.MaxValueBytes != candidate.Cache.MaxValueBytes ||
-		!equalStrings(current.Cache.Namespaces, candidate.Cache.Namespaces)
+		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources)
 }
 
 func equalWorkers(left, right []QueueWorker) bool {

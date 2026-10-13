@@ -29,6 +29,13 @@ const (
 	PathSchedule     = "/internal/runtime/queue/v1/schedule"
 )
 
+// AppBasePath returns the per-application Queue Bridge namespace. Every queue
+// enabled application gets its own paths and credentials so one application
+// cannot drive another application's queue.
+func AppBasePath(appID string) string {
+	return "/internal/runtime/queue/v1/apps/" + appID
+}
+
 const (
 	ErrorUnauthenticated       = "unauthenticated"
 	ErrorUnsupportedSchema     = "unsupported_schema"

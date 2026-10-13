@@ -77,7 +77,7 @@ mkdir -p "${output_dir}"
 cp -a "${runtime_stage}/." "${output_dir}/"
 rm -f "${output_dir}/manifest.json" "${output_dir}/sbom.json"
 
-staged_web_root="$("${repo_root}/scripts/ci/stage-app-package.sh" "${package}" "${output_dir}")"
+staged_web_root="$("${repo_root}/scripts/ci/stage-app-package.sh" "${package}" "${output_dir}" apps/zentao)"
 staged_release="$(dirname "${staged_web_root}")"
 if [[ -f "${staged_release}/www/index.php" ]]; then
     "${repo_root}/scripts/ci/patch-classic-mode.sh" "${staged_release}" \
@@ -103,12 +103,17 @@ logMaxBytes = 16777216
 logMaxBackups = 5
 
 [web]
-root = "app\\releases\\@RELEASE@\\www"
 listen = "0.0.0.0:8080"
 threads = 8
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
+
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps\\zentao"
+webRoot = "www"
 
 [observability]
 enabled = true
@@ -204,12 +209,17 @@ logMaxBytes = 16777216
 logMaxBackups = 5
 
 [web]
-root = "app/zentaopms/www"
 listen = "0.0.0.0:8080"
 threads = 8
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
+
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentao"
+webRoot = "www"
 
 [observability]
 enabled = true
@@ -331,7 +341,7 @@ cat > "${output_dir}/db-init.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-sql="${root}/app/zentaopms/db/zentao.sql"
+sql="${root}/apps/zentao/db/zentao.sql"
 if [[ ! -f "${sql}" ]]; then
     echo "zentao.sql not found at ${sql}" >&2
     exit 1

@@ -1,5 +1,12 @@
 # MySQL 到 Parquet 增量同步设计（支持修改与一致性）
 
+> **状态：22.7 已废弃（仅作历史记录）**。本文描述的是 PHP 侧把业务库同步为 Parquet 分析副本的
+> 机制，随付费 DuckDB 扩展一起下线：`zentaopms/lib/parquet`、`module/bi` 的
+> `syncBITableByWatermark` / `syncBITableSnapshot` / `syncMetricLibDate` /
+> `syncParquetIncremental`、`zt_duckdbsync`、cron handler `bi.syncIncremental` 均已移除，
+> `zt_duckdbqueue` 在 22.7 升级脚本中 DROP。BI 与度量查询回到业务库。当前 DuckDB 只用于
+> Runtime 日志域，见 [DuckDB 数据方案设计](./09-unified-duckdb-design.md)。
+
 ## 1. 目标与范围
 
 - 把禅道业务库（MySQL，兼容 PostgreSQL/达梦）中的表同步为 Parquet 分析副本。
@@ -61,20 +68,25 @@ DELETE 不产生新 id、UPDATE 可能不更新 editedDate、历史回填不会�
 
 ```sql
 CREATE TABLE zt_duckdbsync (
-  id            bigint unsigned AUTO_INCREMENT PRIMARY KEY,
-  object        varchar(255) NOT NULL,
-  syncMode      varchar(20)  NOT NULL,          -- append / partition_rewrite / full_snapshot
-  partitionField varchar(64) NOT NULL DEFAULT 'editedDate',
-  partitionExpr varchar(255) NOT NULL DEFAULT 'COALESCE(editedDate, createdDate)',
-  idChunkSize  bigint       NOT NULL DEFAULT 1000000,
-  lastMaxID     bigint       NOT NULL DEFAULT 0,
+  id               bigint unsigned NOT NULL AUTO_INCREMENT,
+  object           varchar(255) NOT NULL,                                   -- 表名，如 zt_bug
+  kind             varchar(16)  NOT NULL DEFAULT 'bi',                      -- bi / metrics
+  syncMode         varchar(24)  NOT NULL DEFAULT 'partition_rewrite',       -- append / partition_rewrite / full_snapshot
+  idChunkSize      bigint unsigned NOT NULL DEFAULT 1000000,                -- idrange 包含的行数
+  partitionExpr    varchar(255) NOT NULL DEFAULT 'COALESCE(editedDate, createdDate)',
+  lastMaxID        bigint unsigned NOT NULL DEFAULT 0,
   lastMaxEditedDate datetime DEFAULT NULL,
-  lastSyncTime  datetime     DEFAULT NULL,
-  lastSnapshotID varchar(64) DEFAULT NULL,
-  status        varchar(20)  NOT NULL DEFAULT 'idle',  -- idle / running / failed
-  UNIQUE KEY uk_object (object)
+  lastSyncTime     datetime DEFAULT NULL,
+  lastSnapshotID   varchar(64) DEFAULT NULL,
+  status           varchar(20)  NOT NULL DEFAULT 'idle',                    -- idle / running / failed
+  editedDate       datetime NOT NULL,                                       -- 最近更新时间
+  PRIMARY KEY (id)
 );
+CREATE UNIQUE INDEX object ON zt_duckdbsync(object);
 ```
+
+除主键外，索引一律用独立的 `CREATE INDEX` / `CREATE UNIQUE INDEX` 语句创建，
+不要写进 `CREATE TABLE`（达梦不支持建表时同时建非主键索引）。
 
 - `append`：追加型表，按 `id > lastMaxID OR editedDate > lastMaxEditedDate` 增量。
 - `partition_rewrite`：可变表，重写受影响日期分区。
@@ -290,9 +302,12 @@ BI 查询不再直接 glob `part-*.parquet`，而是：
 
 - [可观测性设计](./05-observability.md)
 - [Runtime 日志系统开发文档](../development/05-logging-system-development.md)
-- 现有 BI 同步实现：`zentaopms/module/bi/model.php`、`zentaopms/module/bi/tao.php`
+- 现有 BI 同步实现（22.7 已删除）：`zentaopms/module/bi/model.php`、`zentaopms/module/bi/tao.php`
 
-## 13. 实施状态（2026-09-03）
+## 13. 实施状态（2026-09-03，22.7 已废弃）
+
+> 以下实现已于 22.7 全部移除，仅记录当时的落地情况。
+
 
 - Manifest 原子读写、路径布局与 idrange 计算已落地于
   `zentaopms/lib/parquet/parquet.class.php`。

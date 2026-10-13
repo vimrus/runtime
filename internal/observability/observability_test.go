@@ -52,7 +52,7 @@ func TestNormalizeFillsEnvelopeAndRedacts(t *testing.T) {
 		BootID:    "boot-a",
 		Source:    "php",
 		Kind:      KindLogs,
-		Message:   strings.Repeat("x", 5000),
+		Message:   strings.Repeat("x", 20000),
 		Fields:    map[string]string{"db_password": "hunter2", "user": "zentao"},
 	})
 	if err != nil {

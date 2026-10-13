@@ -70,7 +70,8 @@
       "ldap",
       "bcmath",
       "sockets",
-      "redis"
+      "redis",
+      "apcu"
     ]
   },
   "frankenphp": {
@@ -102,6 +103,19 @@
     "repository": "https://github.com/phpredis/phpredis.git",
     "commit": "df4fab2de7fc327c54c94a13af2b9542e4fbd720",
     "archive_sha256": "79ecabd899e50a6efa56d9fc28a987a25d78deecc32fdd0fa9840b1b3d83740e",
+    "license": "PHP License 3.01",
+    "locked": true
+  },
+  "apcu": {
+    "version": "5.1.28",
+    "repository": "https://github.com/krakjoe/apcu.git",
+    "commit": "819fce90c469a5666b1706036cd66120af419f1f",
+    "archive_sha256": "f90afc8b245365df2d1cbe3625e4820c6ed47296940fc8fdba1f10a39093181c",
+    "windows_x64": {
+      "url": "https://downloads.php.net/~windows/pecl/releases/apcu/5.1.28/php_apcu-5.1.28-8.4-ts-vs17-x64.zip",
+      "archive_sha256": "17e59aeaff9f274974a8f477f1204c74ea18261d44c6c81fef737e9a89814284",
+      "extension": "php_apcu.dll"
+    },
     "license": "PHP License 3.01",
     "locked": true
   },
@@ -163,9 +177,9 @@
     "license": "proprietary-redistribution-approval-required",
     "linux_amd64": {
       "url": "https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz",
-      "archive_sha256": "e2193a63a87e2388a71854b0114de4fc71e2e40bcf0794faf74bb562691e5b62",
+      "archive_sha256": "739962bd012e77ee82bf01f77a9641f050e4be057f0a5d1a95fe59ce11fd62ba",
       "loader": "ioncube_loader_lin_8.4_ts.so",
-      "loader_sha256": "ca9c88b2c07068564df88d24800eb04a8304b75f008c420c946e3fb72a041e32"
+      "loader_sha256": "2e60bba749091e167c2f1fb37ce9da044f290f357614f6600792b40c34d437f9"
     },
     "linux_arm64": {
       "url": "https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_aarch64.tar.gz",

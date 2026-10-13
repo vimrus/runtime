@@ -66,3 +66,45 @@ func TestClientMapsTransportFailureToUnavailable(t *testing.T) {
 		t.Fatalf("expected retryable unavailable error, got %#v", err)
 	}
 }
+
+func TestClientKeepsApplicationPathPrefix(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.Path
+		_ = json.NewEncoder(writer).Encode(bridge.CapabilitiesResponse{
+			Schema: bridge.SchemaVersion, QueueSchema: 1, Driver: "mysql", ClaimMode: "portable_cas", MaxClaimBatch: 16,
+		})
+	}))
+	defer server.Close()
+
+	client, err := New(Config{BaseURL: server.URL + bridge.AppBasePath("zentao"), Token: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Capabilities(context.Background(), bridge.CapabilitiesRequest{Schema: bridge.SchemaVersion, NodeID: "node-a", InstanceID: "instance-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := bridge.AppBasePath("zentao") + strings.TrimPrefix(bridge.PathCapabilities, "/internal/runtime/queue/v1"); gotPath != want {
+		t.Fatalf("request path = %q, want %q", gotPath, want)
+	}
+}
+
+func TestClientAcceptsLegacyFullPrefix(t *testing.T) {
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		gotPath = request.URL.Path
+		_ = json.NewEncoder(writer).Encode(bridge.StatsResponse{Schema: bridge.SchemaVersion})
+	}))
+	defer server.Close()
+
+	client, err := New(Config{BaseURL: server.URL + "/internal/runtime/queue/v1", Token: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Stats(context.Background(), bridge.StatsRequest{Schema: bridge.SchemaVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != bridge.PathStats {
+		t.Fatalf("request path = %q, want %q", gotPath, bridge.PathStats)
+	}
+}

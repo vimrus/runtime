@@ -244,21 +244,6 @@ func TestObservabilityBatchValidation(t *testing.T) {
 	}
 }
 
-func TestCacheDefaultsAndValidation(t *testing.T) {
-	config := DefaultForRoot("/opt/zentao")
-	if !config.Cache.Enabled || config.Cache.Listen != "127.0.0.1:8083" || config.Cache.MaxCostBytes <= 0 || config.Cache.MaxValueBytes <= 0 {
-		t.Fatalf("unexpected cache defaults: %#v", config.Cache)
-	}
-	config.Cache.Listen = "0.0.0.0:8083"
-	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "loopback") {
-		t.Fatalf("public cache listen must be rejected, got %v", err)
-	}
-	config.Cache.Listen = "127.0.0.1:8083"
-	if err := config.Validate(); err != nil {
-		t.Fatalf("loopback cache listen must be accepted: %v", err)
-	}
-}
-
 func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 	config := Default()
 	config.Web.Root = "/opt/zentao/app/zentaopms/www"
@@ -358,4 +343,25 @@ func pathWithContent(t *testing.T, content string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestLoadPHPErrorLogRotationOptions(t *testing.T) {
+	loaded, err := Load(pathWithContent(t, "schemaVersion = 1\n\n[runtime]\nphpErrorLogMaxBytes = 1024\nphpErrorLogMaxBackups = 2\n"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Runtime.PHPErrorLogMaxBytes != 1024 || loaded.Runtime.PHPErrorLogMaxBackups != 2 {
+		t.Fatalf("php error log settings not loaded: %#v", loaded.Runtime)
+	}
+
+	defaults := Default()
+	if defaults.Runtime.PHPErrorLogMaxBytes != 16*1024*1024 || defaults.Runtime.PHPErrorLogMaxBackups != 5 {
+		t.Fatalf("unexpected php error log defaults: %#v", defaults.Runtime)
+	}
+}
+
+func TestLoadRejectsNegativePHPErrorLogRotationOptions(t *testing.T) {
+	if _, err := Load(pathWithContent(t, "schemaVersion = 1\n\n[runtime]\nphpErrorLogMaxBytes = -1\n"), nil); err == nil {
+		t.Fatal("negative phpErrorLogMaxBytes must be rejected")
+	}
 }

@@ -26,7 +26,7 @@
 
 - `runtime.clusterID`
 - 应用、PHP、Runtime 和扩展版本
-- `web.root` 的目录布局、监听端口和线程策略
+- `[[apps]]` 应用清单（id、path、webRoot）和各应用的目录布局、监听端口和线程策略
 - 数据库、Session、附件、Queue Bridge 和安全相关配置
 - `observability.datasetRoot`、Parquet Schema、保留周期和脱敏策略
 
@@ -48,8 +48,13 @@ pidFile = "run/runtime.pid"
 logPath = "logs/runtime.log"
 
 [web]
-root = "app/zentaopms/www"
 listen = "0.0.0.0:8080"
+
+[[apps]]
+id = "zentao-ipd"
+path = "/"
+dir = "apps/zentao-ipd-22.6"
+webRoot = "www"
 
 [observability]
 enabled = true

@@ -48,7 +48,9 @@ type Event struct {
 }
 
 const (
-	maxMessageLength = 4096
+	// maxMessageLength 与 PHP service/log/config.php 的 defaults.maxMessageLength
+	// 保持一致；两侧同时调整，避免 flush/file 模式下同一条日志长度不同。
+	maxMessageLength = 16384
 	maxFields        = 32
 	maxLabels        = 16
 )

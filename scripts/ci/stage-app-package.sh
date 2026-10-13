@@ -1,24 +1,35 @@
 #!/usr/bin/env bash
 #
 # Stage an externally produced, platform-independent ZenTao application
-# package into the Runtime application layout:
-#   <install-root>/app/zentaopms/www
+# package into a pluggable application slot:
+#   <install-root>/<slot>/www
 #
 # The package is produced by the ZenTao release pipeline (Z-REL-01); this
 # script never merges or rebuilds ZenTao sources.
 #
 # Usage:
-#   stage-app-package.sh <package|app-dir> <install-root>
+#   stage-app-package.sh <package|app-dir> <install-root> [slot]
+#
+# The optional slot selects the application directory below the install root
+# (default: app/zentaopms, the legacy layout). Pluggable multi-application
+# installations use a slot such as apps/zentao-ipd.
 
 set -Eeuo pipefail
 
 if [[ $# -lt 2 ]]; then
-    echo "usage: stage-app-package.sh <package|app-dir> <install-root>" >&2
+    echo "usage: stage-app-package.sh <package|app-dir> <install-root> [slot]" >&2
     exit 2
 fi
 
 readonly input="$1"
 readonly install_root="$2"
+readonly slot="${3:-app/zentaopms}"
+case "${slot}" in
+    /*|*..*)
+        echo "application slot must be a relative path without ..: ${slot}" >&2
+        exit 2
+        ;;
+esac
 readonly tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
 
@@ -79,12 +90,12 @@ if [[ ! -f "${app_root}/www/index.php" ]]; then
     exit 1
 fi
 
-app_dir="${install_root}/app/zentaopms"
+app_dir="${install_root}/${slot}"
 if [[ -e "${app_dir}" ]]; then
     echo "application directory already exists: ${app_dir}; back it up and remove it before staging" >&2
     exit 1
 fi
-mkdir -p "${install_root}/app"
+mkdir -p "$(dirname "${app_dir}")"
 cp -a "${app_root}" "${app_dir}"
 
 echo "${app_dir}/www"

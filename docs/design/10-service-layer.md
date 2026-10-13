@@ -19,7 +19,7 @@ zentaopms/
   module/                 # Web 业务 MVC
   service/                # 应用 Service 层，与 module 并列
     runtime/
-      runtime.service.php # 门面/能力检测
+      runtime.service.php # 能力检测入口
     queue/
       queue.service.php
       queue.service.interface.php
@@ -54,7 +54,7 @@ Service 内部可持有 DAO、其他 Service 或 Bridge Client，但不对业务
    ↓ 只调用 Service
 Service（用例编排）
    ├── DAO            # 数据库操作
-   ├── CacheService   # Runtime Cache
+   ├── CacheService   # APCu / Redis 键值缓存
    ├── QueueService   # Runtime Queue
    ├── SchedulerService
    ├── LogService
@@ -123,8 +123,6 @@ SchedulerService
        -> 批量取数
        -> 计算
        -> 写 zt_metriclib
-       -> flush Parquet
-       -> 更新 zt_duckdbsync
        -> 成功/失败状态
 ```
 
@@ -189,8 +187,8 @@ class metricRunResult
 ## 10. 参考
 
 - [Runtime Control Plane v1](./contracts/runtime-control-plane-v1.md)
-- [MySQL 到 Parquet 增量同步设计](./08-mysql-parquet-sync.md)
-- [DuckDB 统一数据方案设计](./09-unified-duckdb-design.md)
+- [MySQL 到 Parquet 增量同步设计](./08-mysql-parquet-sync.md)（22.7 已废弃）
+- [DuckDB 数据方案设计](./09-unified-duckdb-design.md)（22.7 起仅日志域）
 
 ## 11. 实施状态
 
@@ -200,14 +198,13 @@ class metricRunResult
 - LogService 已接入 framework 错误处理：`router::saveError()` 写本地日志后
   同步发送结构化事件（error/warning/notice），Observability Bridge 不可用
   或失败时 logService 内部降级到本地 error_log，不改变原 debug 日志行为。
-- MetricService：`flushIncremental()` 已提供“度量计算后统一 Parquet 增量
-  flush”编排入口；metric cron handler（updateMetricLib /
-  updateDashboardMetricLib）计算成功后自动调用，enableDuckdb 关闭时保持
-  原 `success` 输出不变。
+- MetricService：度量计算不再有 Parquet flush 环节（22.7 PHP 侧 DuckDB 已下线），
+  metric cron handler（updateMetricLib / updateDashboardMetricLib）计算成功后直接返回
+  `success`。
 - MetricService::run 已实现：`run(metricCode|period, options)` 按 code
   列表或 dateType（nodate/year/month/week/day）投递队列任务，
   `status(taskID)`/`retry(taskID)` 提供状态与重试；`metricRunResult` 作为
-  门面返回模型，不新建运行状态表（状态由 zt_queue 承载）。
+  对外返回模型，不新建运行状态表（状态由 zt_queue 承载）。
 - metric 模块新增按需计算入口 `updateMetricLibByCodes`/
   `updateMetricLibByPeriod`：`metricZen::runCalculation()` 统一“取
   instance → 分类 → 计算 → 去重”，按 code/period 的增量任务只去重相关
@@ -215,26 +212,25 @@ class metricRunResult
   directHandlers 白名单。真实 MySQL 契约测试
   `module/metric/test/model/metricrunservice.php` 通过。
 - `cacheService`：Interface + `cacheBackendInterface` 已落地；后端顺序为
-  Redis（多节点共享）→ Runtime Bridge → Null，最终 miss 由业务层回源 DB，
-  不使用文件/APCu 作为业务缓存兜底。
+  Redis（多节点共享）→ APCu（单节点，runtime 内置扩展）→ Null，最终 miss
+  由业务层回源 DB，不使用文件作为业务缓存兜底。
 - `queueServiceInterface` / `schedulerServiceInterface`：契约已定义，
   `queueService` 已实现（enqueue 业务入队 + DAO 状态/取消/重试，
   不依赖 cron 模块模型）；`schedulerService` 已实现（zt_cron 注册 +
   queueService 触发）；`loadService()` 已加入 baseModel。
-- Runtime Cache Bridge：Go 侧 Cache Service 与 `/internal/runtime/cache/v1/*`
-  已实现（ristretto 内存后端）；phpredis 6.3.0 已内置到 runtime 镜像，
-  Cache Bridge 与真实 Redis e2e 均通过。
+- 缓存后端收敛：phpredis 6.3.0 与 apcu 5.1.28 均已内置到 runtime 镜像；
+  原通过 HTTP 桥访问的 Go 侧 Cache Service 已删除，单机部署由 APCu
+  进程间共享内存直接承载，真实 Redis e2e 通过。
 - 业务入队下沉 queueService：`queueService::enqueue()`/`retry()` 直接基于
   DAO 实现白名单与幂等键校验，不依赖模块模型（调度入队 `enqueueCron`
   保留在 cron 模型并复用 queue 模块的 `insertTask()` 写入任务行；模式租约
   在 queue 模型）；真实 DB 契约测试
   （`module/queue/test/model/queueservice.php`）。
-- 业务缓存门面：`cachedFacade` 基类 + namespace 版本失效；缓存内容为
+- 业务缓存服务：`cachedFacade` 基类 + namespace 版本失效；缓存内容为
   实体基础行 map（id => 行），权限 view 过滤在业务层完成。user/project/
   product 三个模块的 `getPairs()` 已按该模式接入（默认关闭），核心写路径
   后统一版本失效；真实 MySQL/Redis 跨进程命中与回源验证通过。
-- MetricService 当前提供 counter/gauge 发送；文档 5.4 的定时批量取数、
-  metriclib 热窗口 flush 与重试由 `module/bi` 的 Parquet 发布层承载，
-  迁移到 `MetricService::run()` 编排待后续接入。
+- MetricService 当前提供 counter/gauge 发送；文档 5.4 的定时批量取数已由
+  metric cron handler 与 `MetricService::run()` 承载（无 Parquet 环节）。
 - 待接入：其他业务型入队调用方；`MetricService::run` 的失败状态/重试
   完善（rows 统计与错误分类）与按业务评审的默认调度策略。

@@ -48,6 +48,8 @@
 
 四类日志不能混写。尤其是审计日志和 PHP 错误日志保留各自的原始文件语义；JSONL 转换器只处理已封闭的 Runtime/Caddy 段文件。
 
+`php-error.log` 由内嵌 PHP 的 `error_log` 写入，进程无法被通知重开文件，因此 Runtime 用 `ExternalRotator` 做 copytruncate：达到 `runtime.phpErrorLogMaxBytes`（默认 16 MiB）时复制为 `php-error.log-<UTC 时间戳>.log` 并原地清空，每分钟检查一次；轮转段保留由 `observability.jsonlKeepDays`（>0 时优先）或 `runtime.phpErrorLogMaxBackups` 控制，与其他日志一致。
+
 ### 3.2 数据流
 
 ```text
@@ -111,7 +113,7 @@ minBatchRows = 1000
 minBatchBytes = 1048576
 flushInterval = "60s"
 maxFlushInterval = "10m"
-logDays = 7
+logDays = 30
 jsonlConvertInterval = "1h"
 jsonlConvertSources = ["access", "runtime"]
 jsonlKeepDays = 7
@@ -188,6 +190,8 @@ runtime-node-a.jsonl-20260820T010000.000000000Z.log
 ```
 
 当 `KeepDays > 0` 时，按时间戳执行天数清理，`MaxBackups` 不再作为主要上限。开发修改轮转策略时应明确两者优先级，并更新配置注释和测试，避免把“数量保留”误认为始终生效。
+
+`php-error.log` 使用独立的 copytruncate 轮转（见 3.1 节）：写方在内嵌 PHP 进程内，文件句柄无法通过信号重开，因此不能使用 rename 轮转；Runtime 每分钟检查大小，超过 `phpErrorLogMaxBytes` 时复制后原地截断。
 
 ## 6. Caddy 访问和错误日志
 
@@ -376,11 +380,13 @@ X-Zentao-Observability-Token: <token>
 X-Zentao-Observability-Schema: 1
 {"schemaVersion":1,"filters":{"topic":"error","level":"error","module":"common",
  "account":"admin","requestID":"...","message":"...","fromDate":"20260901",
- "toDate":"20260904","offset":0,"limit":200}}
+ "toDate":"20260904","fields":{"objectType":"webhook","objectID":"5"},
+ "offset":0,"limit":200}}
 ```
 
 - 桥只监听 loopback；token 与 ingest 共用；拒绝任意 SQL/路径；
-- 过滤字段为白名单（topic/module/method/account/requestID/eventID/message/level/时间），
+- 过滤字段为白名单（topic/module/method/account/requestID/eventID/message/level/时间，
+  以及 `fields` map 的任意 `fields.<key>` 等值过滤，如 objectType/objectID/action），
   对应 Parquet `fields` JSON 列过滤与日志查看器统一；
 - 结果按 `eventTime` 倒序分页，返回 `list/total/truncated`，行结构与 JSONL 事件同构
   （含 `fields`），PHP 侧 file/flush 两种模式共用同一渲染；

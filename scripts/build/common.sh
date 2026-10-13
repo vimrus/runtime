@@ -3,6 +3,17 @@
 set -Eeuo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Optional local build settings (not committed). Proxy values here make the
+# Docker build reach external download hosts on restricted networks, and the
+# file may also override GOPROXY/DEBIAN_MIRROR for local mirrors.
+if [[ -f "${REPO_ROOT}/build.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/build.env"
+    set +a
+fi
+
 readonly VERSION_LOCK="${REPO_ROOT}/versions.lock.json"
 readonly RUNTIME_ARCH="${RUNTIME_ARCH:-${POC_ARCH:-amd64}}"
 readonly RUNTIME_IMAGE="zentao:runtime-linux-${RUNTIME_ARCH}"
@@ -46,6 +57,10 @@ verify_lock() {
         (.duckdb.commit | test("^[0-9a-f]{40}$")) and
         (.phpredis.commit | test("^[0-9a-f]{40}$")) and
         (.phpredis.archive_sha256 | test("^[0-9a-f]{64}$")) and
+        (.apcu.commit | test("^[0-9a-f]{40}$")) and
+        (.apcu.archive_sha256 | test("^[0-9a-f]{64}$")) and
+        (.apcu.windows_x64.url | startswith("https://")) and
+        (.apcu.windows_x64.archive_sha256 | test("^[0-9a-f]{64}$")) and
         (.dm8.version | type == "string" and length > 0) and
         (.dm8.php | type == "string" and length > 0) and
         (.dm8.linux_amd64.pdo_driver_sha256 | test("^[0-9a-f]{64}$")) and
@@ -93,7 +108,22 @@ docker_build_args() {
         --build-arg "IONCUBE_LOADER_SHA256=$(lock_value ".ioncube.${ioncube_key}.loader_sha256")" \
         --build-arg "LOADER_ARCH=${RUNTIME_ARCH}" \
         --build-arg "PHPREDIS_COMMIT=$(lock_value '.phpredis.commit')" \
-        --build-arg "PHPREDIS_ARCHIVE_SHA256=$(lock_value '.phpredis.archive_sha256')"
+        --build-arg "PHPREDIS_ARCHIVE_SHA256=$(lock_value '.phpredis.archive_sha256')" \
+        --build-arg "APCU_COMMIT=$(lock_value '.apcu.commit')" \
+        --build-arg "APCU_ARCHIVE_SHA256=$(lock_value '.apcu.archive_sha256')"
+
+    # Forward configured proxies into the build so download steps (GitHub
+    # archives, ionCube, ...) can be routed through them on restricted
+    # networks. Predefined proxy build args do not affect cache keys.
+    local proxy_args=()
+    for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
+        if [[ -n "${!name:-}" ]]; then
+            proxy_args+=(--build-arg "${name}=${!name}")
+        fi
+    done
+    if [[ ${#proxy_args[@]} -gt 0 ]]; then
+        printf '%s\n' "${proxy_args[@]}"
+    fi
 }
 
 build_runtime_image() {

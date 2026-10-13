@@ -1,19 +1,26 @@
-# DuckDB 统一数据方案设计（日志 / 度量库 / BI）
+# DuckDB 数据方案设计（22.7 起仅日志域）
 
-## 1. 背景与目标
+> **22.7 变更**：PHP 侧 DuckDB 已整体下线。付费扩展 `zentaomisc/duckdb`（本地 DuckDB CLI 与
+> BI 驱动）、`zentaopms/lib/duckdb`、`zentaopms/lib/parquet`、`zt_duckdbqueue`、
+> `zt_duckdbsync`，以及度量/BI 的 Parquet 同步（`biModel::syncParquetIncremental` 系列、
+> queue handler `bi.syncIncremental`）全部移除；BI 与度量的数据源回到业务库
+> （`bi/config.php` 的 `drivers = array('mysql', 'dm')`）。DuckDB 只保留 Runtime 内嵌
+> Library，服务日志域的 Parquet 生成与受控查询。
 
-DuckDB 在 zenat 体系中有三类用途：
+## 1. 背景
+
+DuckDB 在 22.6 及以前有三类用途：
 
 1. 日志：Runtime/Caddy/PHP 日志先落 JSONL，再周期转为 Parquet。
 2. 度量库：`zt_metriclib` 按实时、年、月、日维度保存业务度量。
 3. 业务数据：报表和 BI 查询使用的业务表。
 
-目标：
+22.7 起收敛为第 1 类，原因：
 
-- 三类数据都能被 DuckDB 统一、受控地查询。
-- MySQL、PostgreSQL、达梦（DM）、高斯（GaussDB）都能使用同一套方案。
-- 不要求 DuckDB 直接连接或扫描业务数据库。
-- Parquet 是分析副本；业务库和度量库始终是事实来源。
+- 本地 CLI 形态需要额外下载、授权和版本维护，且只在安装付费扩展后可用；
+- 业务库始终是事实来源，Parquet 只是可重建的分析副本，同步复杂度（双水位、分区重写、
+  热窗口、硬删除收敛）与收益不成正比；
+- Runtime 内嵌 DuckDB 已能覆盖日志域的批量写入与受控查询。
 
 ## 2. 关键决策：DuckDB 只读 Parquet，不直连业务库
 
@@ -31,20 +38,22 @@ DuckDB 在 zenat 体系中有三类用途：
 
 好处：
 
-- DuckDB 不需要任何数据库驱动或 Scanner，三平台一致。
-- 方言差异全部收敛在 PHP DAO 和同步任务里。
+- DuckDB 不需要任何数据库驱动或 Scanner，各平台行为一致。
+- 方言差异全部收敛在 PHP DAO 一侧（22.7 后仅剩业务查询，不再有导出任务）。
 - 不把业务库暴露给分析引擎，避免长查询、锁和凭据扩散。
-- 同步失败不影响业务，Parquet 可重建。
+- Parquet 可重建，发布失败不影响业务。
 
-## 3. 三个数据域
+## 3. 数据域
 
-| 数据域 | 来源 | 事实来源 | 分析副本 |
-|---|---|---|---|
-| 日志域 | Runtime/Caddy/PHP JSONL | 原始 JSONL（短期） | Parquet |
-| 度量域 | `zt_metriclib`（PHP 计算后写库） | `zt_metriclib` 业务库 | Parquet |
-| BI 域 | 业务表（bug/story/task/action 等） | 业务库 | Parquet |
+| 数据域 | 来源 | 事实来源 | 分析副本 | 状态 |
+|---|---|---|---|---|
+| 日志域 | Runtime/Caddy/PHP JSONL | 原始 JSONL（短期） | Parquet | 保留 |
+| 度量域 | `zt_metriclib`（PHP 计算后写库） | 业务库 | 无 | 22.7 移除 |
+| BI 域 | 业务表（bug/story/task 等） | 业务库 | 无 | 22.7 移除 |
 
-每个域有独立的 Parquet 根目录和 Manifest，互不混写。
+度量与 BI 的业务查询直接走业务库：`driver = 'mysql'` 时 `loadDriver()` 返回主库连接，
+`driver = 'dm'` 时同样落在主库连接上；历史数据里残留的 `driver = 'duckdb'` 行在 22.7
+升级时被回写为 `mysql`。
 
 ## 4. 总体数据流
 
@@ -54,19 +63,9 @@ Runtime/Caddy/PHP 日志
   -> Runtime Publisher 攒批
   -> parquet/logs/...
 
-PHP 度量计算（按 scope/dateType）
-  -> zt_metriclib（业务库，实时/年/月/日都先落库）
-  -> 度量同步任务（PHP DAO 读库）
-  -> parquet/metrics/...
-
-业务表变更（MySQL/PG/DM/Gauss）
-  -> 业务库
-  -> BI 同步任务（PHP DAO 读库，idrange + 水位）
-  -> parquet/bi/...
-
-查询入口（CLI/BI 页面）
+查询入口（zentao logs / Runtime 查询桥）
   -> 受控查询层（固定模板 + 白名单）
-  -> DuckDB read_parquet(...)
+  -> DuckDB read_parquet(...) 与 active JSONL 合并
 ```
 
 ## 5. 日志域
@@ -95,181 +94,79 @@ PHP 度量计算（按 scope/dateType）
 
 删除前必须确认 Parquet 已成功发布；转换失败时保留段文件并重试或隔离。
 
-## 6. 度量域
-
-### 6.1 先落业务库，再同步 Parquet
-
-实时、年、月、日维度的度量都必须先写入 `zt_metriclib`，原因：
-
-- 业务库是事务事实来源，支持校验、补算、审计。
-- MySQL/PG/DM/Gauss 都可以用 PHP DAO 写入，不依赖 DuckDB 方言。
-- DuckDB 不直接连接业务库，因此“高斯/达梦无法用 DuckDB 统一读库”的问题
-  被规避：DuckDB 只读同步后的 Parquet。
-
-### 6.2 不同维度使用不同同步频率
-
-| 维度 | 数据特征 | 同步频率 | 存储 |
-|---|---|---|---|
-| 实时/今日 | 变化快 | 1～5 分钟 | 今日分区 + 业务库兜底 |
-| 日 | 按天新增 | 小时～天 | date/day 分区 |
-| 月 | 月末固化 | 天 | month 分区 |
-| 年 | 年末固化 | 天 | year 分区 |
-
-`zt_metriclib` 只保留热窗口：年度保留今年、月度保留本月、周度保留本周、
-日度保留今天，无日期（最新）行保留。热窗口之外的数据在成功 flush 到
-Parquet history 并校验后从业务库删除。
-
-### 6.3 度量 Parquet 布局
-
-```text
-parquet/metrics/
-  schema=v1/
-    metriclib/
-      scope=current/
-        date=2026-09-02/
-          part-<batchID>.parquet
-      scope=history/
-        date=2025-12-31/
-          part-<batchID>.parquet
-```
-
-current 与 history 使用独立 Manifest；当前周期高频整分区重写不会影响历史
-分区，周期关闭时再把 current 数据发布/合并到 history。
-
-Manifest 记录 `minDate/maxDate`，支持按时间裁剪。
-
-## 7. BI 域
-
-按 [MySQL 到 Parquet 增量同步设计](./08-mysql-parquet-sync.md) 实施：
-
-- idrange 分区（`FLOOR(id / idChunkSize)`），新增只影响当前分区。
-- 双水位：`lastMaxID` 捕获插入，`lastMaxEditedDate` 捕获修改/软删除。
-- Manifest 控制原子可见性。
-- 硬删除通过“定期轮转重写所有 idrange / 每日全量 / CDC”收敛。
-- `idChunkSize` 按表配置，参考 5.5 节。
-
-## 8. 统一数据集布局
-
-建议一个统一数据集根目录，按域隔离：
+## 6. 数据集布局
 
 ```text
 parquet/
   logs/       # Runtime/Caddy/PHP 日志
-  metrics/    # zt_metriclib 分析副本
-  bi/         # 业务报表表
-  manifest/   # 每域/表一个 Manifest（可选）
+    schema=v1/date=YYYY-MM-DD/hour=HH/node=<nodeID>/part-*.parquet
+  manifest/   # 每域/表一个 Manifest
 ```
 
-域之间不允许混写；每个域可有自己的保留策略：
+只保留日志域一个数据集；`metrics/`、`bi/` 目录不再产生新数据。保留策略见
+[可观测性设计](./05-observability.md) 第 10 章。
 
-- logs：按节点日期保留。
-- metrics：按 metricCode/date 保留。
-- bi：按表和 idrange 保留。
-
-## 9. 查询统一层
+## 7. 查询统一层
 
 所有查询经过同一个受控入口：
 
 ```text
-zentao logs / zentao metrics / BI 报表
+zentao logs
   -> query router
-  -> 校验 domain/table/时间范围/白名单
+  -> 校验 domain/时间范围/节点/行数白名单
   -> DuckDB read_parquet(...)
 ```
 
 规则：
 
 - 不允许用户提交任意 SQL、任意文件路径或任意 DuckDB 扩展。
-- 查询模板由系统固定生成，参数只影响时间、域、表、指标名、节点、行数。
-- 业务库查询（实时兜底）走 PHP DAO，不允许 DuckDB 直连。
+- 查询模板由系统固定生成，参数只影响时间、节点、topic 和行数。
+- 业务库查询（BI、度量、报表）走 PHP DAO，不允许 DuckDB 直连。
 - 日志域例外：查询层在 DuckDB 返回 Parquet 结果后，合并 active/未转换
-  JSONL 行；度量域和 BI 域只查 Parquet。
+  JSONL 行。
 
-## 10. 一致性与实时性
+## 8. 一致性与实时性
 
-### 10.1 一致性
+### 8.1 一致性
 
 - 业务库是事实来源，Parquet 是可重建的分析副本。
 - Manifest 原子切换，避免读到半提交数据。
 - 同一份 Parquet 数据集可被多节点只读共享。
 
-### 10.2 实时性分级
+### 8.2 实时性分级
 
 | 查询类型 | 数据来源 | 延迟 |
 |---|---|---|
 | 实时运维/日志 | JSONL + 内存状态 | 秒级 |
-| 今日度量 | 业务库兜底 + 高频同步 Parquet | 分钟级 |
-| 历史日志/度量/BI | Parquet | 周期同步延迟 |
+| 历史日志 | Parquet | 周期同步延迟 |
+| BI / 度量 / 报表 | 业务库（PHP DAO） | 业务库实时 |
 
-对“必须实时”的业务判断，不承诺从 Parquet 读取；仍以业务库为准。
+对“必须实时”的业务判断，不从 Parquet 读取。
 
-## 11. 方言兼容验证
+## 9. 22.7 移除清单
 
-每个同步任务只使用 PHP DAO 的方言层，因此：
+| 层 | 移除内容 |
+|---|---|
+| 插件 | `zentaoext/zentaomisc/duckdb`（本地 CLI、BI 驱动覆盖、`enableDuckdb=true`、`bi.syncParquetFile` cron） |
+| 引擎 | `zentaopms/lib/duckdb`、`zentaopms/lib/parquet`、`framework/router.class.php` 的 `loadDriver('duckdb')` 分支 |
+| 写钩子 | `lib/base/dao/dao.class.php` 与信创 `pgsql/dm` DAO 中的 `zt_duckdbqueue` 脏表标记 |
+| 表 | `zt_duckdbqueue`（22.7 升级脚本 DROP）、`zt_duckdbsync`（未发布，直接移除建表语句） |
+| 模块 | `biModel` 的 `getDuckDBPath/initParquet/prepareCopySQL/generateParquetFile`、`publish*ToParquet`、`syncMetricLibDate`、`cleanMetricLibHotWindow`、`syncParquetIncremental`、`syncBITableByWatermark`、`syncBITableSnapshot`、`getParquetRoot`、`buildParquetQuery` 等；`biTao` 整文件；`bi` 控制层的 `syncParquetFile/syncIncremental/initParquet/ajaxInstallDuckdb/ajaxCheckDuckdb` |
+| 配置 | `bi/config.php` 的 `cdnUrl/duckdbBin/duckdbExt/duckdbExtUrl/duckSQLTemp/duckdbExcludeTables/parquet*`、`columnTypes->duckdb`、`duckdb->ztvtables`；`config/config.php` 的 `enableDuckdb`；`TABLE_DUCKDBQUEUE`、`TABLE_DUCKDB_SYNC` |
+| 队列 | `module/queue/config.php` 的 `bi.syncIncremental` handler |
+| 数据 | 升级脚本把 `zt_chart/zt_pivot/zt_dataview` 的 `driver='duckdb'` 回写为 `mysql`，并清理 `bi.defaultDriver` 配置与 `bi.syncParquetFile` cron |
 
-- MySQL：验证增量、水位、分区重写。
-- PostgreSQL：验证 SQL 方言和类型映射。
-- 达梦/高斯：验证 DAO 查询与导出结果一致。
-
-DuckDB 侧不引入任何数据库 Scanner/Extension，三平台行为一致。
-
-## 12. 实施阶段
-
-1. 日志域：维持现有 Runtime Publisher，完成 JSONL→Parquet。
-2. 度量域：`zt_metriclib` 先落库；增加度量同步任务（今日高频、历史低频）。
-3. BI 域：按 08 文档实现 idrange + 双水位 + Manifest。
-4. 统一查询层：domain 路由 + 固定模板 + 白名单。
-5. 方言矩阵：MySQL/PG/DM/Gauss 各跑一轮同步与查询契约测试。
-
-## 13. 边界与风险
-
-- DuckDB 不承诺跨域事务一致性，只提供分析副本。
-- 实时查询依赖业务库，Parquet 只做趋势和历史分析。
-- idrange 大小和同步频率需要按表调优。
-- 不共享可写 `.duckdb` 文件；如需要本地加速，使用节点本地缓存。
-
-## 14. 参考
+## 10. 参考
 
 - [可观测性设计](./05-observability.md)
-- [MySQL 到 Parquet 增量同步设计](./08-mysql-parquet-sync.md)
+- [MySQL 到 Parquet 增量同步设计](./08-mysql-parquet-sync.md)（22.7 已废弃，仅作历史记录）
 - [Runtime 日志系统开发文档](../development/05-logging-system-development.md)
 
-## 15. 实施状态
+## 11. 实施状态
 
 - 日志域：JSONL 转换成功后删除（`jsonlDeleteAfterConvert`）已实现；
   `zentao logs` 已合并 active/未转换 JSONL 与 Parquet 结果。
-- PHP 侧基础库：`zentaopms/lib/parquet/parquet.class.php` 已提供 Manifest
-  原子读写、路径布局和 idrange 计算，供 metrics/bi 两类场景共用。
-- `zt_duckdbsync`：22.6 升级 SQL 已建表，BI Tao 已提供状态读写与表级锁
-  （fetch/save/lock/unlock）。
-- PHP 发布层：`publishRowsToParquet`（idrange，BI）与
-  `publishMetricRowsToParquet`（date，度量）共用 CSV→DuckDB→Parquet 转换；
-  `syncMetricLibDate` 已提供按日整分区重写入口。
-- 度量生命周期：`scope=current/history` 独立分区与 Manifest 已实现；
-  `cleanMetricLibHotWindow` 提供热窗口清理（今年/本月/本周/今天，无日期保留）。
-- BI 同步：`syncBITableByWatermark` 已按白名单 + 双水位取数 + idrange 整分区
-  重写实现，并更新 `zt_duckdbsync` 水位。
-- 统一增量编排：`biModel::syncParquetIncremental()` 已提供（BI 白名单表
-  双水位 + metriclib 按日期/热窗口同步），cron handler 白名单含
-  `bi.syncIncremental`；修复了同步器写死 `editedDate` 的问题（22.6 业务表
-  使用 `lastEditedDate`，按表可配置），异常路径会释放 `zt_duckdbsync` 锁。
-- full_snapshot：`biModel::syncBITableSnapshot()` 已实现（按 idrange 整表
-  重写、空表发布空 Manifest），product 与 user 已纳入默认快照表；user
-  按 `parquetSnapshotFields` 白名单只写入 id/company/dept/account/realname/
-  avatar/type/role/visions/clientStatus/deleted，password、邮箱、电话等
-  敏感列不进入分析副本（真实 DuckDB 验证列集合）；发布层会在 Manifest
-  切换后删除不再引用的旧 part。
-- metriclib 热窗口闭环：滚出热窗口的日期同步到 history 分区并从 MySQL
-  删除，热窗口（今年/本月/本周/今天）保留在 current 分区；真实 DuckDB
-  CLI 端到端验证通过。
-- 待支持：PostgreSQL/DM/Gauss 端到端同步矩阵；更多小表快照白名单可按
-  `parquetSnapshotFields` 扩展。
-- 查询路由：`buildParquetQuery(domain, table, dateRange, where)` 已按
-  metrics/bi 分域从 Manifest 生成只读 `read_parquet` SQL；logs 域由 Runtime
-  `zentao logs` 负责。
-- 真实 DuckDB v1.5.5 CLI 已验证：CSV→Parquet 批量转换、Manifest→
-  read_parquet 查询闭环通过。
-- MySQL 真实端到端已验证：新建测试库 `zentao_parquet_test`，PDO 读取
-  `zt_metriclib` → CSV → Parquet（scope=current）→ DuckDB 查询；热窗口
-  清理 SQL 验证只删除历史行、保留当前行。
-- 待验证：PostgreSQL/DM/Gauss 端到端同步矩阵（需对应数据库环境）。
+- 日志域的 DuckDB/Parquet 实现全部在 `runtime/internal/observability/`，PHP 侧只通过 HTTP 桥交互。
+- PHP 侧度量/BI 分析副本：22.7 已按第 9 章移除，业务查询回到业务库；
+  升级脚本负责清理遗留表、配置与 `driver` 数据。
+- 待验证：PostgreSQL/DM/Gauss 环境下 BI/度量查询走业务库的端到端矩阵。

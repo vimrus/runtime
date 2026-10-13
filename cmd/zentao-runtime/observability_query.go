@@ -58,6 +58,11 @@ func (h *host) observabilityQueryBridge(ctx context.Context, request web.QueryRe
 	}
 
 	fieldValues := map[string]string{}
+	for key, value := range filters.Fields {
+		if value != "" {
+			fieldValues[key] = value
+		}
+	}
 	for key, value := range map[string]string{
 		"topic":     filters.Topic,
 		"module":    filters.Module,
@@ -74,7 +79,7 @@ func (h *host) observabilityQueryBridge(ctx context.Context, request web.QueryRe
 	datasetRoot := h.config.Observability.DatasetRoot
 	maxDays := h.config.Observability.LogDays
 	if maxDays <= 0 {
-		maxDays = 7
+		maxDays = 30
 	}
 	logsDir := h.logsDir
 	sources := h.jsonlSources

@@ -16,6 +16,13 @@ scripts/native/build-linux.sh
 
 产物位于 `dist/runtime-linux-amd64/` 或 `dist/runtime-linux-arm64/`。Linux Runtime 不做正式交叉编译；构建 arm64 时请在 arm64 Linux 主机或原生 arm64 Runner 上执行。构建脚本会使用 `packaging/runtime/Dockerfile` 生成 Runtime 制品并执行校验。
 
+`dist/runtime-linux-<arch>/` 同时也是可运行的安装根目录（`bin/zentao serve`
+可直接在该目录执行）。重新构建时脚本只替换 Runtime 自己的文件（`bin/`、
+`php/`、`config/php.ini`、`config/conf.d`、`config/dm_svc.conf`、
+`config/runtime.example.toml`），操作方放置的内容——`config/runtime.toml`、
+已安装的应用目录（`app/`、`apps/`）、`data/`、`logs/`、`run/`、
+`tmp-local/`、`observability/`、`spool/`——会被保留。
+
 如需覆盖 Go 代理或 Debian 镜像源：
 
 ```bash
@@ -23,6 +30,17 @@ GOPROXY=https://goproxy.cn,direct \
 DEBIAN_MIRROR=http://deb.debian.org/debian \
 scripts/native/build-linux.sh
 ```
+
+也可以把这些设置写进仓库根目录的 `build.env`（本地文件，不入库），构建脚本会自动加载并导出：
+
+```bash
+# build.env —— 网络受限时给 Docker 构建配置出站代理
+HTTPS_PROXY=socks5://10.0.0.8:3127
+ALL_PROXY=socks5://10.0.0.8:3127
+NO_PROXY=mirrors.ustc.edu.cn,goproxy.cn,www.php.net,downloads.ioncube.com,localhost,127.0.0.1
+```
+
+代理会作为预定义 build-arg 注入 Docker 构建（不影响构建缓存键）；`NO_PROXY` 中的 Debian 镜像、GOPROXY、PHP/ionCube 下载保持直连。Debian 镜像是 http 源，建议让它在 `NO_PROXY` 中直连（apt 对 socks5 代理支持有限）；只有镜像本身需要走代理时才额外设置 `HTTP_PROXY`。`build.env` 同样可以覆盖 `GOPROXY`、`DEBIAN_MIRROR` 等变量。
 
 ## Windows Runtime
 

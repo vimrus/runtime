@@ -19,6 +19,12 @@ logMaxBytes = 16777216
 # When observability.jsonlKeepDays is positive, day-based retention takes
 # precedence and logMaxBackups no longer trims Runtime JSONL segments.
 logMaxBackups = 5
+# PHP error_log rotation (logs/php-error.log). The file is written by the
+# embedded PHP process and cannot be signalled to reopen, so the Runtime
+# rotates it with copytruncate at a one-minute check interval. Day-based
+# retention reuses observability.jsonlKeepDays.
+phpErrorLogMaxBytes = 16777216
+phpErrorLogMaxBackups = 5
 # Audit log path; empty uses logs/audit-<nodeID>.jsonl.
 # auditLog = ""
 # Built-in audit rotation: size threshold, rotated backups and day retention.
@@ -32,7 +38,9 @@ nodeID = ""
 clusterID = ""
 
 [web]
-# PHP application document root, relative to the installation root.
+# Deprecated single-application document root, relative to the installation root.
+# New installations declare applications with [[apps]] below; web.root is kept
+# for existing installations and is rejected when [[apps]] is present.
 root = "app/zentaopms/www"
 # HTTP bind address and port. 0.0.0.0 listens on all IPv4 interfaces.
 listen = "0.0.0.0:8080"
@@ -44,6 +52,36 @@ readHeaderTimeout = "10s"
 idleTimeout = "30s"
 # Maximum accepted HTTP header size in bytes.
 maxHeaderBytes = 16384
+
+# Applications are pluggable: the Runtime artifact never contains application
+# code. Each entry declares one application served on this listener. At most
+# one application may use "/"; other applications use a unique sub-path prefix.
+# Every application keeps its own database environment, data, session and temp
+# roots. Explicit env values win over the generated defaults
+# (ZT_WEB_ROOT, ZT_APP_ID, ZT_DATA_ROOT, ZT_TMP_ROOT, ZT_SESSION_PATH,
+# ZT_APISESSION_PATH).
+#
+# [[apps]]
+# id = "zentao-ipd"
+# path = "/ipd"
+# dir = "apps/zentao-ipd-22.6"
+# webRoot = "www"
+# dataDir = "data/apps/zentao-ipd"     # optional, default data/apps/<id>
+# tmpDir = "tmp-local/zentao-ipd"      # optional, default tmp-local/<id>
+# enabled = true
+# env = { ZT_DB_NAME = "zentao_ipd" }
+#
+# Per-application Queue Bridge. Every queue-enabled application gets its own
+# loopback namespace (/internal/runtime/queue/v1/apps/<id>), its own token
+# (generated per start when empty, injected as ZENTAO_QUEUE_TOKEN for this
+# application only) and its own in-application URL template. The template must
+# start with "/" and contain exactly one {endpoint} placeholder; it is
+# rewritten to <app path prefix> + template.
+#
+# queue = { enabled = true, bridgeUrlTemplate = "/bridge.php?endpoint={endpoint}" }
+#
+# Applications that still expose the bridge through their router can keep the
+# legacy default by omitting bridgeUrlTemplate (PATH_INFO request mode only).
 
 [queue]
 # Enable the PHP Queue Bridge worker engine.
@@ -103,7 +141,7 @@ maxFlushInterval = "10m"
 # Number of days to retain metrics.
 metricsDays = 30
 # Number of days to retain logs.
-logDays = 7
+logDays = 30
 # Interval for converting JSONL files to Parquet.
 jsonlConvertInterval = "1h"
 # JSONL source names to convert.
@@ -113,13 +151,3 @@ jsonlKeepDays = 7
 # Remove sealed JSONL segments after successful conversion and state save.
 # Disable only when raw JSONL must be retained for compliance or debugging.
 jsonlDeleteAfterConvert = true
-
-[cache]
-# Enable the in-process bounded memory cache and private Cache Bridge.
-enabled = true
-# Private loopback listener for the Cache Bridge.
-listen = "127.0.0.1:8083"
-# Total cache byte budget.
-maxCostBytes = 268435456
-# Maximum single value size in bytes.
-maxValueBytes = 1048576

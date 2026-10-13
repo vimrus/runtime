@@ -5,6 +5,12 @@
 #
 # For external PostgreSQL or MySQL, do not start the mysql service and
 # configure the application database through ZenTao environment variables.
+#
+# The Runtime requires config/runtime.toml (a missing configuration file is a
+# startup error). Prepare it before starting the stack:
+#   mkdir -p packaging/docker/config
+#   cp config/runtime.example.toml packaging/docker/config/runtime.toml
+#   # edit web.listen / [[apps]] as needed
 services:
   web:
     image: ghcr.io/vimrus/zentao:dev
@@ -14,10 +20,6 @@ services:
       target: runtime
     command: ["serve"]
     environment:
-      ZENTAO_RUNTIME_ROOT: /opt/zentao/app/zentaopms/www
-      ZENTAO_RUNTIME_LISTEN: "0.0.0.0:8080"
-      ZENTAO_RUNTIME_CONTROL_SOCKET: /run/zentao/runtime.sock
-      ZENTAO_RUNTIME_PID_FILE: /run/zentao/runtime.pid
       ZT_DB_DRIVER: "${ZT_DB_DRIVER:-mysql}"
       ZT_DB_HOST: "${ZT_DB_HOST:-mysql}"
       ZT_DB_PORT: "${ZT_DB_PORT:-3306}"
@@ -32,7 +34,8 @@ services:
         condition: service_healthy
         required: false
     volumes:
-      - zentao-app:/opt/zentao/app
+      - ./config:/opt/zentao/config:ro
+      - zentao-apps:/opt/zentao/apps
       - zentao-data:/opt/zentao/data
       - zentao-observability:/opt/zentao/observability
       - zentao-spool:/opt/zentao/spool/observability
@@ -66,7 +69,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  zentao-app:
+  zentao-apps:
   zentao-data:
   zentao-observability:
   zentao-spool:

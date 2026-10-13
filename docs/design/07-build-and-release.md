@@ -594,12 +594,13 @@ stage/
     conf.d/10-opcache.ini
   observability/         # 安装后创建，staging 中保持为空
   spool/observability/   # 安装后创建且必须位于本地持久盘
-  app/
   licenses/
   manifest.json
 ```
 
-staging artifact 内不包含数据库数据、日志、运行时生成的密钥和用户配置。
+staging artifact 内不包含数据库数据、日志、运行时生成的密钥和用户配置，
+也不包含任何应用代码：应用是独立的平台无关制品，安装后按
+`config/runtime.toml` 的 `[[apps]]` 装载。
 
 ## 11. Windows Runtime 构建设计
 
@@ -668,7 +669,6 @@ stage/
     php.ini
     conf.d/00-ioncube.ini
     conf.d/10-opcache.ini
-  app/
   service/
     zentao-runtime-service.xml
   licenses/

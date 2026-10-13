@@ -31,10 +31,11 @@ type Config struct {
 }
 
 type Client struct {
-	base    string
-	token   string
-	timeout time.Duration
-	http    *http.Client
+	base      string
+	appPrefix bool
+	token     string
+	timeout   time.Duration
+	http      *http.Client
 }
 
 func New(config Config) (*Client, error) {
@@ -52,16 +53,21 @@ func New(config Config) (*Client, error) {
 		return nil, err
 	}
 	// The Bridge path constants already carry the fixed
-	// /internal/runtime/queue/v1 prefix, so normalize the base URL to the
-	// loopback origin. Accepts both "http://127.0.0.1:8081" and the full
-	// prefix form from older configurations.
-	parsed.Path = ""
+	// /internal/runtime/queue/v1 prefix. Accept the legacy full-prefix form
+	// ("http://127.0.0.1:8081/internal/runtime/queue/v1") by trimming it, and
+	// keep any per-application prefix
+	// ("/internal/runtime/queue/v1/apps/<id>") as the base path. With an
+	// application prefix present the constants contribute only the endpoint
+	// part, otherwise the per-application URL would repeat the prefix.
+	appPrefix := strings.TrimSuffix(strings.TrimRight(parsed.Path, "/"), "/internal/runtime/queue/v1")
+	parsed.Path = appPrefix
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
 	return &Client{
-		base:    strings.TrimRight(parsed.String(), "/"),
-		token:   config.Token,
-		timeout: config.RequestTimeout,
+		base:      strings.TrimRight(parsed.String(), "/"),
+		appPrefix: appPrefix != "",
+		token:     config.Token,
+		timeout:   config.RequestTimeout,
 		http: &http.Client{
 			Timeout: config.RequestTimeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -142,11 +148,15 @@ func (c *Client) Schedule(ctx context.Context, request bridge.ScheduleRequest) (
 }
 
 func (c *Client) post(ctx context.Context, path string, request bridge.Request, response bridge.Response) error {
+	target := c.base + path
+	if c.appPrefix {
+		target = c.base + strings.TrimPrefix(path, "/internal/runtime/queue/v1")
+	}
 	body, err := bridge.Encode(request)
 	if err != nil {
 		return fmt.Errorf("encode queue bridge request: %w", err)
 	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, bytes.NewReader(body))
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

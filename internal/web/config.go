@@ -2,6 +2,9 @@ package web
 
 import (
 	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -11,10 +14,16 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/rewrite"
 	"github.com/caddyserver/caddy/v2/modules/logging"
 	frankencaddy "github.com/dunglas/frankenphp/caddy"
+
+	"github.com/vimrus/runtime/internal/queue/bridge"
 )
 
 type Options struct {
+	// Root is the deprecated single-application document root. It is only
+	// used when Apps is empty, keeping installations that still configure
+	// web.root working unchanged.
 	Root                string
+	Apps                []App
 	Listen              string
 	Threads             int
 	ReadHeaderTimeout   time.Duration
@@ -24,7 +33,22 @@ type Options struct {
 	AccessLogKeepDays   int
 	QueueBridge         QueueBridgeOptions
 	ObservabilityBridge ObservabilityBridgeOptions
-	CacheBridge         CacheBridgeOptions
+}
+
+// App is one application route served by the Runtime. Applications are
+// pluggable: the Runtime only needs the document root, the URL prefix and
+// the per-application PHP environment.
+type App struct {
+	ID     string
+	Prefix string
+	Root   string
+	Env    map[string]string
+	// Available is false when the application document root does not exist or
+	// is not a directory. Unavailable applications are served as a 503
+	// placeholder instead of PHP/file handlers: registering a handler with a
+	// missing root would abort Caddy provisioning and with it the whole
+	// Runtime, which must stay usable while an application is detached.
+	Available bool
 }
 
 // QueueBridgeOptions configures the private loopback listener that exposes
@@ -32,7 +56,21 @@ type Options struct {
 type QueueBridgeOptions struct {
 	Enabled bool
 	Listen  string
-	Token   string
+	// Token is the legacy single-application bridge token. It is only used
+	// when Apps is empty.
+	Token string
+	// Apps declares per-application bridges: namespaced loopback paths, one
+	// token per application and the in-application URL template the bridge
+	// endpoint names are rewritten into.
+	Apps []QueueBridgeApp
+}
+
+// QueueBridgeApp describes one application's private Queue Bridge.
+type QueueBridgeApp struct {
+	ID       string
+	Prefix   string
+	Token    string
+	Template string
 }
 
 // ObservabilityBridgeOptions configures the private loopback listener that
@@ -44,17 +82,14 @@ type ObservabilityBridgeOptions struct {
 	Sink    EventSink
 }
 
-// CacheBridgeOptions configures the private loopback listener for the Cache
-// Bridge.
-type CacheBridgeOptions struct {
-	Enabled bool
-	Listen  string
-	Token   string
-}
-
 // Config builds the smallest useful Classic-mode Caddy configuration.
 func Config(options Options) *caddy.Config {
-	root := options.Root
+	apps := options.Apps
+	if len(apps) == 0 && options.Root != "" {
+		// The deprecated direct-root form always describes an installed
+		// application; availability is only evaluated by the Runtime.
+		apps = []App{{ID: "zentao", Prefix: "/", Root: options.Root, Available: true}}
+	}
 	healthRoute := func(kind string, paths ...string) caddyhttp.Route {
 		return caddyhttp.Route{
 			MatcherSetsRaw: []caddy.ModuleMap{{
@@ -65,46 +100,31 @@ func Config(options Options) *caddy.Config {
 		}
 	}
 
-	rewriteRoute := caddyhttp.Route{
-		MatcherSetsRaw: []caddy.ModuleMap{{
-			"file": caddyconfig.JSON(fileserver.MatchFile{
-				Root:      root,
-				TryFiles:  []string{"{http.request.uri.path}", "{http.request.uri.path}/index.php", "index.php"},
-				SplitPath: []string{".php"},
-			}, nil),
-		}},
-		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{
-			URI: "{http.matchers.file.relative}{http.matchers.file.remainder}",
-		}, "handler", "rewrite", nil)},
+	routes := caddyhttp.RouteList{
+		healthRoute("liveness", "/_runtime/healthz", "/_runtime/liveness"),
+		healthRoute("readiness", "/_runtime/readiness"),
+	}
+	// Sub-path applications must be matched before the root application so
+	// that the root prefix remains the fallback.
+	for _, app := range orderApps(apps) {
+		if !app.Available {
+			routes = append(routes, unavailableApplicationRoute(app))
+			continue
+		}
+		routes = append(routes, applicationRoute(app))
+	}
+	if len(apps) == 0 {
+		routes = append(routes, staticResponseRoute(503, `{"status":"unavailable","reason":"no application configured"}`))
+	} else if !hasRootApp(apps) {
+		routes = append(routes, staticResponseRoute(404, `{"status":"not_found"}`))
 	}
 
-	phpRoute := caddyhttp.Route{
-		MatcherSetsRaw: []caddy.ModuleMap{{
-			"path": caddyconfig.JSON(caddyhttp.MatchPath{"*.php", "*.php/*"}, nil),
-		}},
-		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(frankencaddy.FrankenPHPModule{
-			Root:      root,
-			SplitPath: []string{".php"},
-		}, "handler", "php", nil)},
-	}
-
-	fileRoute := caddyhttp.Route{
-		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(fileserver.FileServer{
-			Root: root,
-		}, "handler", "file_server", nil)},
-	}
-
-	subroute := caddyhttp.Subroute{Routes: caddyhttp.RouteList{rewriteRoute, phpRoute, fileRoute}}
 	server := &caddyhttp.Server{
 		Listen:            []string{options.Listen},
 		ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
 		IdleTimeout:       caddy.Duration(options.IdleTimeout),
 		MaxHeaderBytes:    options.MaxHeaderBytes,
-		Routes: caddyhttp.RouteList{
-			healthRoute("liveness", "/_runtime/healthz", "/_runtime/liveness"),
-			healthRoute("readiness", "/_runtime/readiness"),
-			{HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(subroute, "handler", "subroute", nil)}},
-		},
+		Routes:            routes,
 	}
 
 	servers := map[string]*caddyhttp.Server{"zentao": server}
@@ -113,29 +133,63 @@ func Config(options Options) *caddy.Config {
 		if bridgeListen == "" {
 			bridgeListen = "127.0.0.1:8081"
 		}
-		bridgeRoutes := caddyhttp.RouteList{}
-		for _, endpoint := range []string{"capabilities", "claim", "execute", "heartbeat", "reap", "stats", "control", "schedule"} {
-			bridgeRoutes = append(bridgeRoutes, caddyhttp.Route{
-				MatcherSetsRaw: []caddy.ModuleMap{{
-					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/queue/v1/" + endpoint}, nil),
-				}},
-				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{
-					URI: "/index.php/queue-" + endpoint,
-				}, "handler", "rewrite", nil)},
-			})
-		}
-		bridgeSubroute := caddyhttp.Subroute{Routes: append(bridgeRoutes, phpRoute, fileRoute)}
 		bridgeServer := &caddyhttp.Server{
 			Listen:            []string{bridgeListen},
 			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
 			IdleTimeout:       caddy.Duration(options.IdleTimeout),
 			MaxHeaderBytes:    options.MaxHeaderBytes,
-			Routes: caddyhttp.RouteList{
+		}
+		if len(options.QueueBridge.Apps) == 0 {
+			/* Legacy single-application bridge: flat endpoint paths, one token. */
+			bridgeRoutes := caddyhttp.RouteList{}
+			for _, endpoint := range queueBridgeEndpoints {
+				bridgeRoutes = append(bridgeRoutes, bridgeRewriteRoute("/internal/runtime/queue/v1/"+endpoint, "/index.php/queue-"+endpoint))
+			}
+			bridge := bridgeApp(apps)
+			bridgeInner := caddyhttp.RouteList{}
+			if bridge.Available {
+				bridgeInner = applicationInnerRoutes(bridge)
+			} else {
+				bridgeInner = caddyhttp.RouteList{
+					staticResponseRoute(503, `{"status":"unavailable","reason":"queue bridge has no application"}`),
+				}
+			}
+			bridgeServer.Routes = caddyhttp.RouteList{
 				{HandlersRaw: []json.RawMessage{
 					caddyconfig.JSONModuleObject(QueueAuth{Token: options.QueueBridge.Token}, "handler", "zentao_queue_auth", nil),
-					caddyconfig.JSONModuleObject(bridgeSubroute, "handler", "subroute", nil),
+					caddyconfig.JSONModuleObject(caddyhttp.Subroute{Routes: append(bridgeRoutes, bridgeInner...)}, "handler", "subroute", nil),
 				}},
-			},
+			}
+		} else {
+			/* Per-application bridges: each application gets its own namespace,
+			 * its own token and its own in-application URL template. */
+			bridgeRoutes := caddyhttp.RouteList{}
+			for _, queueApp := range options.QueueBridge.Apps {
+				bridgeTarget, found := findApp(apps, queueApp.ID)
+				if !found || !bridgeTarget.Available {
+					continue
+				}
+				appRoutes := caddyhttp.RouteList{}
+				for _, endpoint := range queueBridgeEndpoints {
+					target := strings.ReplaceAll(queueApp.Template, "{endpoint}", endpoint)
+					appRoutes = append(appRoutes, bridgeRewriteRoute(bridge.AppBasePath(queueApp.ID)+"/"+endpoint, joinBridgePath(queueApp.Prefix, target)))
+				}
+				appRoutes = append(appRoutes, applicationInnerRoutes(bridgeTarget)...)
+				bridgeRoutes = append(bridgeRoutes, caddyhttp.Route{
+					MatcherSetsRaw: []caddy.ModuleMap{{
+						"path": caddyconfig.JSON(caddyhttp.MatchPath{bridge.AppBasePath(queueApp.ID), bridge.AppBasePath(queueApp.ID) + "/*"}, nil),
+					}},
+					HandlersRaw: []json.RawMessage{
+						caddyconfig.JSONModuleObject(QueueAuth{Token: queueApp.Token}, "handler", "zentao_queue_auth", nil),
+						caddyconfig.JSONModuleObject(caddyhttp.Subroute{Routes: appRoutes}, "handler", "subroute", nil),
+					},
+				})
+			}
+			if len(bridgeRoutes) == 0 {
+				bridgeRoutes = append(bridgeRoutes, staticResponseRoute(503, `{"status":"unavailable","reason":"queue bridge has no application"}`))
+			}
+			bridgeRoutes = append(bridgeRoutes, staticResponseRoute(404, `{"status":"not_found"}`))
+			bridgeServer.Routes = bridgeRoutes
 		}
 		servers["queuebridge"] = bridgeServer
 	}
@@ -170,27 +224,6 @@ func Config(options Options) *caddy.Config {
 			},
 		}
 		servers["observability"] = observabilityServer
-	}
-	if options.CacheBridge.Enabled {
-		cacheListen := options.CacheBridge.Listen
-		if cacheListen == "" {
-			cacheListen = "127.0.0.1:8083"
-		}
-		cacheServer := &caddyhttp.Server{
-			Listen:            []string{cacheListen},
-			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
-			IdleTimeout:       caddy.Duration(options.IdleTimeout),
-			MaxHeaderBytes:    options.MaxHeaderBytes,
-			Routes: caddyhttp.RouteList{{
-				MatcherSetsRaw: []caddy.ModuleMap{{
-					"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/cache/v1/*"}, nil),
-				}},
-				HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(CacheBridge{
-					Token: options.CacheBridge.Token,
-				}, "handler", "zentao_cache_bridge", nil)},
-			}},
-		}
-		servers["cache"] = cacheServer
 	}
 
 	persist := false
@@ -248,6 +281,190 @@ func Config(options Options) *caddy.Config {
 		}
 	}
 	return config
+}
+
+// orderApps returns the applications with sub-path prefixes first so that a
+// root application, if any, stays the final fallback.
+func orderApps(apps []App) []App {
+	ordered := make([]App, 0, len(apps))
+	for _, app := range apps {
+		if app.Prefix != "/" {
+			ordered = append(ordered, app)
+		}
+	}
+	for _, app := range apps {
+		if app.Prefix == "/" {
+			ordered = append(ordered, app)
+		}
+	}
+	return ordered
+}
+
+func hasRootApp(apps []App) bool {
+	for _, app := range apps {
+		if app.Prefix == "/" {
+			return true
+		}
+	}
+	return false
+}
+
+// unavailableApplicationRoute answers every request for one application
+// prefix with a 503 placeholder. It is used instead of PHP/file handlers when
+// the application is detached so that Caddy provisioning cannot fail.
+func unavailableApplicationRoute(app App) caddyhttp.Route {
+	prefix := app.Prefix
+	if prefix == "" || prefix == "/" {
+		return staticResponseRoute(503, `{"status":"unavailable","reason":"application `+app.ID+` is not installed"}`)
+	}
+	return caddyhttp.Route{
+		MatcherSetsRaw: []caddy.ModuleMap{{
+			"path": caddyconfig.JSON(caddyhttp.MatchPath{prefix, prefix + "/*"}, nil),
+		}},
+		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(caddyhttp.StaticResponse{
+			StatusCode: caddyhttp.WeakString("503"),
+			Headers: http.Header{
+				"Content-Type":  []string{"application/json"},
+				"Cache-Control": []string{"no-store"},
+			},
+			Body: `{"status":"unavailable","reason":"application ` + app.ID + ` is not installed"}`,
+		}, "handler", "static_response", nil)},
+		Terminal: true,
+	}
+}
+
+// bridgeApp selects the application that serves the private Queue Bridge
+// endpoints, keeping its document root and PHP environment. The root
+// application wins; otherwise the first declared application is used.
+func bridgeApp(apps []App) App {
+	for _, app := range apps {
+		if app.Prefix == "/" {
+			return App{ID: "queuebridge", Prefix: "/", Root: app.Root, Env: app.Env, Available: app.Available}
+		}
+	}
+	if len(apps) > 0 {
+		return App{ID: "queuebridge", Prefix: "/", Root: apps[0].Root, Env: apps[0].Env, Available: apps[0].Available}
+	}
+	return App{ID: "queuebridge", Prefix: "/"}
+}
+
+var queueBridgeEndpoints = []string{"capabilities", "claim", "execute", "heartbeat", "reap", "stats", "control", "schedule"}
+
+// bridgeRewriteRoute matches one loopback bridge path and rewrites it to the
+// application-internal target URL.
+func bridgeRewriteRoute(matchPath, target string) caddyhttp.Route {
+	return caddyhttp.Route{
+		MatcherSetsRaw: []caddy.ModuleMap{{
+			"path": caddyconfig.JSON(caddyhttp.MatchPath{matchPath}, nil),
+		}},
+		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{URI: target}, "handler", "rewrite", nil)},
+	}
+}
+
+// joinBridgePath prefixes an in-application bridge URL with the application's
+// public path prefix; the root application keeps the URL unchanged.
+func joinBridgePath(prefix, target string) string {
+	if prefix == "" || prefix == "/" {
+		return target
+	}
+	return strings.TrimRight(prefix, "/") + target
+}
+
+func findApp(apps []App, id string) (App, bool) {
+	for _, app := range apps {
+		if app.ID == id {
+			return app, true
+		}
+	}
+	return App{}, false
+}
+
+func applicationRoute(app App) caddyhttp.Route {
+	prefix := app.Prefix
+	if prefix == "" {
+		prefix = "/"
+	}
+	inner := applicationInnerRoutes(app)
+	routes := caddyhttp.RouteList{}
+	if prefix != "/" {
+		// Requests for the bare prefix (no trailing slash) are served as the
+		// application root. Stripping the prefix here would leave an empty
+		// path, so rewrite it to "/" explicitly.
+		routes = append(routes, caddyhttp.Route{
+			MatcherSetsRaw: []caddy.ModuleMap{{
+				"path": caddyconfig.JSON(caddyhttp.MatchPath{prefix}, nil),
+			}},
+			HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{URI: "/"}, "handler", "rewrite", nil)},
+		})
+
+		// The prefix only affects file lookup and PATH_INFO/SCRIPT_NAME:
+		// FrankenPHP still hands PHP the original REQUEST_URI, and
+		// ZT_WEB_ROOT tells the application about its public prefix.
+		routes = append(routes, caddyhttp.Route{HandlersRaw: []json.RawMessage{
+			caddyconfig.JSONModuleObject(rewrite.Rewrite{StripPathPrefix: prefix}, "handler", "rewrite", nil),
+		}})
+	}
+	routes = append(routes, inner...)
+	subroute := caddyhttp.Subroute{Routes: routes}
+	handler := json.RawMessage(caddyconfig.JSONModuleObject(subroute, "handler", "subroute", nil))
+	if prefix == "/" {
+		return caddyhttp.Route{HandlersRaw: []json.RawMessage{handler}}
+	}
+	return caddyhttp.Route{
+		MatcherSetsRaw: []caddy.ModuleMap{{
+			"path": caddyconfig.JSON(caddyhttp.MatchPath{prefix, prefix + "/*"}, nil),
+		}},
+		HandlersRaw: []json.RawMessage{handler},
+	}
+}
+
+// applicationInnerRoutes builds the classic-mode file, PHP and static
+// handlers for one application document root.
+func applicationInnerRoutes(app App) caddyhttp.RouteList {
+	root := app.Root
+	env := app.Env
+	rewriteRoute := caddyhttp.Route{
+		MatcherSetsRaw: []caddy.ModuleMap{{
+			"file": caddyconfig.JSON(fileserver.MatchFile{
+				Root:      root,
+				TryFiles:  []string{"{http.request.uri.path}", "{http.request.uri.path}/index.php", "index.php"},
+				SplitPath: []string{".php"},
+			}, nil),
+		}},
+		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(rewrite.Rewrite{
+			URI: "{http.matchers.file.relative}{http.matchers.file.remainder}",
+		}, "handler", "rewrite", nil)},
+	}
+	phpRoute := caddyhttp.Route{
+		MatcherSetsRaw: []caddy.ModuleMap{{
+			"path": caddyconfig.JSON(caddyhttp.MatchPath{"*.php", "*.php/*"}, nil),
+		}},
+		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(frankencaddy.FrankenPHPModule{
+			Root:      root,
+			SplitPath: []string{".php"},
+			Env:       env,
+		}, "handler", "php", nil)},
+	}
+	fileRoute := caddyhttp.Route{
+		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(fileserver.FileServer{
+			Root: root,
+		}, "handler", "file_server", nil)},
+	}
+	return caddyhttp.RouteList{rewriteRoute, phpRoute, fileRoute}
+}
+
+func staticResponseRoute(status int, body string) caddyhttp.Route {
+	return caddyhttp.Route{
+		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(caddyhttp.StaticResponse{
+			StatusCode: caddyhttp.WeakString(strconv.Itoa(status)),
+			Headers: http.Header{
+				"Content-Type":  []string{"application/json"},
+				"Cache-Control": []string{"no-store"},
+			},
+			Body: body,
+		}, "handler", "static_response", nil)},
+		Terminal: true,
+	}
 }
 
 // accessLogEncoderRaw returns a Caddy filter encoder that keeps the JSON

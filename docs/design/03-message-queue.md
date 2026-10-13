@@ -419,7 +419,7 @@ RFC 3339（微秒精度）。列名与 Bridge JSON 字段名保持一致（`uuid
 
 ```text
 nodeID, tokenHash, heartbeatTime,
-state(active|paused|draining), startedDate, version, editedDate
+state(active|stopped|paused|draining), startedDate, version, editedDate
 ```
 
 `tokenHash` 只存 Bridge 随机凭据的 HMAC 哈希，不存明文。普通 Worker 通过条件
@@ -1126,7 +1126,7 @@ Go 包中不得出现数据库 Driver、SQL、数据库连接池或数据库凭�
 
 ```text
 zentaopms/module/cron/  定时任务系统：规则界面、调度扫描与 scheduler 单例租约
-  control.php         定时任务管理页、ajaxExec/rrSchedule/rrConsume 兼容入口
+  control.php         定时任务管理页、ajaxExec 兜底入口
   model.php           runSchedule 调度扫描、enqueueCron 调度入队（持有事务与 lastTime）、
                       acquireSchedulerLease/acquireRuntimeSchedulerLease、scheduleRuntime（Bridge 回调）
 
@@ -1166,9 +1166,9 @@ Phase 0: 迁移旧 zt_queue 到新结构，新建 zt_queueexec/zt_servernode，�
 Phase 1: 实现 PHP Queue Service、Portable CAS 与 Bridge 8 端点，
          Runtime 集成冒烟（领取→执行→ACK→重试→reap）
 Phase 2: 改造 cron 入队（zt_cron 调度保留，任务走新队列），
-         将旧消费逻辑限制为 RoadRunner/Web 兼容入口
+         将旧消费逻辑限制为 Web 兜底入口
 Phase 3: 上线管理界面、指标、Retry 和 Dead Letter
-Phase 4: 确认稳定后保留并维护 RoadRunner/Web 兼容入口
+Phase 4: 确认稳定后保留并维护 Web 兜底入口（原 RoadRunner 入口已于 22.7 移除）
 ```
 
 同一业务任务不能同时被新旧 Consumer 执行。升级 SQL 与现有 update 文件惯例
@@ -1369,12 +1369,12 @@ PHP Handler Contract 的基础上增加 Redis、NATS 或其他传输，而不重
   并在真实 MySQL 上本地执行通过（入队/状态/取消、执行模式租约、消费循环、
   Runtime scheduler 跨进程单例），CI 单测镜像同样执行。
 - Handler 注册协议最小落地：`directHandlers` 白名单允许业务队列以
-  handler 名直接执行（首个为幂等的 `bi.syncIncremental`），Execute 对
+  handler 名直接执行（如幂等的 `queue.pruneFinished`），Execute 对
   direct handler 按 module.method fetch 执行、payload 作为参数；
   queueService/schedulerService 入队、状态与幂等去重已用真实 MySQL 契约
   验证。
 - Runtime Worker 联合执行已手动验证：真实 zentaopms + MySQL + Runtime
-  容器内，`bi.syncIncremental` direct 任务经 claim→execute→完成，任务
+  容器内，`queue.pruneFinished` direct 任务经 claim→execute→完成，任务
   状态从 queued 转为 succeeded。联合环境适配要点：`zt_config` 版本需与
   `config->version` 一致、安装后的 `install.php/upgrade.php` 需要移除、
   桥接端点需登记在 `config/privilege.php` 的 openMethods（已有）。

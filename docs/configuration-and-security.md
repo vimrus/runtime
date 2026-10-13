@@ -2,9 +2,12 @@
 
 ## 配置文件
 
-Runtime 内置系统默认配置。`config/runtime.example.toml` 是带注释的可选覆盖模板；只有需要修改监听地址、线程数、队列或观测选项时，才复制为同目录的 `config/runtime.toml`。未提供 `runtime.toml` 时直接使用内置默认值。应用、日志和观测目录等相对路径会按实际 Runtime 根目录自动解析。
+Runtime 固定读取安装根目录下的 `config/runtime.toml`，**该文件是必需的**：
+缺失时 `serve` 会直接报错并提示创建方式，不会静默使用内置默认值。
+`config/runtime.example.toml` 是带注释的模板。应用、日志和观测目录等相对
+路径会按实际 Runtime 根目录自动解析。
 
-需要覆盖默认值时，在 Runtime 根目录执行：
+首次使用在 Runtime 根目录执行：
 
 ```bash
 sudo install -m 0640 config/runtime.example.toml config/runtime.toml
@@ -14,17 +17,23 @@ Windows 也在 Runtime 根目录下创建 `config\runtime.toml`；`C:\Program Fi
 
 配置格式为严格 TOML；未知字段或不支持的 `schemaVersion` 会阻止启动。标准目录按约定解析；需要使用系统级目录时，也可以填写绝对路径。
 
+配置文件内的可选字段（监听地址、线程数、超时、队列与观测参数等）在省略时
+使用按安装根解析的内置默认值；必填的只有配置文件本身，以及 `[[apps]]` 中
+每个应用的 `id`、`path`、`dir`。
+
 ## Docker Compose
 
-未提供配置文件时直接使用镜像内置默认值：
+Compose 模板要求先准备宿主机的 `packaging/docker/config/runtime.toml`
+（该目录以只读方式挂载到容器 `/opt/zentao/config`）；缺失时容器启动会报
+配置文件不存在的错误：
 
 ```bash
+mkdir -p packaging/docker/config
+cp config/runtime.example.toml packaging/docker/config/runtime.toml
 docker compose -f packaging/docker/compose.yaml up -d web
 ```
 
-默认配置即可启动，Web 默认监听 `0.0.0.0:8080`（所有 IPv4 网卡）。只有需要自定义监听地址、线程数、队列或观测选项时，才编辑 `runtime.toml`。
-
-需要覆盖默认值时，将宿主机的 `runtime.toml` 只读挂载到容器 `/opt/zentao/config/runtime.toml`。数据库连接通过 `ZT_DB_*` 环境变量配置。
+数据库连接通过 `ZT_DB_*` 环境变量配置，应用目录放在 `apps/` 卷下。
 
 以下数据使用命名卷持久化，删除容器不会丢失：
 

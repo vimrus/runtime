@@ -25,6 +25,9 @@ if (-not $Lock.php.windows.runtime.url -or -not $Lock.php.windows.development.ur
 if (-not $Lock.ioncube.windows_x64.url) {
     throw "Windows ionCube Loader is not locked in versions.lock.json"
 }
+if (-not $Lock.apcu.windows_x64.url) {
+    throw "Windows apcu extension is not locked in versions.lock.json"
+}
 
 $Work = Join-Path $RepoRoot ".cache\windows-build"
 New-Item -ItemType Directory -Force -Path $Work, $Staging | Out-Null
@@ -43,13 +46,16 @@ function Get-VerifiedFile {
 $runtimeZip = Join-Path $Work "php-win.zip"
 $develZip = Join-Path $Work "php-devel.zip"
 $ioncubeZip = Join-Path $Work "ioncube-win.zip"
+$apcuZip = Join-Path $Work "apcu-win.zip"
 Get-VerifiedFile $Lock.php.windows.runtime.url $Lock.php.windows.runtime.sha256 $runtimeZip
 Get-VerifiedFile $Lock.php.windows.development.url $Lock.php.windows.development.sha256 $develZip
 Get-VerifiedFile $Lock.ioncube.windows_x64.url $Lock.ioncube.windows_x64.archive_sha256 $ioncubeZip
+Get-VerifiedFile $Lock.apcu.windows_x64.url $Lock.apcu.windows_x64.archive_sha256 $apcuZip
 
 Expand-Archive -Path $runtimeZip -DestinationPath (Join-Path $Work "php") -Force
 Expand-Archive -Path $develZip -DestinationPath (Join-Path $Work "devel") -Force
 Expand-Archive -Path $ioncubeZip -DestinationPath (Join-Path $Work "ioncube") -Force
+Expand-Archive -Path $apcuZip -DestinationPath (Join-Path $Work "apcu") -Force
 
 $phpRoot = Join-Path $Work "php"
 $develRoot = (Get-ChildItem (Join-Path $Work "devel") -Directory | Select-Object -First 1).FullName
@@ -133,6 +139,11 @@ foreach ($extension in @("php_opcache.dll", "php_pdo_mysql.dll", "php_mysqli.dll
     $source = Join-Path (Join-Path $phpRoot "ext") $extension
     if (Test-Path $source) { Copy-Item $source (Join-Path $Staging "runtime\ext") }
 }
+# apcu is not part of the official PHP zip; the locked PECL TS DLL is staged
+# alongside the bundled extensions.
+$apcuDll = Get-ChildItem -Path (Join-Path $Work "apcu") -Recurse -Filter $Lock.apcu.windows_x64.extension -File | Select-Object -First 1
+if (-not $apcuDll) { throw "apcu DLL missing in $(Join-Path $Work 'apcu')" }
+Copy-Item $apcuDll.FullName (Join-Path $Staging "runtime\ext\php_apcu.dll")
 Copy-Item (Join-Path $phpRoot "*.dll") (Join-Path $Staging "runtime") -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $vcpkgRoot "installed\x64-windows\bin\*.dll") (Join-Path $Staging "runtime") -ErrorAction SilentlyContinue
 
@@ -143,6 +154,7 @@ $phpIni = Get-Content (Join-Path $RepoRoot "packaging\runtime\php.ini") -Raw
 $phpIni = $phpIni.Replace('/opt/zentao', $iniRoot)
 $phpIni = $phpIni -replace '(?m)^zend_extension=.*ioncube_loader_lin_8\.4_ts\.so$', "zend_extension=$iniRoot/runtime/ioncube_loader_win_8.4.dll"
 $phpIni = $phpIni -replace '(?m)^zend_extension=.*opcache\.so$', "zend_extension=$iniRoot/runtime/ext/php_opcache.dll"
+$phpIni = $phpIni -replace '(?m)^extension=.*apcu\.so$', "extension=$iniRoot/runtime/ext/php_apcu.dll"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path $Staging "config\php.ini"), $phpIni, $utf8NoBom)
 
@@ -150,5 +162,8 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $ioncubeDll = (Resolve-Path (Join-Path $Staging "runtime\ioncube_loader_win_8.4.dll")).Path
 & (Join-Path $Staging "runtime\php.exe") -d "zend_extension=$ioncubeDll" -r "exit(extension_loaded('ionCube Loader') ? 0 : 1);"
 if ($LASTEXITCODE -ne 0) { throw "ionCube Loader did not load on Windows PHP" }
+$apcuStagedDll = (Resolve-Path (Join-Path $Staging "runtime\ext\php_apcu.dll")).Path
+& (Join-Path $Staging "runtime\php.exe") -d "extension=$apcuStagedDll" -r "exit(extension_loaded('apcu') ? 0 : 1);"
+if ($LASTEXITCODE -ne 0) { throw "apcu did not load on Windows PHP" }
 
 Write-Host "Windows Runtime staged: $Staging"

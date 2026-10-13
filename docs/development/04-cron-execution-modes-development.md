@@ -1,5 +1,11 @@
 # 定时任务多运行模式开发文档
 
+> **22.7 变更**：RoadRunner 支持已整体移除（`framework/zand/`、`roadrunner/`、
+> `bin/roadrunner/`、`www/worker.php`、`www/cron.php`、`www/.rr.yaml`），
+> `cron::rrSchedule()/rrConsume()` 入口随之删除，定时任务只保留 Runtime 与
+> Web fallback 两种执行模式，优先级为 `Runtime > Web fallback`。本文中与
+> RoadRunner 相关的入口、验收证据和待办仅作历史记录。
+
 ## 1. 文档范围
 
 本文是 Runtime、禅道 PHP 应用和 RoadRunner 定时任务功能的开发与验收说明，面向代码开发、联调和测试人员。它不描述安装命令和生产运维步骤；部署参数请参阅[配置与安全](../configuration-and-security.md)、[编译与打包](../build-and-package.md)和[多节点部署指南](../deployment/multi-node.md)。

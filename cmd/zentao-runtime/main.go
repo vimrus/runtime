@@ -27,7 +27,6 @@ import (
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 	"github.com/dunglas/frankenphp"
 	_ "github.com/dunglas/frankenphp/caddy"
-	"github.com/vimrus/runtime/internal/cache"
 	"github.com/vimrus/runtime/internal/config"
 	"github.com/vimrus/runtime/internal/control"
 	"github.com/vimrus/runtime/internal/diagnostics"
@@ -39,6 +38,7 @@ import (
 	"github.com/vimrus/runtime/internal/observability/jsonl"
 	"github.com/vimrus/runtime/internal/observability/query"
 	"github.com/vimrus/runtime/internal/observability/retention"
+	"github.com/vimrus/runtime/internal/queue/bridge"
 	queueclient "github.com/vimrus/runtime/internal/queue/client"
 	queueengine "github.com/vimrus/runtime/internal/queue/engine"
 	"github.com/vimrus/runtime/internal/queue/worker"
@@ -58,8 +58,30 @@ func main() {
 			fmt.Fprintln(os.Stderr, "zentao:", exitErr.message)
 			os.Exit(exitErr.code)
 		}
-		fmt.Fprintln(os.Stderr, "zentao:", err)
+		printError(err)
 		os.Exit(1)
+	}
+}
+
+// printError renders wrapped error chains as indented lines. Caddy and
+// FrankenPHP wrap failures with ": " and produce a single very long line,
+// which is hard to read in a terminal; splitting the chain keeps the original
+// wording while making the module path scannable.
+func printError(err error) {
+	const maxIndent = 6
+	message := err.Error()
+	parts := strings.Split(message, ": ")
+	if strings.Contains(message, "\n") || len(parts) == 1 {
+		fmt.Fprintln(os.Stderr, "zentao: "+message)
+		return
+	}
+	fmt.Fprintln(os.Stderr, "zentao: "+parts[0])
+	for index, part := range parts[1:] {
+		indent := index + 1
+		if indent > maxIndent {
+			indent = maxIndent
+		}
+		fmt.Fprintln(os.Stderr, strings.Repeat("  ", indent)+part)
 	}
 }
 
@@ -273,16 +295,23 @@ func serve(args []string) error {
 	}
 
 	configPath := filepath.Join(installRootPath, "config", "runtime.toml")
+	if info, statErr := os.Stat(configPath); statErr != nil || info.IsDir() {
+		// Configuration is mandatory: the Runtime must never silently fall back
+		// to built-in paths and settings that happen to start.
+		return fmt.Errorf("configuration file not found: %s\ncreate it first: cp %s %s",
+			configPath,
+			filepath.Join(installRootPath, "config", "runtime.example.toml"),
+			configPath)
+	}
 	cfg, err := loadServeConfig(configPath, *root, *listen, *pidFile, *controlSocket, *threads)
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(cfg.Web.Root)
-	if err != nil {
-		return fmt.Errorf("document root: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("document root %q is not a directory", cfg.Web.Root)
+	// Applications are pluggable: a missing or broken application must not
+	// prevent the Runtime from starting. It only degrades readiness until the
+	// application is attached again.
+	if err := prepareApps(cfg); err != nil {
+		return err
 	}
 
 	nodeID, err := resolveNodeID(cfg, installRootPath)
@@ -354,53 +383,17 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
-	cacheToken := ""
-	cacheBridge := web.CacheBridgeOptions{}
-	if cfg.Cache.Enabled {
-		cacheService, err := cache.New(cfg.Cache.MaxCostBytes, cfg.Cache.MaxValueBytes)
-		if err != nil {
-			return fmt.Errorf("initialize cache service: %w", err)
-		}
-		defer cacheService.Close()
-		if err := cacheService.SetRegistry(cfg.Cache.Namespaces); err != nil {
-			return fmt.Errorf("initialize cache registry: %w", err)
-		}
-		web.SetCacheService(cacheService)
-		cacheTokenBytes := make([]byte, 32)
-		if _, err := rand.Read(cacheTokenBytes); err != nil {
-			return fmt.Errorf("generate cache bridge token: %w", err)
-		}
-		cacheToken = hex.EncodeToString(cacheTokenBytes)
-		if err := os.Setenv("ZENTAO_CACHE_URL", "http://"+cfg.Cache.Listen+"/internal/runtime/cache/v1"); err != nil {
-			return fmt.Errorf("set cache bridge url: %w", err)
-		}
-		if err := os.Setenv("ZENTAO_CACHE_TOKEN", cacheToken); err != nil {
-			return fmt.Errorf("set cache bridge token: %w", err)
-		}
-		if err := os.Setenv("ZENTAO_CACHE_SCHEMA", strconv.Itoa(cache.SchemaVersion)); err != nil {
-			return fmt.Errorf("set cache schema version: %w", err)
-		}
-		cacheBridge = web.CacheBridgeOptions{Enabled: true, Listen: cfg.Cache.Listen, Token: cacheToken}
-	}
-	if cfg.Queue.Enabled {
-		// The bridge credential is generated per Runtime start: it is exposed
-		// to PHP through the environment and used by the Go bridge client.
-		tokenBytes := make([]byte, 32)
-		if _, err := rand.Read(tokenBytes); err != nil {
-			return fmt.Errorf("generate queue bridge token: %w", err)
-		}
-		queueToken := hex.EncodeToString(tokenBytes)
-		if err := os.Setenv("ZENTAO_QUEUE_TOKEN", queueToken); err != nil {
-			return fmt.Errorf("set queue bridge token: %w", err)
-		}
-		cfg.Queue.BridgeToken = queueToken
-	}
-	queueEngine, err := newQueueEngine(cfg, logger, nodeID)
+	queueEngines, err := prepareQueueEngines(&cfg, logger, nodeID)
 	if err != nil {
 		return err
 	}
-	if queueEngine != nil {
-		registry.Register("queue", health.KindDependency, false, false, func(context.Context) health.Result { return queueEngine.Health() })
+	for _, entry := range queueEngines {
+		engine := entry.engine
+		registry.Register(entry.name, health.KindDependency, false, false, func(context.Context) health.Result {
+			result := engine.Health()
+			result.Name = entry.name
+			return result
+		})
 	}
 	var jsonlConverter *jsonl.Converter
 	if obsPublisher != nil {
@@ -490,8 +483,7 @@ func serve(args []string) error {
 			}
 		}
 	}
-	host.cacheToken = cacheToken
-	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge, cacheBridge)); err != nil {
+	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge)); err != nil {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
@@ -515,6 +507,8 @@ func serve(args []string) error {
 	serveCtx, serveCancel := context.WithCancel(context.Background())
 	defer serveCancel()
 	go runLogPruneLoop(serveCtx, logger)
+	phpErrorRotator := logging.NewExternalRotator(filepath.Join(installRootPath, "logs", "php-error.log"), cfg.Runtime.PHPErrorLogMaxBytes, cfg.Runtime.PHPErrorLogMaxBackups, cfg.Observability.JSONLKeepDays)
+	go runExternalLogLoop(serveCtx, logger, phpErrorRotator)
 	if obsPublisher != nil {
 		clusterID := cfg.Runtime.ClusterID
 		if clusterID == "" {
@@ -531,11 +525,11 @@ func serve(args []string) error {
 			EventTime: time.Now().UTC(),
 		})
 	}
-	if queueEngine != nil {
-		if err := queueEngine.Start(serveCtx); err != nil {
-			logger.Warn("queue engine failed to start", slog.Any("error", err))
+	for _, entry := range queueEngines {
+		if err := entry.engine.Start(serveCtx); err != nil {
+			logger.Warn("queue engine failed to start", slog.String("app", entry.name), slog.Any("error", err))
 		} else {
-			logger.Info("queue engine started")
+			logger.Info("queue engine started", slog.String("app", entry.name))
 		}
 	}
 	if obsPublisher != nil {
@@ -557,9 +551,9 @@ func serve(args []string) error {
 	if err := host.machine.Transition(lifecycle.Draining, "graceful stop"); err != nil && host.machine.Snapshot().State != lifecycle.Draining {
 		return err
 	}
-	if queueEngine != nil {
-		if err := queueEngine.Stop(); err != nil {
-			logger.Warn("queue engine drain failed", slog.Any("error", err))
+	for _, entry := range queueEngines {
+		if err := entry.engine.Stop(); err != nil {
+			logger.Warn("queue engine drain failed", slog.String("app", entry.name), slog.Any("error", err))
 		}
 	}
 	if obsPublisher != nil {
@@ -658,6 +652,122 @@ func runLogPruneLoop(ctx context.Context, logger *logging.Logger) {
 	}
 }
 
+// runExternalLogLoop keeps php-error.log bounded. The file is written by the
+// embedded PHP error_log, so it is rotated with copytruncate at a fixed check
+// interval; day-based retention reuses observability.jsonlKeepDays.
+func runExternalLogLoop(ctx context.Context, logger *logging.Logger, rotator *logging.ExternalRotator) {
+	maintain := func() {
+		rotated, err := rotator.RotateIfNeeded()
+		if err != nil {
+			logger.Warn("php error log rotation failed", slog.Any("error", err))
+		} else if rotated {
+			logger.Info("php error log rotated")
+		}
+		if err := rotator.Prune(); err != nil {
+			logger.Warn("php error log prune failed", slog.Any("error", err))
+		}
+	}
+
+	maintain()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			maintain()
+		}
+	}
+}
+
+// queueEngineEntry pairs one application with its queue engine for start/stop
+// and health reporting.
+type queueEngineEntry struct {
+	name   string
+	engine *queueengine.Engine
+}
+
+// prepareQueueEngines builds one queue engine per configured application.
+// Legacy single-application configurations keep the previous behavior: one
+// process-wide token and one flat bridge. Explicit [[apps]] configurations
+// get one engine per queue-enabled application with its own token, its own
+// namespaced loopback path and its own in-application bridge URL.
+func prepareQueueEngines(cfg *config.Config, logger *logging.Logger, nodeID string) ([]queueEngineEntry, error) {
+	if !cfg.Queue.Enabled {
+		return nil, nil
+	}
+	if cfg.LegacyApp() || len(cfg.Apps) == 0 {
+		// The bridge credential is generated per Runtime start: it is exposed
+		// to PHP through the environment and used by the Go bridge client.
+		tokenBytes := make([]byte, 32)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			return nil, fmt.Errorf("generate queue bridge token: %w", err)
+		}
+		token := hex.EncodeToString(tokenBytes)
+		if err := os.Setenv("ZENTAO_QUEUE_TOKEN", token); err != nil {
+			return nil, fmt.Errorf("set queue bridge token: %w", err)
+		}
+		cfg.Queue.BridgeToken = token
+		engine, err := newQueueEngine(*cfg, logger, nodeID)
+		if err != nil {
+			return nil, err
+		}
+		if engine == nil {
+			return nil, nil
+		}
+		return []queueEngineEntry{{name: "queue", engine: engine}}, nil
+	}
+
+	entries := make([]queueEngineEntry, 0, len(cfg.Apps))
+	for index := range cfg.Apps {
+		app := &cfg.Apps[index]
+		if !app.Enabled || !app.Queue.Enabled {
+			continue
+		}
+		token := app.Queue.Token
+		if token == "" && app.Env != nil {
+			token = app.Env["ZENTAO_QUEUE_TOKEN"]
+		}
+		if token == "" {
+			tokenBytes := make([]byte, 32)
+			if _, err := rand.Read(tokenBytes); err != nil {
+				return nil, fmt.Errorf("generate queue bridge token for %s: %w", app.ID, err)
+			}
+			token = hex.EncodeToString(tokenBytes)
+		}
+		app.Queue.Token = token
+		if app.Env == nil {
+			app.Env = make(map[string]string)
+		}
+		setEnvDefault(app.Env, "ZENTAO_QUEUE_TOKEN", token)
+
+		engine, err := newAppQueueEngine(*cfg, *app, logger, nodeID)
+		if err != nil {
+			return nil, err
+		}
+		if engine != nil {
+			entries = append(entries, queueEngineEntry{name: "queue:" + app.ID, engine: engine})
+		}
+	}
+	return entries, nil
+}
+
+func newAppQueueEngine(cfg config.Config, app config.App, logger *logging.Logger, nodeID string) (*queueengine.Engine, error) {
+	if app.Queue.Token == "" {
+		return nil, fmt.Errorf("queue bridge token for application %s is missing", app.ID)
+	}
+	return newQueueEngineWithBridge(cfg, "http://"+queueBridgeListen(cfg)+bridge.AppBasePath(app.ID), app.Queue.Token, logger, nodeID)
+}
+
+func queueBridgeListen(cfg config.Config) string {
+	listen := "127.0.0.1:8081"
+	if parsed, err := url.Parse(cfg.Queue.BridgeBaseURL); err == nil && parsed.Host != "" {
+		listen = parsed.Host
+	}
+	return listen
+}
+
 func newQueueEngine(cfg config.Config, logger *logging.Logger, nodeID string) (*queueengine.Engine, error) {
 	if !cfg.Queue.Enabled {
 		return nil, nil
@@ -665,9 +775,13 @@ func newQueueEngine(cfg config.Config, logger *logging.Logger, nodeID string) (*
 	if cfg.Queue.BridgeToken == "" {
 		return nil, errors.New("queue is enabled but ZENTAO_QUEUE_TOKEN or queue.bridgeToken is missing")
 	}
+	return newQueueEngineWithBridge(cfg, cfg.Queue.BridgeBaseURL, cfg.Queue.BridgeToken, logger, nodeID)
+}
+
+func newQueueEngineWithBridge(cfg config.Config, baseURL, token string, logger *logging.Logger, nodeID string) (*queueengine.Engine, error) {
 	bridgeClient, err := queueclient.New(queueclient.Config{
-		BaseURL:        cfg.Queue.BridgeBaseURL,
-		Token:          cfg.Queue.BridgeToken,
+		BaseURL:        baseURL,
+		Token:          token,
 		RequestTimeout: cfg.Queue.RequestTimeout,
 	})
 	if err != nil {
@@ -788,42 +902,56 @@ func newHealthRegistry(cfg config.Config) *health.Registry {
 		}
 		return health.Result{Name: "php", Kind: health.KindPHP, Status: health.StatusOK, Message: "PHP " + php.Version.Version + " ZTS classic"}
 	})
-	registry.Register("app-root", health.KindApp, true, false, func(ctx context.Context) health.Result {
-		info, err := os.Stat(cfg.Web.Root)
-		if err != nil || !info.IsDir() {
-			return health.Result{Name: "app-root", Kind: health.KindApp, Status: health.StatusFailed, Message: "document root is not available"}
+	for _, app := range cfg.Apps {
+		if !app.Enabled {
+			continue
 		}
-		return health.Result{Name: "app-root", Kind: health.KindApp, Status: health.StatusOK}
-	})
-	registry.Register("app", health.KindApp, false, true, func(ctx context.Context) health.Result {
-		appHealthURL := "http://" + cfg.Web.Listen + "/app-health.php"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, appHealthURL, nil)
-		if err != nil {
-			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "invalid app health url"}
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "app health unreachable"}
-		}
-		defer resp.Body.Close()
-		body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		if err != nil {
-			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "app health read failed"}
-		}
-		var probe struct {
-			Status string `json:"status"`
-		}
-		if json.Unmarshal(body, &probe) != nil || probe.Status == "" {
-			return health.Result{Name: "app", Kind: health.KindApp, Status: health.StatusFailed, Message: "invalid app health response"}
-		}
-		status := health.StatusFailed
-		if probe.Status == "ok" {
-			status = health.StatusOK
-		} else if probe.Status == "degraded" {
-			status = health.StatusDegraded
-		}
-		return health.Result{Name: "app", Kind: health.KindApp, Status: status}
-	})
+		app := app
+		root := app.DocumentRoot()
+		registry.Register("app-root:"+app.ID, health.KindApp, true, false, func(ctx context.Context) health.Result {
+			info, err := os.Stat(root)
+			if err != nil || !info.IsDir() {
+				return health.Result{Name: "app-root:" + app.ID, Kind: health.KindApp, Status: health.StatusFailed, Message: "application " + app.ID + " document root is not available"}
+			}
+			return health.Result{Name: "app-root:" + app.ID, Kind: health.KindApp, Status: health.StatusOK}
+		})
+		registry.Register("app:"+app.ID, health.KindApp, false, true, func(ctx context.Context) health.Result {
+			prefix, err := config.NormalizePath(app.Path)
+			if err != nil {
+				prefix = app.Path
+			}
+			if prefix == "/" {
+				prefix = ""
+			}
+			appHealthURL := "http://" + cfg.Web.Listen + prefix + "/health.php"
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, appHealthURL, nil)
+			if err != nil {
+				return health.Result{Name: "app:" + app.ID, Kind: health.KindApp, Status: health.StatusFailed, Message: "invalid app health url"}
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return health.Result{Name: "app:" + app.ID, Kind: health.KindApp, Status: health.StatusFailed, Message: "app health unreachable"}
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+			if err != nil {
+				return health.Result{Name: "app:" + app.ID, Kind: health.KindApp, Status: health.StatusFailed, Message: "app health read failed"}
+			}
+			var probe struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(body, &probe) != nil || probe.Status == "" {
+				return health.Result{Name: "app:" + app.ID, Kind: health.KindApp, Status: health.StatusFailed, Message: "invalid app health response"}
+			}
+			status := health.StatusFailed
+			if probe.Status == "ok" {
+				status = health.StatusOK
+			} else if probe.Status == "degraded" {
+				status = health.StatusDegraded
+			}
+			return health.Result{Name: "app:" + app.ID, Kind: health.KindApp, Status: status}
+		})
+	}
 	return registry
 }
 
@@ -894,7 +1022,6 @@ type host struct {
 	accessLogPath      string
 	accessLogKeepDays  int
 	observabilityToken string
-	cacheToken         string
 	logsDir            string
 	jsonlSources       []string
 	collector          *diagnostics.Collector
@@ -1195,8 +1322,8 @@ func (h *host) status() map[string]any {
 		"lifecycle": h.machine.Snapshot(),
 		"web": map[string]any{
 			"listen":  cfg.Web.Listen,
-			"root":    cfg.Web.Root,
 			"threads": cfg.Web.Threads,
+			"apps":    appSummary(cfg),
 		},
 		"identity": map[string]any{
 			"nodeID":    cfg.Runtime.NodeID,
@@ -1221,10 +1348,29 @@ func (h *host) configSummary() map[string]any {
 		},
 		"web": map[string]any{
 			"listen":  cfg.Web.Listen,
-			"root":    cfg.Web.Root,
 			"threads": cfg.Web.Threads,
+			"apps":    appSummary(cfg),
 		},
 	}
+}
+
+// appSummary returns the non-sensitive application view used by status and
+// diagnostic output. Per-application environment values are never exposed.
+func appSummary(cfg config.Config) []map[string]any {
+	apps := make([]map[string]any, 0, len(cfg.Apps))
+	for _, app := range cfg.Apps {
+		prefix, err := config.NormalizePath(app.Path)
+		if err != nil {
+			prefix = app.Path
+		}
+		apps = append(apps, map[string]any{
+			"id":      app.ID,
+			"path":    prefix,
+			"dir":     app.Dir,
+			"enabled": app.Enabled,
+		})
+	}
+	return apps
 }
 
 func (h *host) reload() control.Response {
@@ -1252,11 +1398,7 @@ func (h *host) reload() control.Response {
 			Sink:    h.obsPublisher,
 		}
 	}
-	cacheBridge := web.CacheBridgeOptions{}
-	if candidate.Cache.Enabled {
-		cacheBridge = web.CacheBridgeOptions{Enabled: true, Listen: candidate.Cache.Listen, Token: h.cacheToken}
-	}
-	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge, cacheBridge))
+	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge))
 	if err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy configuration rendering failed")
 		return control.Failure("reload_failed", "render Caddy configuration")
@@ -1277,17 +1419,31 @@ func (h *host) reload() control.Response {
 	return control.Success(map[string]any{"reloaded": true, "restartRequired": false})
 }
 
-func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions, cacheBridge web.CacheBridgeOptions) *caddy.Config {
+func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions) *caddy.Config {
 	queueBridge := web.QueueBridgeOptions{}
 	if cfg.Queue.Enabled {
-		bridgeListen := "127.0.0.1:8081"
-		if parsed, err := url.Parse(cfg.Queue.BridgeBaseURL); err == nil && parsed.Host != "" {
-			bridgeListen = parsed.Host
+		bridgeListen := queueBridgeListen(cfg)
+		if cfg.LegacyApp() || len(cfg.Apps) == 0 {
+			queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Token: cfg.Queue.BridgeToken}
+		} else {
+			queueApps := make([]web.QueueBridgeApp, 0, len(cfg.Apps))
+			for _, app := range cfg.Apps {
+				if !app.Enabled || !app.Queue.Enabled {
+					continue
+				}
+				prefix, err := config.NormalizePath(app.Path)
+				if err != nil {
+					prefix = app.Path
+				}
+				queueApps = append(queueApps, web.QueueBridgeApp{ID: app.ID, Prefix: prefix, Token: app.Queue.Token, Template: app.Queue.BridgeURLTemplate})
+			}
+			if len(queueApps) > 0 {
+				queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Apps: queueApps}
+			}
 		}
-		queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Token: cfg.Queue.BridgeToken}
 	}
 	return web.Config(web.Options{
-		Root:                cfg.Web.Root,
+		Apps:                appRoutes(cfg),
 		Listen:              cfg.Web.Listen,
 		Threads:             cfg.Web.Threads,
 		ReadHeaderTimeout:   cfg.Web.ReadHeaderTimeout,
@@ -1297,8 +1453,85 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 		AccessLogKeepDays:   accessLogKeepDays,
 		QueueBridge:         queueBridge,
 		ObservabilityBridge: observabilityBridge,
-		CacheBridge:         cacheBridge,
 	})
+}
+
+// appRoutes converts configured applications into web routes and injects the
+// per-application data, session and temp roots. Explicit application
+// environment always wins over the generated defaults.
+func appRoutes(cfg config.Config) []web.App {
+	apps := make([]web.App, 0, len(cfg.Apps))
+	for _, app := range cfg.Apps {
+		if !app.Enabled {
+			continue
+		}
+		env := make(map[string]string, len(app.Env)+6)
+		for name, value := range app.Env {
+			env[name] = value
+		}
+		prefix, err := config.NormalizePath(app.Path)
+		if err != nil {
+			prefix = app.Path
+		}
+		setEnvDefault(env, "ZT_WEB_ROOT", strings.Trim(prefix, "/"))
+		setEnvDefault(env, "ZT_APP_ID", app.ID)
+		setEnvDefault(env, "ZT_DATA_ROOT", filepath.Join(app.DataDir, "data"))
+		setEnvDefault(env, "ZT_TMP_ROOT", app.TmpDir)
+		setEnvDefault(env, "ZT_SESSION_PATH", filepath.Join(app.DataDir, "session"))
+		setEnvDefault(env, "ZT_APISESSION_PATH", filepath.Join(app.DataDir, "apisession"))
+		apps = append(apps, web.App{
+			ID:        app.ID,
+			Prefix:    prefix,
+			Root:      app.DocumentRoot(),
+			Env:       env,
+			Available: appAvailable(app),
+		})
+	}
+	return apps
+}
+
+// appAvailable reports whether the application document root is present. An
+// unavailable application is served as a 503 placeholder; without this check
+// the FrankenPHP handler would fail Caddy provisioning and abort startup.
+func appAvailable(app config.App) bool {
+	info, err := os.Stat(app.DocumentRoot())
+	return err == nil && info.IsDir()
+}
+
+func setEnvDefault(env map[string]string, name, value string) {
+	if _, exists := env[name]; exists {
+		return
+	}
+	env[name] = value
+}
+
+// prepareApps creates the per-application data and temp roots. Missing
+// application code is reported but does not abort startup.
+func prepareApps(cfg config.Config) error {
+	for _, app := range cfg.Apps {
+		if !app.Enabled {
+			continue
+		}
+		for _, dir := range []string{
+			filepath.Join(app.DataDir, "data"),
+			filepath.Join(app.DataDir, "session"),
+			filepath.Join(app.DataDir, "apisession"),
+			filepath.Join(app.DataDir, "backup"),
+			app.TmpDir,
+		} {
+			if err := os.MkdirAll(dir, 0o770); err != nil {
+				return fmt.Errorf("prepare application %q directory %s: %w", app.ID, dir, err)
+			}
+		}
+		root := app.DocumentRoot()
+		info, err := os.Stat(root)
+		if err != nil || !info.IsDir() {
+			// Readiness reports the missing application; keep the Runtime up so
+			// the application can be attached without a restart of the host.
+			continue
+		}
+	}
+	return nil
 }
 
 func callControl(socket string, request control.Request) (control.Response, error) {
@@ -1353,6 +1586,9 @@ func createPIDFile(name string) error {
 	if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
 		return fmt.Errorf("create PID directory: %w", err)
 	}
+	if err := clearStalePIDFile(name); err != nil {
+		return err
+	}
 	file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create PID file: %w", err)
@@ -1361,6 +1597,33 @@ func createPIDFile(name string) error {
 	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
 		return fmt.Errorf("write PID file: %w", err)
 	}
+	return nil
+}
+
+// clearStalePIDFile removes a PID file whose process is gone. A hard-killed
+// Runtime (SIGKILL, power loss, timeout) cannot clean up after itself, and the
+// leftover file must not block the next start. A live process keeps the file:
+// the Runtime refuses to start twice from the same installation.
+func clearStalePIDFile(name string) error {
+	pid, err := readPIDFile(name)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		// Unreadable or corrupt PID file: treat it as stale.
+		if removeErr := os.Remove(name); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("remove unreadable PID file: %w", removeErr)
+		}
+		fmt.Fprintf(os.Stderr, "zentao: removed unreadable PID file %s\n", name)
+		return nil
+	}
+	if processAlive(pid) {
+		return fmt.Errorf("runtime is already running: pid %d\nstop it first, or use another installation root", pid)
+	}
+	if removeErr := os.Remove(name); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+		return fmt.Errorf("remove stale PID file: %w", removeErr)
+	}
+	fmt.Fprintf(os.Stderr, "zentao: removed stale PID file %s (pid %d is not running)\n", name, pid)
 	return nil
 }
 

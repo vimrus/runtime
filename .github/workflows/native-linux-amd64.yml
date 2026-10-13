@@ -57,6 +57,9 @@ jobs:
           tar -czf /tmp/apppkg.tar.gz -C "${appdir}" .
           tests/e2e/zentao-app-smoke.sh /tmp/apppkg.tar.gz
 
+      - name: Pluggable multi-application smoke
+        run: tests/e2e/multi-app-smoke.sh
+
       - name: Access log smoke
         run: |
           appdir="$(mktemp -d)"

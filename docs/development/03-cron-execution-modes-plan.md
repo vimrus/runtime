@@ -1,5 +1,10 @@
 # 定时任务执行模式兼容开发计划
 
+> **22.7 变更**：RoadRunner 支持已整体移除（`framework/zand/`、`roadrunner/`、
+> `bin/roadrunner/`、`www/worker.php`、`www/cron.php`、`www/.rr.yaml`），
+> 定时任务只保留 Runtime 与 Web fallback 两种执行模式，优先级为
+> `Runtime > Web fallback`。本文中与 RoadRunner 相关的章节仅作历史记录。
+
 ## 1. 文档信息
 
 | 项目 | 内容 |

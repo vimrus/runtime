@@ -412,8 +412,7 @@ Control plane 只提供预定义查询和分页结果。任意 SQL 仅允许离�
 | 数据 | 建议保留 |
 |---|---|
 | 聚合指标 | 30 天 |
-| Debug/Info 日志 | 7 天 |
-| Warn/Error 查询副本 | 30 天 |
+| 日志（Debug/Info/Warn/Error，`logDays`） | 30 天 |
 | Audit 查询副本 | 90 天；原始审计文件按合规策略保留 |
 | 本地 spool | 按容量和最长补发时间双重限制 |
 

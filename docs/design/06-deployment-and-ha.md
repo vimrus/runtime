@@ -14,7 +14,7 @@
 | 指标/日志 | DuckDB + NFS 共享分区式 Parquet 数据集 |
 | 自建入口 | Keepalived 浮动 VIP + 内嵌 Caddy Gateway |
 | 优先入口 | 客户已有云、硬件或托管负载均衡 |
-| 关联设计 | [Runtime Host 设计](./01-runtime-host.md)、[Runtime 缓存设计](./04-runtime-cache.md)、[DuckDB/Parquet 可观测性设计](./05-observability.md) |
+| 关联设计 | [Runtime Host 设计](./01-runtime-host.md)、[DuckDB/Parquet 可观测性设计](./05-observability.md) |
 
 ## 2. 核心结论
 

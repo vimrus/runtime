@@ -81,13 +81,13 @@
 阶段门槛：禅道应用在没有新队列、缓存和可观测性功能时，也能在 Runtime PoC 中完成安装、登录和基础页面访问。
 
 实施状态（2026-09-03，Z-HEALTH-01）：应用深探针入口
-`zentaopms/www/app-health.php` 已落地。它只读取安装与数据库配置，ping
+`zentaopms/www/health.php` 已落地。它只读取安装与数据库配置，ping
 主库并返回 `ok|degraded|failed` 与稳定错误码
 （`config_missing/app_not_installed/db_driver_unsupported/db_unreachable/
 db_ok`），不加载全量应用上下文、不启动 Session、不输出配置或凭据；
 MySQL 可达与不可达两种路径均验证通过。Runtime `health --deep` 对该入口
 的调用已实施：`health --deep` 注册 `app` 深探针并经同一 Web Listener 调用
-`/app-health.php`，把 `ok|degraded|failed` 映射为组件状态；
+`/health.php`，把 `ok|degraded|failed` 映射为组件状态；
 `queue-direct-smoke.sh` 联合断言 deep health 中 app 组件为 ok。
 
 ## 7. 阶段 1：可靠任务队列基础
@@ -474,6 +474,11 @@ Runtime 集成环境生成时会对暂存副本应用最小兼容补丁
 
 待完成（依赖业务决策或外部环境）：
 
+- Z-FILE-01（最小实现已落地）：`framework/base/router.class.php` 的
+  `setTmpRoot()`/`setDataRoot()` 已支持 `ZT_TMP_ROOT`/`ZT_DATA_ROOT`
+  环境变量（默认行为不变），`module/file` 的上传保存路径改为经
+  `getDataRoot()` 计算。其余直连 `www/data` 的模块（testcase、convert、
+  backup 等）待按同一契约收敛后再启用附件整体外移。
 - Z-QUEUE-10：邮件/Webhook 等更多业务 Handler 迁移与回滚策略。
 - Z-QUEUE-11：后台菜单归属、权限点与界面完整审计。
 - Z-INSTALL/UPGRADE/MIGRATE：队列旧表迁移升级 SQL 已实现并独立验证

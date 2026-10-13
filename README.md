@@ -10,7 +10,8 @@ ZenTao Runtime（可执行文件：`zentao`）是禅道的统一运行环境。�
 
 | 形态 | 内容 | 适用场景 |
 | --- | --- | --- |
-| Runtime | Runtime、PHP、FrankenPHP/Caddy 和应用目录 | 已有 MySQL/PostgreSQL 等数据库的单机或集群 |
+| Runtime | Runtime、PHP、FrankenPHP/Caddy，**不含应用代码** | 已有 MySQL/PostgreSQL 等数据库的单机或集群 |
+| 应用包 | 平台无关的禅道应用制品，按 `[[apps]]` 配置装载，可独立升级 | 单应用或多应用（同 host 子目录）部署 |
 | Full | Runtime + MySQL 8.4 | 快速交付的单机环境；生产环境仍应规划数据库备份 |
 | Docker | Web 容器，可选 MySQL Compose profile | Docker 或已有数据库的容器部署 |
 
@@ -20,13 +21,14 @@ Runtime 不直接访问禅道业务数据库。数据库连接由 PHP 应用和�
 
 ### Linux
 
-请在 Runtime 根目录执行。Runtime 没有 `runtime.toml` 时使用内置默认配置；需要覆盖默认值时再从模板创建配置：
+请在 Runtime 根目录执行。Runtime 固定读取 `<安装根>/config/runtime.toml`，
+**该文件是必需的**：缺失时启动会直接报错并提示创建方式。首次使用先从模板创建：
 
 ```bash
 sudo install -m 0640 config/runtime.example.toml config/runtime.toml
 ```
 
-准备好应用发布目录后启动：
+按需编辑监听地址、`[[apps]]` 应用清单等配置，准备好应用发布目录后启动：
 
 ```bash
 ./bin/zentao serve
@@ -43,13 +45,16 @@ sudo systemctl status zentao
 
 ### Docker Compose
 
-需要覆盖 Docker 默认配置时，从模板创建配置文件：
+Compose 模板会把 `packaging/docker/config/` 挂载为容器的 `config/` 目录，
+因此需要先把配置放进去（配置文件是必需的，缺失时容器启动即报错提示）：
 
 ```bash
-cp config/runtime.example.toml config/runtime.toml
+mkdir -p packaging/docker/config
+cp config/runtime.example.toml packaging/docker/config/runtime.toml
 ```
 
-默认配置会自动按 Runtime 根目录解析路径，Web 默认监听 `0.0.0.0:8080`；只有需要自定义监听地址、线程数或可选组件时才需要编辑它。
+配置中的相对路径按容器内的 Runtime 根目录 `/opt/zentao` 解析，应用放在
+`apps/`（`zentao-apps` 卷）下；Web 默认监听 `0.0.0.0:8080`。
 
 仅启动 Web（连接外部数据库）：
 
@@ -70,7 +75,9 @@ docker compose -f packaging/docker/compose.yaml --profile full up -d
 ```text
 /opt/zentao/
   bin/zentao               Runtime 程序
-  app/zentaopms/www        禅道主应用 Web 根目录
+  apps/zentao-ipd-22.6/    可拔插应用目录（应用代码，由配置装载）
+  data/apps/zentao-ipd/    应用数据：附件、Session、备份（多节点共享）
+  tmp-local/zentao-ipd/    应用临时区：缓存、编译产物、SQLite（节点本地）
   config/runtime.toml      Runtime 固定配置
   data/                    附件、节点标识等持久化数据
   logs/                    Runtime、访问和 PHP 日志
@@ -78,7 +85,15 @@ docker compose -f packaging/docker/compose.yaml --profile full up -d
   spool/observability/     观测故障时的本地 spool
 ```
 
-默认配置文件位于 Runtime 根目录的 `config/runtime.toml`；文件不存在时使用内置默认值。标准安装示例分别为 Linux `/opt/zentao/config/runtime.toml` 和 Windows `C:\Program Files\ZenTao\config\runtime.toml`。
+Runtime 制品本身不包含应用代码。应用在 `config/runtime.toml` 的 `[[apps]]`
+中声明，一个 Runtime 可以同时托管多个应用：单一监听、单一 host，应用按
+URL 子目录前缀区分，最多一个应用使用 `/`。每个应用使用独立数据库和独立的
+附件/Session 数据根；新增或替换应用后重启 `zentao` 生效。
+
+配置文件位于 Runtime 根目录的 `config/runtime.toml`，且为必需文件：缺失时
+启动会报错并提示创建方式。标准安装示例分别为 Linux
+`/opt/zentao/config/runtime.toml` 和 Windows
+`C:\Program Files\ZenTao\config\runtime.toml`。
 
 ## 子命令
 
@@ -125,7 +140,10 @@ health/diagnose:
 
 ### 升级
 
-应用升级由部署人员自行备份并替换 `/opt/zentao/app/zentaopms`；Runtime 不维护应用版本目录、指针或自动回滚。替换完成后重启 `zentao`，再检查 `zentao health --deep` 和 readiness 端点。
+应用升级由部署人员自行备份并替换对应应用目录（如
+`/opt/zentao/apps/zentao-ipd-22.6`）；Runtime 不维护应用版本目录、指针或
+自动回滚。替换完成后重启 `zentao`，再检查 `zentao health --deep` 和
+readiness 端点。
 
 ### 日志、指标和诊断
 

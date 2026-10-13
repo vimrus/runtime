@@ -32,8 +32,11 @@ type QueryFilters struct {
 	Account   string `json:"account"`
 	RequestID string `json:"requestID"`
 	Message   string `json:"message"`
-	Offset    int    `json:"offset"`
-	Limit     int    `json:"limit"`
+	// Fields carries arbitrary allowlisted `fields.*` equality filters
+	// (e.g. objectType/objectID/action for integration logs).
+	Fields map[string]string `json:"fields"`
+	Offset int               `json:"offset"`
+	Limit  int               `json:"limit"`
 }
 
 // QueryRequest is the versioned request envelope accepted by the bridge.

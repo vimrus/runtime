@@ -34,6 +34,16 @@ for removed in \
     fi
 done
 
+# Applications are pluggable: a Runtime artifact must never embed application
+# code, otherwise the delivered "clean" Runtime would silently pin one
+# application and its data layout again.
+for app_dir in "${artifact_root}/app" "${artifact_root}/apps"; do
+    if [[ -d "${app_dir}" ]] && find "${app_dir}" -type f -name '*.php' -print -quit | grep -q .; then
+        echo "runtime artifact must not embed application code: ${app_dir}" >&2
+        exit 1
+    fi
+done
+
 expected=$(printf '%s\n' zend_signal_globals_id zend_signal_globals_offset zend_signal_handler_unblock)
 actual=$(nm -D "${libphp}" | awk '$3 ~ /^zend_signal_(globals_id|globals_offset|handler_unblock)$/ {print $3}' | sort -u)
 if [[ "${actual}" != "${expected}" ]]; then

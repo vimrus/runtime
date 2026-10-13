@@ -87,14 +87,22 @@ Runtime/Full 打包、签名供应链和 CI workflow。
 
 ### 缓存
 
-- Runtime 内嵌 Cache Service，首版使用有界内存后端，重启和节点切换后允许为空。
-- PHP/Runtime 组件只能显式调用 `get`、`set` 和 `delete`，通过本机私有、版本化 Cache Bridge 访问。
-- 同一 PHP 请求内可以使用 Array L0，但不能使用 APCu 保存跨请求业务缓存。
-- Go Runtime 不连接禅道业务数据库，不复制 PHP DAO、数据库 Driver 或缓存表。
-- Cache Service 负责 TTL、分片、LRU/过期淘汰、namespace 配额和故障降级。
-- 缓存故障、超时、容量拒绝和 Runtime 重启均按 Miss/业务回源处理，不能阻断业务。
+- 缓存归属 PHP 侧 `lib/cache`，后端顺序为 Redis（多节点共享）→ APCu（单节点，Runtime 内置扩展）→ Null；Go Runtime 不提供 Cache Service 或 Cache Bridge。
+- 缓存是可丢弃数据：读取失败按 miss 回源数据库，写入失败不回滚业务结果；Runtime 不连接禅道业务数据库。
+- 多节点默认各节点各自本地 APCu（缓存不作为跨节点一致性机制）；需要跨节点共享命中率时改配 Redis。
+- 同一 Runtime 进程内多个应用共享同一块 APCu 空间，必须按应用隔离 namespace。
 - 权限、锁、许可证、工作流状态和其他强一致数据不能缓存。
 - DuckDB 只保存缓存聚合指标，不保存完整缓存值。
+
+### 应用装载与可拔插
+
+- Runtime 制品不包含任何应用代码；应用是独立的平台无关制品，由配置装载。
+- 一个 Runtime 实例可以托管多个应用：单一监听、单一 host，应用按 URL 子目录前缀区分，最多一个应用使用 `/`。
+- 应用在 `config/runtime.toml` 的 `[[apps]]` 中声明（`id`、`path`、`dir`、`webRoot`，可选 `dataDir`、`tmpDir`、`env`）；不做目录自动扫描。
+- 每个应用使用独立数据库和独立的附件/Session 数据根，可变数据不得写回应用代码目录。
+- Runtime 为每个应用注入 `ZT_WEB_ROOT`、`ZT_APP_ID`、`ZT_DATA_ROOT`、`ZT_TMP_ROOT`、`ZT_SESSION_PATH`、`ZT_APISESSION_PATH`；启用每应用 Queue Bridge 时还会注入该应用专属的 `ZENTAO_QUEUE_TOKEN`（每次启动轮换）。应用侧显式配置的环境变量优先。
+- 新增、替换或移除应用通过重启 Runtime 生效；首版不实现热加载。
+- `/_runtime/` 为 Runtime 保留前缀；配置校验拒绝重复前缀和嵌套前缀冲突。
 
 ### 部署与高可用
 

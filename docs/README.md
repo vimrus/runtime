@@ -14,19 +14,17 @@
 - [Runtime Host](./design/01-runtime-host.md)：Go Host、Caddy、FrankenPHP、生命周期和控制面。
 - [FrankenPHP 集成](./design/02-frankenphp-integration.md)：PHP 8.4 ZTS、Classic mode、ionCube 和平台构建基础。
 - [消息队列](./design/03-message-queue.md)：PHP DAO 持久化、Queue Bridge、Worker 和 At-least-once 语义。
-- [Runtime 缓存](./design/04-runtime-cache.md)：由 Runtime 提供的缓存服务和客户端协议。
 - [可观测性](./design/05-observability.md)：DuckDB、Parquet、日志、指标和降级策略。
 - [部署与高可用](./design/06-deployment-and-ha.md)：单机、Docker、双节点和外部负载均衡。
 - [构建与发布](./design/07-build-and-release.md)：原生构建、制品组装、供应链和发布。
-- [MySQL 到 Parquet 增量同步](./design/08-mysql-parquet-sync.md)：支持修改与一致性的 BI 分析副本设计。
-- [DuckDB 统一数据方案](./design/09-unified-duckdb-design.md)：日志/度量库/BI 三域统一查询与同步。
+- [MySQL 到 Parquet 增量同步](./design/08-mysql-parquet-sync.md)（22.7 已废弃）：PHP 侧 BI 分析副本的历史设计。
+- [DuckDB 数据方案](./design/09-unified-duckdb-design.md)：22.7 起 DuckDB 只服务日志域，含 PHP 侧下线清单。
 - [禅道 Service 层设计](./design/10-service-layer.md)：定时/缓存/队列/日志/度量的服务化封装。
 
 ### 契约
 
 - [Runtime Control Plane v1](./design/contracts/runtime-control-plane-v1.md)
 - [PHP Queue Bridge v1](./design/contracts/queue-bridge-v1.md)
-- [Runtime Cache Bridge v1](./design/contracts/runtime-cache-v1.md)
 
 契约文档是跨进程、跨语言和跨仓实现的规范来源。实现不能通过读取对方内部文件或数据库表绕过契约。
 

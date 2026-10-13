@@ -159,6 +159,33 @@ Host 对子进程提供统一管理接口，但 Scheduler 和 MySQL 不进入 Ca
 - 不将禅道 PHP 业务逻辑迁入 Host。
 - 不启用 FrankenPHP worker mode。
 - 不通过公共 HTTP 接口暴露高权限管理操作。
+- 不在 Runtime 制品中携带应用代码；应用是外部制品，由 Host 按配置装载。
+
+### 6.3 应用装载（可拔插多应用）
+
+Runtime 制品不包含应用代码。应用是独立的平台无关制品，Host 只负责按配置
+装载、路由、注入环境和校验，应用可以独立升级、替换和回退。
+
+- 应用在 `config/runtime.toml` 的 `[[apps]]` 中声明（`id`、`path`、
+  `dir`、`webRoot`，可选 `dataDir`、`tmpDir`、`env`）；Host 不做目录
+  自动扫描，配置文件是唯一事实来源。
+- 一个 Host 实例可以托管多个应用：单一监听、单一 host，应用按 URL 子目录
+  前缀区分；最多一个应用使用 `/`，`/_runtime/` 为 Host 保留前缀。配置
+  校验拒绝重复前缀和嵌套前缀冲突。
+- 每个应用使用独立的数据库环境、附件根、Session 根和临时根；Host 为每个
+  应用注入 `ZT_WEB_ROOT`、`ZT_APP_ID`、`ZT_DATA_ROOT`、`ZT_TMP_ROOT`、
+  `ZT_SESSION_PATH`、`ZT_APISESSION_PATH`，显式配置的 `env` 优先。
+- 子目录前缀只作用于文件查找与 `PATH_INFO`/`SCRIPT_NAME`：PHP 仍会收到
+  带前缀的原始 `REQUEST_URI`，应用的公开前缀通过 `ZT_WEB_ROOT` 提供
+  （实测结论，2026-10-10，真实开源版/IPD 版应用包）。
+- 应用目录缺失或非法不阻止 Host 启动：liveness 保持可用，readiness 按应用
+  探针聚合为 not ready，诊断输出给出原因。
+- 未安装的应用前缀返回 `503 {"status":"unavailable"}` 占位，不注册 PHP 或
+  静态文件 handler——否则 FrankenPHP 会在 provision 阶段因 root 不存在而
+  直接中断 Host 启动；队列 Bridge 在没有可用应用时同样返回占位响应。
+- 新增、替换或移除应用通过重启 Host 生效；首版不实现应用热加载。
+- PHP ZTS 线程池是进程级共享的，应用之间的隔离边界是 document root、环境
+  变量和数据目录，而不是独立的 PHP 进程。
 
 ## 7. Host 模块设计
 
@@ -362,6 +389,7 @@ Host 在 readiness 阶段验证：
 
 ### 11.2 必须重启 Host
 
+- `[[apps]]` 应用清单（新增、替换或移除应用）。
 - PHP 主版本、patch 版本或 ABI。
 - `php.ini` 中 module startup 级设置。
 - ionCube、OPcache 或其他 Zend extension。

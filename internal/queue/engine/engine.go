@@ -163,7 +163,7 @@ func (e *Engine) Start(ctx context.Context) error {
 
 // monitorFatal shuts down all queue activity when PHP reports that another
 // execution mode owns the global cron lease.  This is terminal for this
-// engine instance; it must not silently fall back to Web or RoadRunner.
+// engine instance; it must not silently fall back to the Web fallback path.
 func (e *Engine) monitorFatal(ctx context.Context) {
 	select {
 	case <-ctx.Done():

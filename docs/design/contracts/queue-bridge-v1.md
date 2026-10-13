@@ -8,7 +8,7 @@
 实施状态（2026-09-01）：Go 侧 DTO、Fake Bridge、HTTP 客户端、Worker/租约/Reaper
 与 Host 集成已完成；禅道 PHP 侧 Queue Bridge 路由、鉴权、模式租约 fencing、批量
 Claim/Heartbeat/Execute/Reap/Stats/Control 和 Runtime 联合冒烟已实现。真实部署
-环境的 PHP-FPM/Apache、固定 RoadRunner supervisor、故障恢复和完整发布矩阵仍按
+环境的 PHP-FPM/Apache、故障恢复和完整发布矩阵仍按
 [定时任务多运行模式开发文档](../../development/04-cron-execution-modes-development.md)
 中的“发布前待验收”执行。
 
@@ -92,4 +92,4 @@ Fake Bridge 不执行 SQL，不模拟数据库并发，也不能替代 MySQL、P
   八端点 URL 与本契约不变，由 Runtime 的 Queue Engine 使用。唯一的跨模块
   回调是 `schedule` 端点调用 `cronModel::scheduleRuntime()`（模块依赖
   cron→queue 单向）。实现必须继续以本文件为准。PHP-FPM/Apache、
-  RoadRunner supervisor、故障注入和未覆盖数据库/平台的联合验收仍未关闭。
+  故障注入和未覆盖数据库/平台的联合验收仍未关闭。

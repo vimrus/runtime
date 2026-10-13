@@ -2,7 +2,7 @@
 #
 # Queue direct-handler joint smoke: a real ZenTao application, a real MySQL
 # database and the Runtime queue engine claim/execute a direct handler task
-# (`bi.syncIncremental`) to completion.
+# (`queue.pruneFinished`) to completion.
 #
 # Usage:
 #   queue-direct-smoke.sh <app-package|app-dir>
@@ -64,7 +64,7 @@ VALUES ('system', 'common', 'global', 'version', '${app_version}');
 INSERT INTO zt_queue
   (uuid, channel, cron, handler, payload, status, priority, attempts, maxAttempts, availableDate, timeoutSeconds, idempotencyKey, traceID, cancelRequested, createdBy, createdDate, editedDate, version)
 VALUES
-  ('${task_uuid}', 'default', 0, 'bi.syncIncremental', '{}', 'queued', 0, 0, 3, NOW(), 60, '${task_key}', 'trace-${task_uuid}', 0, 'system', NOW(), NOW(), 1);
+  ('${task_uuid}', 'default', 0, 'queue.pruneFinished', '{}', 'queued', 0, 0, 3, NOW(), 60, '${task_key}', 'trace-${task_uuid}', 0, 'system', NOW(), NOW(), 1);
 SQL
 
 cat > "${release_root}/config/my.php" <<PHP
