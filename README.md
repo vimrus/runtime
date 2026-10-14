@@ -76,14 +76,18 @@ docker compose -f packaging/docker/compose.yaml --profile full up -d
 /opt/zentao/
   bin/zentao               Runtime 程序
   apps/zentao-ipd-22.6/    可拔插应用目录（应用代码，由配置装载）
-  data/apps/zentao-ipd/    应用数据：附件、Session、备份（多节点共享）
+  data/apps/zentao-ipd/    应用数据：附件（upload/）、Session、备份、观测数据（多节点共享）
   tmp-local/zentao-ipd/    应用临时区：缓存、编译产物、SQLite（节点本地）
   config/runtime.toml      Runtime 固定配置
-  data/                    附件、节点标识等持久化数据
+  data/observability/      Runtime 自身遥测数据集：访问/运行日志与自监控指标
   logs/                    Runtime、访问和 PHP 日志
-  observability/           Parquet 数据集
-  spool/observability/     观测故障时的本地 spool
+  run/                     PID、控制 socket、node-id（节点本地）
+  spool/observability/     观测发布失败时的本地 spool（节点本地）
 ```
+
+Runtime 默认开启观测（flush 模式）：应用日志与 Runtime 遥测默认进入
+Parquet 数据集；如需保留本地 JSONL 文件日志，可在 `config/runtime.toml`
+中设置 `observability.enabled = false`。
 
 Runtime 制品本身不包含应用代码。应用在 `config/runtime.toml` 的 `[[apps]]`
 中声明，一个 Runtime 可以同时托管多个应用：单一监听、单一 host，应用按

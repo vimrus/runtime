@@ -78,8 +78,12 @@ type QueueBridgeApp struct {
 type ObservabilityBridgeOptions struct {
 	Enabled bool
 	Listen  string
-	Token   string
-	Sink    EventSink
+	// Token is the legacy single bridge token. Tokens carries one token per
+	// application so that each application's telemetry is attributed to its
+	// own dataset.
+	Token  string
+	Tokens []string
+	Sink   EventSink
 }
 
 // Config builds the smallest useful Classic-mode Caddy configuration.
@@ -209,8 +213,9 @@ func Config(options Options) *caddy.Config {
 						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/observability/v1/events"}, nil),
 					}},
 					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(ObservabilityIngest{
-						Token: options.ObservabilityBridge.Token,
-						Sink:  options.ObservabilityBridge.Sink,
+						Token:  options.ObservabilityBridge.Token,
+						Tokens: options.ObservabilityBridge.Tokens,
+						Sink:   options.ObservabilityBridge.Sink,
 					}, "handler", "zentao_observability_ingest", nil)},
 				},
 				{
@@ -218,7 +223,8 @@ func Config(options Options) *caddy.Config {
 						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/observability/v1/query"}, nil),
 					}},
 					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(ObservabilityQuery{
-						Token: options.ObservabilityBridge.Token,
+						Token:  options.ObservabilityBridge.Token,
+						Tokens: options.ObservabilityBridge.Tokens,
 					}, "handler", "zentao_observability_query", nil)},
 				},
 			},

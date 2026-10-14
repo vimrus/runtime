@@ -59,7 +59,10 @@ maxHeaderBytes = 16384
 # Every application keeps its own database environment, data, session and temp
 # roots. Explicit env values win over the generated defaults
 # (ZT_WEB_ROOT, ZT_APP_ID, ZT_DATA_ROOT, ZT_TMP_ROOT, ZT_SESSION_PATH,
-# ZT_APISESSION_PATH).
+# ZT_APISESSION_PATH, ZT_BACKUP_PATH, ZENTAO_LOG_DIR). When observability is
+# enabled, every application also receives its own
+# ZENTAO_OBSERVABILITY_URL/TOKEN and, when the read-only query bridge is
+# available, ZENTAO_OBSERVABILITY_QUERY_URL/TOKEN and ZENTAO_LOG_MODE=flush.
 #
 # [[apps]]
 # id = "zentao-ipd"
@@ -116,12 +119,16 @@ minPoll = "50ms"
 maxPoll = "5s"
 
 [observability]
-# Enable metrics, logs, and Parquet publishing.
-enabled = false
+# Enable metrics, logs, and Parquet publishing (flush mode). Runtime
+# deployments default to flush mode; set enabled = false to keep file-mode
+# JSONL logs instead.
+enabled = true
 # Private loopback listener for PHP telemetry events.
 bridgeListen = "127.0.0.1:8082"
-# Root directory for published Parquet datasets.
-datasetRoot = "observability"
+# Root directory for the Runtime's own Parquet telemetry datasets
+# (access/runtime logs and self-monitoring metrics). Each application
+# publishes to <dataDir>/observability instead.
+datasetRoot = "data/observability"
 # Local spool directory used when publishing is temporarily unavailable.
 spoolPath = "spool/observability"
 # Maximum local spool size in bytes.

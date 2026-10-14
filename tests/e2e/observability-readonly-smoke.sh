@@ -93,7 +93,7 @@ wait_ready() {
 docker run --detach --name "${container}" \
     --entrypoint sh \
     --volume "${work}/app:/shared:rw" \
-    --volume "${work}/shared:/shared/observability:ro" \
+    --volume "${work}/shared:/shared/data/apps/zentao/observability:ro" \
     --volume "${work}/runtime.toml:/runtime-config/runtime.toml:ro" \
     "${RUNTIME_IMAGE}" \
     -c 'mkdir -p /shared/config /shared/logs /shared/spool && cp /runtime-config/runtime.toml /shared/config/runtime.toml && sed "s#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g" /opt/zentao/config/php.ini > /shared/config/php.ini && exec zentao serve --install-root /shared' >/dev/null
@@ -112,7 +112,7 @@ sleep 3
 spool_files="$(docker exec "${container}" sh -c 'find /shared/spool -type f -name "*.json" 2>/dev/null | wc -l')"
 [[ "${spool_files}" -gt 0 ]] || { echo "no spool files retained while dataset was read-only" >&2; exit 1; }
 
-parquet_files="$(docker exec "${container}" sh -c 'find /shared/observability -type f -name "*.parquet" 2>/dev/null | wc -l')"
+parquet_files="$(docker exec "${container}" sh -c 'find /shared/data/apps/zentao/observability -type f -name "*.parquet" 2>/dev/null | wc -l')"
 [[ "${parquet_files}" == "0" ]] || { echo "parquet published to a read-only dataset" >&2; exit 1; }
 
 echo "observability read-only smoke passed"

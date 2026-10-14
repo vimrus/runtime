@@ -96,6 +96,7 @@ start_node() {
         --entrypoint sh \
         --volume "${node_dir}:/shared:rw" \
         --volume "${work}/shared:/shared/observability:rw" \
+        --volume "${work}/shared-app:/shared/data/apps/zentao/observability:rw" \
         --volume "${config}:/runtime-config/runtime.toml:ro" \
         "${RUNTIME_IMAGE}" \
         -c 'mkdir -p /shared/config /shared/logs /shared/spool && cp /runtime-config/runtime.toml /shared/config/runtime.toml && sed "s#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g" /opt/zentao/config/php.ini > /shared/config/php.ini && exec zentao serve --install-root /shared' >/dev/null
@@ -114,7 +115,7 @@ wait_ready() {
     [[ "${ready}" == "1" ]]
 }
 
-mkdir -p "${work}/shared"
+mkdir -p "${work}/shared" "${work}/shared-app"
 stage_node "${work}/node-a"
 stage_node "${work}/node-b"
 write_runtime_config "${work}/runtime-a.toml" "node-a"
@@ -132,19 +133,19 @@ for container in "${container_a}" "${container_b}"; do
 done
 
 for _ in $(seq 1 10); do
-    if [[ -n "$(docker exec "${container_a}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-a/*' 2>/dev/null")" ]] \
-        && [[ -n "$(docker exec "${container_a}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-b/*' 2>/dev/null")" ]]; then
+    if [[ -n "$(docker exec "${container_a}" sh -c "find /shared/data/apps/zentao/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-a/*' 2>/dev/null")" ]] \
+        && [[ -n "$(docker exec "${container_a}" sh -c "find /shared/data/apps/zentao/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-b/*' 2>/dev/null")" ]]; then
         break
     fi
     sleep 1
 done
 
-node_a_parts="$(docker exec "${container_a}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-a/*' 2>/dev/null")"
-node_b_parts="$(docker exec "${container_a}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-b/*' 2>/dev/null")"
+node_a_parts="$(docker exec "${container_a}" sh -c "find /shared/data/apps/zentao/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-a/*' 2>/dev/null")"
+node_b_parts="$(docker exec "${container_a}" sh -c "find /shared/data/apps/zentao/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=node-b/*' 2>/dev/null")"
 [[ -n "${node_a_parts}" ]] || { echo "node-a published no parquet parts" >&2; exit 1; }
 [[ -n "${node_b_parts}" ]] || { echo "node-b published no parquet parts" >&2; exit 1; }
 
-all_parts="$(docker exec "${container_a}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' 2>/dev/null")"
+all_parts="$(docker exec "${container_a}" sh -c "find /shared/data/apps/zentao/observability/logs/schema=v1 -type f -name '*.parquet' 2>/dev/null")"
 if echo "${all_parts}" | grep -vE '/node=node-[ab]/' | grep -q .; then
     echo "shared dataset contains a partition that is not owned by node-a or node-b" >&2
     exit 1

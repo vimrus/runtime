@@ -466,6 +466,12 @@ Runtime 集成环境生成时会对暂存副本应用最小兼容补丁
   过滤），真实 MySQL/Redis 跨进程验证。
 - Z-OBS-01～04：Observability 事件客户端、日志脱敏/注册表、MetricService
   flush、LogService 接入错误处理。
+- Z-OBS-05（本工作树）：观测数据集按应用隔离：Runtime 遥测写
+  `data/observability`，每个应用写 `<dataDir>/observability`；桥 token 按
+  应用注入，上报与只读查询桥均按应用定域。
+- Z-FILE-02（本工作树）：`ZT_DATA_ROOT` 收敛为应用数据目录（附件位于
+  `<dataDir>/upload`）；应用日志目录收敛为 `<dataDir>/observability/raw-logs`
+  （`ZENTAO_LOG_DIR`），file 模式与 flush 模式的观测数据位于同一应用目录树下。
 - Z-QUEUE-01～09（核心）：Queue Bridge 八端点、Portable CAS、租约/心跳/
   完成/重试、cron 生产者迁移、direct handler 协议；真实 MySQL 契约测试与
   Runtime Worker 联合执行 e2e 通过。
@@ -477,8 +483,11 @@ Runtime 集成环境生成时会对暂存副本应用最小兼容补丁
 - Z-FILE-01（最小实现已落地）：`framework/base/router.class.php` 的
   `setTmpRoot()`/`setDataRoot()` 已支持 `ZT_TMP_ROOT`/`ZT_DATA_ROOT`
   环境变量（默认行为不变），`module/file` 的上传保存路径改为经
-  `getDataRoot()` 计算。其余直连 `www/data` 的模块（testcase、convert、
-  backup 等）待按同一契约收敛后再启用附件整体外移。
+  `getDataRoot()` 计算。备份已按同一契约收敛：Runtime 注入
+  `ZT_BACKUP_PATH`（`data/apps/<app>/backup`），
+  `backupModel::getBackupPath()` 在未自定义备份目录时使用该变量。
+  其余直连 `www/data` 的模块（testcase、convert 等）待按同一契约收敛后
+  再启用附件整体外移。
 - Z-QUEUE-10：邮件/Webhook 等更多业务 Handler 迁移与回滚策略。
 - Z-QUEUE-11：后台菜单归属、权限点与界面完整审计。
 - Z-INSTALL/UPGRADE/MIGRATE：队列旧表迁移升级 SQL 已实现并独立验证

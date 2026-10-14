@@ -77,7 +77,7 @@ docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/ind
 docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/index.php?token=supersecret"
 sleep 1
 
-node_id="$(docker exec "${container}" cat /shared/data/node-id)"
+node_id="$(docker exec "${container}" cat /shared/run/node-id)"
 access_log="/shared/logs/access-${node_id}.jsonl"
 docker exec "${container}" sh -c "grep -c 'http.log.access' '${access_log}' >/dev/null" \
     || { echo "no access log entries found" >&2; exit 1; }

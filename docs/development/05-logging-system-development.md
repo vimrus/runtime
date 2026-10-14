@@ -105,7 +105,7 @@ auditLog = ""
 
 [observability]
 enabled = true
-datasetRoot = "observability"
+datasetRoot = "data/observability"
 spoolPath = "spool/observability"
 maxBatchRows = 10000
 maxBatchBytes = 16777216
@@ -132,9 +132,10 @@ Runtime   = logsDir/runtime-<nodeID>.jsonl
 Audit     = runtime.auditLog，未配置时 logsDir/audit-<nodeID>.jsonl
 Access    = logsDir/access-<nodeID>.jsonl
 PHP       = <install-root>/logs/php-error.log
+应用日志  = <dataDir>/observability/raw-logs/<topic>-<nodeID>-<date>.jsonl（file 模式，ZENTAO_LOG_DIR）
 ```
 
-因此不要假设 `runtime.logPath` 的 basename 会成为最终 Runtime 日志文件名。`nodeID` 为空时由 Runtime 从 `data/node-id` 持久化生成；多节点部署必须显式使用稳定且唯一的节点标识。
+因此不要假设 `runtime.logPath` 的 basename 会成为最终 Runtime 日志文件名。`nodeID` 为空时由 Runtime 从 `run/node-id` 持久化生成；多节点部署必须显式使用稳定且唯一的节点标识。
 
 ### 4.3 文件权限
 

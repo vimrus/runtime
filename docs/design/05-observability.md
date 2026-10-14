@@ -114,6 +114,16 @@ observability/
 
 目录使用 Hive partitioning 命名，使 DuckDB 可以从路径读取 `schema`、`date`、`hour` 和 `node`，并根据查询条件进行文件裁剪。
 
+应用级隔离：`observability.datasetRoot` 只承载 Runtime 自身的遥测（访问/运行
+日志与自监控指标）；每个应用的事件写入该应用自己的数据集
+`<app dataDir>/observability/{logs,metrics}`。Runtime 为每个应用生成独立的
+桥 token 并注入该应用的环境，应用的上报与只读查询都只作用于自己的数据集，
+应用之间互不可见。多节点部署共享 `data/` 根即可同时共享 Runtime 与各应用的
+观测数据集。
+
+Runtime 默认开启观测（`enabled = true`），新装即进入 flush 模式；显式设置
+`enabled = false`（或 `ZENTAO_OBSERVABILITY_ENABLED=false`）可退回文件模式。
+
 指标与日志使用不同根目录和 Schema，不能混在同一个 Parquet 文件中。`nodeID` 必须是安装时生成并在 Cluster 内唯一的稳定 ID，不能使用可重复的主机短名作为唯一依据。
 
 每个节点目录包含不匹配 Parquet 查询通配符的不可变 owner marker，记录 Cluster ID、nodeID 和节点安装身份摘要。节点首次创建目录时原子声明所有权；发现同一 nodeID 对应不同安装身份时拒绝发布并告警。节点重装或接管必须通过显式管理流程更新 marker，不能自动覆盖。

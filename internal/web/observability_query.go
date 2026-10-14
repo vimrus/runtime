@@ -2,9 +2,9 @@ package web
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"sync"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -60,20 +60,49 @@ type QueryResponse struct {
 // state live outside the serializable Caddy config.
 type ObservabilityQueryHandler func(ctx context.Context, request QueryRequest) (QueryResponse, error)
 
-var observabilityQueryBridge ObservabilityQueryHandler
+var (
+	observabilityQueryMu      sync.RWMutex
+	observabilityQueryBridge  ObservabilityQueryHandler
+	observabilityQueryBridges = map[string]ObservabilityQueryHandler{}
+)
 
 // SetObservabilityQueryHandler registers the read-only query executor.
 func SetObservabilityQueryHandler(handler ObservabilityQueryHandler) {
+	observabilityQueryMu.Lock()
+	defer observabilityQueryMu.Unlock()
 	observabilityQueryBridge = handler
+}
+
+// SetObservabilityQueryHandlerFor registers the read-only query executor for
+// one bridge token. Each application has its own token so that queries are
+// scoped to that application's dataset.
+func SetObservabilityQueryHandlerFor(token string, handler ObservabilityQueryHandler) {
+	observabilityQueryMu.Lock()
+	defer observabilityQueryMu.Unlock()
+	if token == "" || handler == nil {
+		delete(observabilityQueryBridges, token)
+		return
+	}
+	observabilityQueryBridges[token] = handler
+}
+
+func observabilityQueryHandlerFor(token string) ObservabilityQueryHandler {
+	observabilityQueryMu.RLock()
+	defer observabilityQueryMu.RUnlock()
+	if handler, ok := observabilityQueryBridges[token]; ok {
+		return handler
+	}
+	return observabilityQueryBridge
 }
 
 // ObservabilityQuery protects and serves the private PHP log-viewer query
 // endpoint. It only listens on loopback; queries are bounded and never accept
 // arbitrary SQL or paths.
 type ObservabilityQuery struct {
-	Token    string `json:"token,omitempty"`
-	MaxRows  int    `json:"maxRows,omitempty"`
-	MaxBytes int    `json:"maxBytes,omitempty"`
+	Token    string   `json:"token,omitempty"`
+	Tokens   []string `json:"tokens,omitempty"`
+	MaxRows  int      `json:"maxRows,omitempty"`
+	MaxBytes int      `json:"maxBytes,omitempty"`
 }
 
 func (ObservabilityQuery) CaddyModule() caddy.ModuleInfo {
@@ -97,7 +126,8 @@ func (h *ObservabilityQuery) ServeHTTP(w http.ResponseWriter, r *http.Request, _
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limitBytes)
 
-	if h.Token == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Zentao-Observability-Token")), []byte(h.Token)) != 1 {
+	requestToken := r.Header.Get("X-Zentao-Observability-Token")
+	if !observabilityTokenAllowed(h.Token, h.Tokens, requestToken) {
 		writeObservabilityError(w, http.StatusUnauthorized, "unauthenticated", "observability query authentication required")
 		return nil
 	}
@@ -105,7 +135,8 @@ func (h *ObservabilityQuery) ServeHTTP(w http.ResponseWriter, r *http.Request, _
 		writeObservabilityError(w, http.StatusBadRequest, "unsupported_schema", "unsupported observability schema")
 		return nil
 	}
-	if observabilityQueryBridge == nil {
+	handler := observabilityQueryHandlerFor(requestToken)
+	if handler == nil {
 		writeObservabilityError(w, http.StatusServiceUnavailable, "unavailable", "observability query is not available")
 		return nil
 	}
@@ -131,7 +162,7 @@ func (h *ObservabilityQuery) ServeHTTP(w http.ResponseWriter, r *http.Request, _
 		return nil
 	}
 
-	response, err := observabilityQueryBridge(r.Context(), request)
+	response, err := handler(r.Context(), request)
 	if err != nil {
 		writeObservabilityError(w, http.StatusBadRequest, "query_failed", err.Error())
 		return nil

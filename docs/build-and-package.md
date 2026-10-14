@@ -21,7 +21,7 @@ scripts/native/build-linux.sh
 `php/`、`config/php.ini`、`config/conf.d`、`config/dm_svc.conf`、
 `config/runtime.example.toml`），操作方放置的内容——`config/runtime.toml`、
 已安装的应用目录（`app/`、`apps/`）、`data/`、`logs/`、`run/`、
-`tmp-local/`、`observability/`、`spool/`——会被保留。
+`tmp-local/`、`data/observability/`、`spool/`——会被保留。
 
 如需覆盖 Go 代理或 Debian 镜像源：
 

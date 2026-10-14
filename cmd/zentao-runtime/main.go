@@ -367,21 +367,21 @@ func serve(args []string) error {
 	defer auditor.Close()
 
 	registry := newHealthRegistry(cfg)
-	obsPublisher, err := newObservabilityPublisher(cfg, nodeID)
+	obsPublisher, err := newObservabilityPublisher(cfg, cfg.Observability.DatasetRoot, cfg.Observability.SpoolPath, nodeID)
 	if err != nil {
 		return err
 	}
-	if obsPublisher != nil {
-		registry.Register("observability", health.KindShared, false, true, func(ctx context.Context) health.Result {
-			if err := obsPublisher.Healthy(); err != nil {
-				return health.Result{Name: "observability", Kind: health.KindShared, Status: health.StatusFailed, Message: "observability spool is not writable"}
-			}
-			return health.Result{Name: "observability", Kind: health.KindShared, Status: health.StatusOK}
-		})
-	}
+	registerObservabilityHealth(registry, "observability", obsPublisher)
 	queryEngine, err := newObservabilityQueryEngine(cfg)
 	if err != nil {
 		return err
+	}
+	obsApps, err := prepareObservabilityApps(&cfg, nodeID, queryEngine != nil)
+	if err != nil {
+		return err
+	}
+	for _, app := range obsApps {
+		registerObservabilityHealth(registry, "observability:"+app.id, app.publisher)
 	}
 	queueEngines, err := prepareQueueEngines(&cfg, logger, nodeID)
 	if err != nil {
@@ -415,7 +415,7 @@ func serve(args []string) error {
 			return fmt.Errorf("initialize jsonl converter: %w", err)
 		}
 	}
-	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
+	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, obsApps, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
 	host.logsDir = logsDir
 	host.jsonlSources = cfg.Observability.JSONLConvertSources
 	host.collector = &diagnostics.Collector{
@@ -445,49 +445,26 @@ func serve(args []string) error {
 		return err
 	}
 	observabilityBridge := web.ObservabilityBridgeOptions{}
-	if obsPublisher != nil {
-		web.SetObservabilitySink(obsPublisher)
-		observabilityTokenBytes := make([]byte, 32)
-		if _, err := rand.Read(observabilityTokenBytes); err != nil {
-			return fmt.Errorf("generate observability bridge token: %w", err)
-		}
-		observabilityToken := hex.EncodeToString(observabilityTokenBytes)
-		observabilityURL := "http://" + cfg.Observability.BridgeListen + "/internal/runtime/observability/v1/events"
-		if err := os.Setenv("ZENTAO_OBSERVABILITY_URL", observabilityURL); err != nil {
-			return fmt.Errorf("set observability bridge url: %w", err)
-		}
-		if err := os.Setenv("ZENTAO_OBSERVABILITY_TOKEN", observabilityToken); err != nil {
-			return fmt.Errorf("set observability bridge token: %w", err)
-		}
-		if err := os.Setenv("ZENTAO_OBSERVABILITY_SCHEMA", strconv.Itoa(observability.SchemaVersion)); err != nil {
-			return fmt.Errorf("set observability schema version: %w", err)
+	if len(obsApps) > 0 {
+		tokens := make([]string, 0, len(obsApps))
+		for _, app := range obsApps {
+			tokens = append(tokens, app.token)
+			web.SetObservabilitySinkFor(app.token, app.publisher)
+			if queryEngine != nil {
+				// D7：只读查询桥可用时才进入 flush 模式，避免与本地 JSONL 双写。
+				web.SetObservabilityQueryHandlerFor(app.token, host.appQueryBridge(app.dir))
+			}
 		}
 		observabilityBridge = web.ObservabilityBridgeOptions{
 			Enabled: true,
 			Listen:  cfg.Observability.BridgeListen,
-			Token:   observabilityToken,
-			Sink:    obsPublisher,
-		}
-		if queryEngine != nil {
-			// D7：只读查询桥可用时才进入 flush 模式，避免与本地 JSONL 双写。
-			web.SetObservabilityQueryHandler(host.observabilityQueryBridge)
-			queryURL := "http://" + cfg.Observability.BridgeListen + "/internal/runtime/observability/v1/query"
-			if err := os.Setenv("ZENTAO_OBSERVABILITY_QUERY_URL", queryURL); err != nil {
-				return fmt.Errorf("set observability query url: %w", err)
-			}
-			if err := os.Setenv("ZENTAO_OBSERVABILITY_QUERY_TOKEN", observabilityToken); err != nil {
-				return fmt.Errorf("set observability query token: %w", err)
-			}
-			if err := os.Setenv("ZENTAO_LOG_MODE", "flush"); err != nil {
-				return fmt.Errorf("set log mode: %w", err)
-			}
+			Tokens:  tokens,
 		}
 	}
 	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge)); err != nil {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
-	host.observabilityToken = observabilityBridge.Token
 	controlServer, err := control.ListenWithOptions(cfg.Runtime.ControlSocket, host, control.Options{
 		Authorizer: controlAuthorizer(),
 		Auditor:    auditor,
@@ -535,9 +512,16 @@ func serve(args []string) error {
 	if obsPublisher != nil {
 		go func() { _ = obsPublisher.Recover(serveCtx) }()
 		go obsPublisher.Run(serveCtx)
-		go runRetentionLoop(serveCtx, cfg, logger, nodeID)
+		for _, app := range obsApps {
+			publisher := app.publisher
+			go func() { _ = publisher.Recover(serveCtx) }()
+			go publisher.Run(serveCtx)
+		}
+		for _, target := range observabilityRoots(cfg, obsApps) {
+			go runRetentionLoop(serveCtx, logger, nodeID, target, cfg.Observability)
+		}
 		go jsonlConverter.Run(serveCtx)
-		logger.Info("observability publisher started")
+		logger.Info("observability publisher started", slog.Int("applications", len(obsApps)))
 	}
 
 	signals := make(chan os.Signal, 1)
@@ -556,9 +540,9 @@ func serve(args []string) error {
 			logger.Warn("queue engine drain failed", slog.String("app", entry.name), slog.Any("error", err))
 		}
 	}
-	if obsPublisher != nil {
+	for _, publisher := range observabilityPublishers(obsPublisher, obsApps) {
 		flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := obsPublisher.FlushAll(flushCtx); err != nil {
+		if err := publisher.FlushAll(flushCtx); err != nil {
 			logger.Warn("observability final flush failed", slog.Any("error", err))
 		}
 		flushCancel()
@@ -810,7 +794,7 @@ func newQueueEngineWithBridge(cfg config.Config, baseURL, token string, logger *
 	}, bridgeClient)
 }
 
-func newObservabilityPublisher(cfg config.Config, nodeID string) (*observability.Publisher, error) {
+func newObservabilityPublisher(cfg config.Config, datasetRoot, spoolPath, nodeID string) (*observability.Publisher, error) {
 	if !cfg.Observability.Enabled {
 		return nil, nil
 	}
@@ -827,8 +811,8 @@ func newObservabilityPublisher(cfg config.Config, nodeID string) (*observability
 		clusterID = "standalone"
 	}
 	return observability.NewPublisher(observability.Config{
-		DatasetRoot:      cfg.Observability.DatasetRoot,
-		SpoolPath:        cfg.Observability.SpoolPath,
+		DatasetRoot:      datasetRoot,
+		SpoolPath:        spoolPath,
 		NodeID:           nodeID,
 		ClusterID:        clusterID,
 		BootID:           instance,
@@ -842,6 +826,101 @@ func newObservabilityPublisher(cfg config.Config, nodeID string) (*observability
 	}, writer)
 }
 
+// observabilityApp binds one application to its bridge token and Parquet
+// publisher; each application writes only its own observability dataset
+// (<DataDir>/observability).
+type observabilityApp struct {
+	id        string
+	dir       string
+	token     string
+	publisher *observability.Publisher
+}
+
+// observabilityRoot names one dataset root handled by retention and cleanup.
+type observabilityRoot struct {
+	name string
+	root string
+}
+
+// prepareObservabilityApps creates one publisher per enabled application,
+// generates per-application bridge tokens and injects the per-application
+// observability environment. Explicit application environment values win over
+// the generated defaults.
+func prepareObservabilityApps(cfg *config.Config, nodeID string, flush bool) ([]observabilityApp, error) {
+	if !cfg.Observability.Enabled {
+		return nil, nil
+	}
+	apps := make([]observabilityApp, 0, len(cfg.Apps))
+	for index := range cfg.Apps {
+		app := &cfg.Apps[index]
+		if !app.Enabled {
+			continue
+		}
+		token := ""
+		if app.Env != nil {
+			token = app.Env["ZENTAO_OBSERVABILITY_TOKEN"]
+		}
+		if token == "" {
+			tokenBytes := make([]byte, 32)
+			if _, err := rand.Read(tokenBytes); err != nil {
+				return nil, fmt.Errorf("generate observability bridge token for %s: %w", app.ID, err)
+			}
+			token = hex.EncodeToString(tokenBytes)
+		}
+		if app.Env == nil {
+			app.Env = make(map[string]string)
+		}
+		setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_URL", "http://"+cfg.Observability.BridgeListen+"/internal/runtime/observability/v1/events")
+		setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_TOKEN", token)
+		setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_SCHEMA", strconv.Itoa(observability.SchemaVersion))
+		if flush {
+			// 只读查询桥可用时才进入 flush 模式，避免与本地 JSONL 双写。
+			setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_QUERY_URL", "http://"+cfg.Observability.BridgeListen+"/internal/runtime/observability/v1/query")
+			setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_QUERY_TOKEN", token)
+			setEnvDefault(app.Env, "ZENTAO_LOG_MODE", "flush")
+		}
+		publisher, err := newObservabilityPublisher(*cfg, app.ObservabilityDir(), filepath.Join(cfg.Observability.SpoolPath, app.ID), nodeID)
+		if err != nil {
+			return nil, fmt.Errorf("initialize observability for application %s: %w", app.ID, err)
+		}
+		if publisher != nil {
+			apps = append(apps, observabilityApp{id: app.ID, dir: app.ObservabilityDir(), token: token, publisher: publisher})
+		}
+	}
+	return apps, nil
+}
+
+func registerObservabilityHealth(registry *health.Registry, name string, publisher *observability.Publisher) {
+	if publisher == nil {
+		return
+	}
+	registry.Register(name, health.KindShared, false, true, func(context.Context) health.Result {
+		if err := publisher.Healthy(); err != nil {
+			return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusFailed, Message: "observability spool is not writable"}
+		}
+		return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusOK}
+	})
+}
+
+func observabilityRoots(cfg config.Config, apps []observabilityApp) []observabilityRoot {
+	roots := []observabilityRoot{{name: "runtime", root: cfg.Observability.DatasetRoot}}
+	for _, app := range apps {
+		roots = append(roots, observabilityRoot{name: app.id, root: app.dir})
+	}
+	return roots
+}
+
+func observabilityPublishers(runtime *observability.Publisher, apps []observabilityApp) []*observability.Publisher {
+	publishers := make([]*observability.Publisher, 0, len(apps)+1)
+	if runtime != nil {
+		publishers = append(publishers, runtime)
+	}
+	for _, app := range apps {
+		publishers = append(publishers, app.publisher)
+	}
+	return publishers
+}
+
 func newObservabilityQueryEngine(cfg config.Config) (query.Engine, error) {
 	if !cfg.Observability.Enabled || !duckdb.Supported() {
 		return nil, nil
@@ -849,15 +928,15 @@ func newObservabilityQueryEngine(cfg config.Config) (query.Engine, error) {
 	return duckdb.NewEngine(2, "256MB")
 }
 
-func runRetentionLoop(ctx context.Context, cfg config.Config, logger *logging.Logger, nodeID string) {
+func runRetentionLoop(ctx context.Context, logger *logging.Logger, nodeID string, target observabilityRoot, cfg config.Observability) {
 	cleaner, err := retention.New(retention.Config{
-		DatasetRoot: cfg.Observability.DatasetRoot,
+		DatasetRoot: target.root,
 		NodeID:      nodeID,
-		MetricsDays: cfg.Observability.MetricsDays,
-		LogDays:     cfg.Observability.LogDays,
+		MetricsDays: cfg.MetricsDays,
+		LogDays:     cfg.LogDays,
 	})
 	if err != nil {
-		logger.Warn("observability retention disabled", slog.Any("error", err))
+		logger.Warn("observability retention disabled", slog.String("dataset", target.name), slog.Any("error", err))
 		return
 	}
 	ticker := time.NewTicker(24 * time.Hour)
@@ -869,11 +948,11 @@ func runRetentionLoop(ctx context.Context, cfg config.Config, logger *logging.Lo
 		case <-ticker.C:
 			result, err := cleaner.CleanOwn(ctx)
 			if err != nil {
-				logger.Warn("observability retention failed", slog.Any("error", err))
+				logger.Warn("observability retention failed", slog.String("dataset", target.name), slog.Any("error", err))
 				continue
 			}
 			if result.RemovedFiles > 0 {
-				logger.Info("observability retention cleaned", slog.Int("files", result.RemovedFiles), slog.Int64("bytes", result.RemovedBytes))
+				logger.Info("observability retention cleaned", slog.String("dataset", target.name), slog.Int("files", result.RemovedFiles), slog.Int64("bytes", result.RemovedBytes))
 			}
 		}
 	}
@@ -1007,27 +1086,27 @@ func loadServeConfig(path, root, listen, pidFile, controlSocket string, threads 
 }
 
 type host struct {
-	configPath         string
-	machine            *lifecycle.Machine
-	stop               chan struct{}
-	stopOnce           sync.Once
-	mu                 sync.RWMutex
-	config             config.Config
-	logger             *logging.Logger
-	health             *health.Registry
-	auditor            control.Auditor
-	queryEngine        query.Engine
-	obsPublisher       *observability.Publisher
-	jsonlConverter     *jsonl.Converter
-	accessLogPath      string
-	accessLogKeepDays  int
-	observabilityToken string
-	logsDir            string
-	jsonlSources       []string
-	collector          *diagnostics.Collector
+	configPath        string
+	machine           *lifecycle.Machine
+	stop              chan struct{}
+	stopOnce          sync.Once
+	mu                sync.RWMutex
+	config            config.Config
+	logger            *logging.Logger
+	health            *health.Registry
+	auditor           control.Auditor
+	queryEngine       query.Engine
+	obsPublisher      *observability.Publisher
+	obsApps           []observabilityApp
+	jsonlConverter    *jsonl.Converter
+	accessLogPath     string
+	accessLogKeepDays int
+	logsDir           string
+	jsonlSources      []string
+	collector         *diagnostics.Collector
 }
 
-func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
+func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, obsApps []observabilityApp, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
 	return &host{
 		configPath:        configPath,
 		config:            cfg,
@@ -1038,6 +1117,7 @@ func newHost(configPath string, cfg config.Config, logger *logging.Logger, regis
 		auditor:           auditor,
 		queryEngine:       queryEngine,
 		obsPublisher:      obsPublisher,
+		obsApps:           obsApps,
 		jsonlConverter:    jsonlConverter,
 		accessLogPath:     accessLogPath,
 		accessLogKeepDays: accessLogKeepDays,
@@ -1070,8 +1150,8 @@ func (h *host) HandleControl(ctx context.Context, request control.Request) contr
 			"version": versionData(),
 			"config":  h.configSummary(),
 		}
-		if h.obsPublisher != nil {
-			diagnose["observability"] = h.obsPublisher.Stats()
+		if stats := h.observabilityStats(); stats != nil {
+			diagnose["observability"] = stats
 		}
 		return control.Success(diagnose)
 	case "logs", "metrics":
@@ -1114,37 +1194,71 @@ func (h *host) collectLogs() control.Response {
 func (h *host) observabilityClean(ctx context.Context) control.Response {
 	h.mu.RLock()
 	cfg := h.config
+	apps := append([]observabilityApp(nil), h.obsApps...)
 	h.mu.RUnlock()
 	nodeID := cfg.Runtime.NodeID
 	if nodeID == "" {
 		nodeID = "node-" + instanceID()
 	}
-	cleaner, err := retention.New(retention.Config{
-		DatasetRoot: cfg.Observability.DatasetRoot,
-		NodeID:      nodeID,
-		MetricsDays: cfg.Observability.MetricsDays,
-		LogDays:     cfg.Observability.LogDays,
-	})
-	if err != nil {
-		return control.Failure("clean_failed", err.Error())
+	cleaned := map[string]any{}
+	for _, target := range observabilityRoots(cfg, apps) {
+		cleaner, err := retention.New(retention.Config{
+			DatasetRoot: target.root,
+			NodeID:      nodeID,
+			MetricsDays: cfg.Observability.MetricsDays,
+			LogDays:     cfg.Observability.LogDays,
+		})
+		if err != nil {
+			return control.Failure("clean_failed", err.Error())
+		}
+		result, err := cleaner.CleanOwn(ctx)
+		if err != nil {
+			return control.Failure("clean_failed", "observability retention failed")
+		}
+		cleaned[target.name] = result
 	}
-	result, err := cleaner.CleanOwn(ctx)
-	if err != nil {
-		return control.Failure("clean_failed", "observability retention failed")
+	if len(cleaned) == 0 {
+		return control.Failure("unavailable", "observability is not enabled")
 	}
-	return control.Success(result)
+	return control.Success(cleaned)
 }
 
 func (h *host) observabilityFlush(ctx context.Context) control.Response {
-	if h.obsPublisher == nil {
+	if h.obsPublisher == nil && len(h.obsApps) == 0 {
 		return control.Failure("unavailable", "observability publisher is not available")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := h.obsPublisher.FlushAll(ctx); err != nil {
-		return control.Failure("flush_failed", "observability flush failed")
+	stats := map[string]any{}
+	if h.obsPublisher != nil {
+		if err := h.obsPublisher.FlushAll(ctx); err != nil {
+			return control.Failure("flush_failed", "observability flush failed")
+		}
+		stats["runtime"] = h.obsPublisher.Stats()
 	}
-	return control.Success(map[string]any{"stats": h.obsPublisher.Stats()})
+	for _, app := range h.obsApps {
+		if err := app.publisher.FlushAll(ctx); err != nil {
+			return control.Failure("flush_failed", "observability flush failed")
+		}
+		stats[app.id] = app.publisher.Stats()
+	}
+	return control.Success(map[string]any{"stats": stats})
+}
+
+// observabilityStats returns the pipeline statistics of the runtime dataset
+// and every application dataset, keyed by dataset name.
+func (h *host) observabilityStats() map[string]any {
+	if h.obsPublisher == nil && len(h.obsApps) == 0 {
+		return nil
+	}
+	stats := map[string]any{}
+	if h.obsPublisher != nil {
+		stats["runtime"] = h.obsPublisher.Stats()
+	}
+	for _, app := range h.obsApps {
+		stats[app.id] = app.publisher.Stats()
+	}
+	return stats
 }
 
 func (h *host) observabilityQuery(ctx context.Context, request control.Request) control.Response {
@@ -1330,8 +1444,8 @@ func (h *host) status() map[string]any {
 			"clusterID": cfg.Runtime.ClusterID,
 		},
 	}
-	if h.obsPublisher != nil {
-		result["observability"] = h.obsPublisher.Stats()
+	if stats := h.observabilityStats(); stats != nil {
+		result["observability"] = stats
 	}
 	return result
 }
@@ -1390,12 +1504,15 @@ func (h *host) reload() control.Response {
 		return control.Success(map[string]any{"reloaded": false, "restartRequired": true})
 	}
 	observabilityBridge := web.ObservabilityBridgeOptions{}
-	if h.obsPublisher != nil && candidate.Observability.Enabled {
+	if len(h.obsApps) > 0 && candidate.Observability.Enabled {
+		tokens := make([]string, 0, len(h.obsApps))
+		for _, app := range h.obsApps {
+			tokens = append(tokens, app.token)
+		}
 		observabilityBridge = web.ObservabilityBridgeOptions{
 			Enabled: true,
 			Listen:  candidate.Observability.BridgeListen,
-			Token:   h.observabilityToken,
-			Sink:    h.obsPublisher,
+			Tokens:  tokens,
 		}
 	}
 	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge))
@@ -1457,8 +1574,8 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 }
 
 // appRoutes converts configured applications into web routes and injects the
-// per-application data, session and temp roots. Explicit application
-// environment always wins over the generated defaults.
+// per-application data, session, temporary and log roots. Explicit
+// application environment always wins over the generated defaults.
 func appRoutes(cfg config.Config) []web.App {
 	apps := make([]web.App, 0, len(cfg.Apps))
 	for _, app := range cfg.Apps {
@@ -1475,10 +1592,12 @@ func appRoutes(cfg config.Config) []web.App {
 		}
 		setEnvDefault(env, "ZT_WEB_ROOT", strings.Trim(prefix, "/"))
 		setEnvDefault(env, "ZT_APP_ID", app.ID)
-		setEnvDefault(env, "ZT_DATA_ROOT", filepath.Join(app.DataDir, "data"))
+		setEnvDefault(env, "ZT_DATA_ROOT", app.DataDir)
 		setEnvDefault(env, "ZT_TMP_ROOT", app.TmpDir)
 		setEnvDefault(env, "ZT_SESSION_PATH", filepath.Join(app.DataDir, "session"))
 		setEnvDefault(env, "ZT_APISESSION_PATH", filepath.Join(app.DataDir, "apisession"))
+		setEnvDefault(env, "ZT_BACKUP_PATH", filepath.Join(app.DataDir, "backup"))
+		setEnvDefault(env, "ZENTAO_LOG_DIR", filepath.Join(app.ObservabilityDir(), "raw-logs"))
 		apps = append(apps, web.App{
 			ID:        app.ID,
 			Prefix:    prefix,
@@ -1513,10 +1632,11 @@ func prepareApps(cfg config.Config) error {
 			continue
 		}
 		for _, dir := range []string{
-			filepath.Join(app.DataDir, "data"),
+			filepath.Join(app.DataDir, "upload"),
 			filepath.Join(app.DataDir, "session"),
 			filepath.Join(app.DataDir, "apisession"),
 			filepath.Join(app.DataDir, "backup"),
+			app.ObservabilityDir(),
 			app.TmpDir,
 		} {
 			if err := os.MkdirAll(dir, 0o770); err != nil {
@@ -1690,17 +1810,17 @@ func instanceID() string {
 }
 
 // resolveNodeID returns the configured node ID, or a stable per-installation
-// ID persisted in <installRoot>/data/node-id so that log file names and
+// ID persisted in <installRoot>/run/node-id so that log file names and
 // Parquet partitions stay stable across restarts.
 func resolveNodeID(cfg config.Config, installRoot string) (string, error) {
 	if cfg.Runtime.NodeID != "" {
 		return cfg.Runtime.NodeID, nil
 	}
-	dataDir := filepath.Join(installRoot, "data")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return "", fmt.Errorf("create data directory: %w", err)
+	runDir := filepath.Join(installRoot, "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		return "", fmt.Errorf("create run directory: %w", err)
 	}
-	nodeFile := filepath.Join(dataDir, "node-id")
+	nodeFile := filepath.Join(runDir, "node-id")
 	if data, err := os.ReadFile(nodeFile); err == nil {
 		if id := strings.TrimSpace(string(data)); id != "" {
 			if !validNodeID(id) {

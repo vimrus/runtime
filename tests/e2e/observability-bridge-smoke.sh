@@ -95,20 +95,20 @@ docker run --detach --name "${container}" \
 
 wait_ready
 
-node_id="$(docker exec "${container}" cat /shared/data/node-id)"
+node_id="$(docker exec "${container}" cat /shared/run/node-id)"
 response="$(docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/obs.php)"
 echo "${response}" | jq -e '.accepted == 2' >/dev/null \
     || { echo "event not accepted: ${response}" >&2; exit 1; }
 
 for _ in $(seq 1 10); do
-    if docker exec "${container}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' 2>/dev/null | grep -q ."; then
+    if docker exec "${container}" sh -c "find /shared/data/apps/zentao/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' 2>/dev/null | grep -q ."; then
         break
     fi
     sleep 1
 done
-docker exec "${container}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' 2>/dev/null | grep -q ." \
+docker exec "${container}" sh -c "find /shared/data/apps/zentao/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' 2>/dev/null | grep -q ." \
     || { echo "PHP event was not published to node partition" >&2; exit 1; }
-docker exec "${container}" sh -c "find /shared/observability/metrics/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' 2>/dev/null | grep -q ." \
+docker exec "${container}" sh -c "find /shared/data/apps/zentao/observability/metrics/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' 2>/dev/null | grep -q ." \
     || { echo "PHP metric was not published to node partition" >&2; exit 1; }
 
 env_response="$(docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/obs-env.php)"

@@ -146,6 +146,32 @@ func TestObservabilityIngestFallsBackToRegisteredSink(t *testing.T) {
 	}
 }
 
+func TestObservabilityIngestSelectsSinkByToken(t *testing.T) {
+	sinkA := &recordingEventSink{}
+	sinkB := &recordingEventSink{}
+	SetObservabilitySinkFor("token-a", sinkA)
+	SetObservabilitySinkFor("token-b", sinkB)
+	defer SetObservabilitySinkFor("token-a", nil)
+	defer SetObservabilitySinkFor("token-b", nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"schemaVersion": observability.SchemaVersion,
+		"events": []observability.Event{{
+			ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+			Source: "php", Kind: observability.KindLogs, Message: "hello",
+		}},
+	})
+	req := newIngestRequest(string(body), "token-b", strconv.Itoa(observability.SchemaVersion))
+	rec := httptest.NewRecorder()
+	handler := &ObservabilityIngest{Tokens: []string{"token-a", "token-b"}}
+	if err := handler.ServeHTTP(rec, req, caddyhttp.HandlerFunc(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusOK || sinkA.accepted != 0 || sinkB.accepted != 1 {
+		t.Fatalf("per-token sink not honored: code=%d sinkA=%d sinkB=%d", rec.Code, sinkA.accepted, sinkB.accepted)
+	}
+}
+
 func TestAccessLogEncoderRedactsSensitiveQueryParams(t *testing.T) {
 	var encoder struct {
 		Format string                     `json:"format"`

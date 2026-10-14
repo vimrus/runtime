@@ -111,6 +111,13 @@ func (a App) DocumentRoot() string {
 	return filepath.Join(a.Dir, a.WebRoot)
 }
 
+// ObservabilityDir returns the per-application observability root that holds
+// the application's Parquet datasets (logs/metrics) and, in file mode, the
+// raw JSONL logs (raw-logs/).
+func (a App) ObservabilityDir() string {
+	return filepath.Join(a.DataDir, "observability")
+}
+
 type Queue struct {
 	Enabled           bool          `json:"enabled" toml:"enabled"`
 	BridgeBaseURL     string        `json:"bridgeBaseURL" toml:"bridgeBaseURL"`
@@ -216,8 +223,11 @@ func Default() Config {
 			},
 		},
 		Observability: Observability{
+			// Observability (flush mode) is enabled by default for Runtime
+			// deployments; set enabled = false to keep file-mode logs instead.
+			Enabled:                 true,
 			BridgeListen:            "127.0.0.1:8082",
-			DatasetRoot:             "observability",
+			DatasetRoot:             "data/observability",
 			SpoolPath:               "spool/observability",
 			MaxSpoolBytes:           1024 * 1024 * 1024,
 			MaxBatchRows:            10000,
@@ -249,7 +259,7 @@ func DefaultForRoot(root string) Config {
 	config.Runtime.PIDFile = filepath.Join(root, "run", "runtime.pid")
 	config.Runtime.LogPath = filepath.Join(root, "logs", "runtime.log")
 	config.Web.Root = filepath.Join(root, "app", "zentaopms", "www")
-	config.Observability.DatasetRoot = filepath.Join(root, "observability")
+	config.Observability.DatasetRoot = filepath.Join(root, "data", "observability")
 	config.Observability.SpoolPath = filepath.Join(root, "spool", "observability")
 	return config
 }

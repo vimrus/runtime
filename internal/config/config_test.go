@@ -75,8 +75,11 @@ func TestLoadMissingConfigurationUsesDefaults(t *testing.T) {
 	if config.Runtime.PIDFile != filepath.Join(root, "run/runtime.pid") {
 		t.Fatalf("unexpected default PID file: %q", config.Runtime.PIDFile)
 	}
-	if config.Observability.DatasetRoot != filepath.Join(root, "observability") {
+	if config.Observability.DatasetRoot != filepath.Join(root, "data", "observability") {
 		t.Fatalf("unexpected default observability path: %q", config.Observability.DatasetRoot)
+	}
+	if !config.Observability.Enabled {
+		t.Fatal("observability should be enabled by default")
 	}
 }
 

@@ -94,7 +94,7 @@ wait_ready() {
 }
 
 parquet_count() {
-    docker exec "${container}" sh -c 'find /shared/observability -type f -name "*.parquet" 2>/dev/null | wc -l'
+    docker exec "${container}" sh -c 'find /shared/data/apps/zentao/observability -type f -name "*.parquet" 2>/dev/null | wc -l'
 }
 
 spool_count() {
@@ -105,7 +105,7 @@ docker run --detach --name "${container}" \
     --privileged \
     --entrypoint sh \
     --volume "${work}/app:/shared:rw" \
-    --volume "${work}/shared:/shared/observability:rw" \
+    --volume "${work}/shared:/shared/data/apps/zentao/observability:rw" \
     --volume "${work}/runtime.toml:/runtime-config/runtime.toml:ro" \
     "${RUNTIME_IMAGE}" \
     -c 'mkdir -p /shared/config /shared/logs /shared/spool && cp /runtime-config/runtime.toml /shared/config/runtime.toml && sed "s#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g" /opt/zentao/config/php.ini > /shared/config/php.ini && exec zentao serve --install-root /shared' >/dev/null
@@ -123,7 +123,7 @@ done
 baseline_parquet="$(parquet_count)"
 [[ "${baseline_parquet}" -gt 0 ]] || { echo "baseline parquet was not published" >&2; exit 1; }
 
-docker exec "${container}" mount -o remount,bind,ro /shared/observability >/dev/null
+docker exec "${container}" mount -o remount,bind,ro /shared/data/apps/zentao/observability >/dev/null
 
 response="$(docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/obs.php)"
 echo "${response}" | jq -e '.accepted >= 1' >/dev/null \
@@ -139,7 +139,7 @@ done
 fault_parquet="$(parquet_count)"
 [[ "${fault_parquet}" == "${baseline_parquet}" ]] || { echo "parquet changed while dataset was read-only" >&2; exit 1; }
 
-docker exec "${container}" mount -o remount,bind,rw /shared/observability >/dev/null
+docker exec "${container}" mount -o remount,bind,rw /shared/data/apps/zentao/observability >/dev/null
 
 for _ in $(seq 1 15); do
     if [[ "$(spool_count)" == "0" ]] && [[ "$(parquet_count)" -gt "${baseline_parquet}" ]]; then

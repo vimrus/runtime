@@ -37,7 +37,6 @@ services:
       - ./config:/opt/zentao/config:ro
       - zentao-apps:/opt/zentao/apps
       - zentao-data:/opt/zentao/data
-      - zentao-observability:/opt/zentao/observability
       - zentao-spool:/opt/zentao/spool/observability
       - zentao-logs:/opt/zentao/logs
     healthcheck:
@@ -71,7 +70,6 @@ services:
 volumes:
   zentao-apps:
   zentao-data:
-  zentao-observability:
   zentao-spool:
   zentao-logs:
   mysql-data:

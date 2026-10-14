@@ -104,7 +104,7 @@ if ! docker wait "${container}" >/dev/null 2>&1; then
     exit 1
 fi
 
-node_id="$(docker run --rm --entrypoint cat --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" /shared/data/node-id)"
+node_id="$(docker run --rm --entrypoint cat --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" /shared/run/node-id)"
 if [[ -z "${node_id}" ]]; then
     echo "node id was not persisted" >&2
     exit 1

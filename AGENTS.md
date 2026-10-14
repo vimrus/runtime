@@ -100,7 +100,7 @@ Runtime/Full 打包、签名供应链和 CI workflow。
 - 一个 Runtime 实例可以托管多个应用：单一监听、单一 host，应用按 URL 子目录前缀区分，最多一个应用使用 `/`。
 - 应用在 `config/runtime.toml` 的 `[[apps]]` 中声明（`id`、`path`、`dir`、`webRoot`，可选 `dataDir`、`tmpDir`、`env`）；不做目录自动扫描。
 - 每个应用使用独立数据库和独立的附件/Session 数据根，可变数据不得写回应用代码目录。
-- Runtime 为每个应用注入 `ZT_WEB_ROOT`、`ZT_APP_ID`、`ZT_DATA_ROOT`、`ZT_TMP_ROOT`、`ZT_SESSION_PATH`、`ZT_APISESSION_PATH`；启用每应用 Queue Bridge 时还会注入该应用专属的 `ZENTAO_QUEUE_TOKEN`（每次启动轮换）。应用侧显式配置的环境变量优先。
+- Runtime 为每个应用注入 `ZT_WEB_ROOT`、`ZT_APP_ID`、`ZT_DATA_ROOT`（应用数据目录，附件位于其 `upload/`）、`ZT_TMP_ROOT`、`ZT_SESSION_PATH`、`ZT_APISESSION_PATH`、`ZT_BACKUP_PATH`、`ZENTAO_LOG_DIR`（`<dataDir>/observability/raw-logs`）；启用每应用 Queue Bridge 时还会注入该应用专属的 `ZENTAO_QUEUE_TOKEN`，启用观测时注入该应用专属的 `ZENTAO_OBSERVABILITY_*`（含 flush 模式的查询桥变量），均每次启动轮换。应用侧显式配置的环境变量优先。
 - 新增、替换或移除应用通过重启 Runtime 生效；首版不实现热加载。
 - `/_runtime/` 为 Runtime 保留前缀；配置校验拒绝重复前缀和嵌套前缀冲突。
 

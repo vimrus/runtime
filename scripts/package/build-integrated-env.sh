@@ -85,7 +85,7 @@ if [[ -f "${staged_release}/www/index.php" ]]; then
 fi
 
 mkdir -p "${output_dir}/run" "${output_dir}/logs" "${output_dir}/data" \
-    "${output_dir}/observability" "${output_dir}/spool/observability" \
+    "${output_dir}/data/observability" "${output_dir}/spool/observability" \
     "${output_dir}/backups" "${output_dir}/config/conf.d"
 
 if [[ "${platform}" == "windows" ]]; then
@@ -117,7 +117,7 @@ webRoot = "www"
 
 [observability]
 enabled = true
-datasetRoot = "observability"
+datasetRoot = "data\\observability"
 spoolPath = "spool\\observability"
 maxSpoolBytes = 1073741824
 maxBatchRows = 10000
@@ -223,7 +223,7 @@ webRoot = "www"
 
 [observability]
 enabled = true
-datasetRoot = "observability"
+datasetRoot = "data/observability"
 spoolPath = "spool/observability"
 maxSpoolBytes = 1073741824
 maxBatchRows = 10000

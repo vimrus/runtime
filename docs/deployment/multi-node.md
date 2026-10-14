@@ -12,8 +12,8 @@
        -> 节点 A Runtime
        -> 节点 B Runtime
 
-节点 A/B 共同使用：数据库、附件 NFS、Session NFS 或 Redis、Parquet NFS
-节点 A/B 分别保存：Runtime 配置、PID、日志、缓存、观测 spool、node-id
+节点 A/B 共同使用：数据库、共享 data 根（附件与备份、观测数据集；Session 为 NFS 或 Redis）
+节点 A/B 分别保存：Runtime 配置、PID、日志、缓存、观测 spool、node-id（存于本地 `run/node-id`）
 ```
 
 数据库、NFS、Redis 和负载均衡的高可用由部署环境负责。Runtime 不提供配置中心，也不直接连接业务数据库或 Redis。
@@ -28,7 +28,7 @@
 - 应用、PHP、Runtime 和扩展版本
 - `[[apps]]` 应用清单（id、path、webRoot）和各应用的目录布局、监听端口和线程策略
 - 数据库、Session、附件、Queue Bridge 和安全相关配置
-- `observability.datasetRoot`、Parquet Schema、保留周期和脱敏策略
+- `observability.datasetRoot`（Runtime 自身遥测）、各应用 `<dataDir>/observability`、Parquet Schema、保留周期和脱敏策略
 
 ### 每台机器分别设置
 
@@ -58,13 +58,13 @@ webRoot = "www"
 
 [observability]
 enabled = true
-datasetRoot = "/mnt/zentao-observability"
+datasetRoot = "data/observability"
 spoolPath = "spool/observability"
 ```
 
-节点 B 复制相同配置后，将 `nodeID` 改为 `node-b`。两台机器都把共享 Parquet NFS 挂载为 `/mnt/zentao-observability`。`datasetRoot` 使用共享路径，`spoolPath` 保持相对路径，使 spool 留在各自 Runtime 根目录。
+节点 B 复制相同配置后，将 `nodeID` 改为 `node-b`。两台机器把同一个共享存储挂载为各自的 `<安装根>/data`（应用数据与观测数据集都在其中；也可以只把 `data/apps/<id>` 与 `data/observability` 分别挂载）。应用事件与 Runtime 遥测都按 `node=<nodeID>` 分区写入共享数据集，任意节点都能查询全集群；`spoolPath` 保持相对路径，使 spool 留在各自 Runtime 根目录。
 
-配置中的 `app/...`、`logs/...`、`spool/...` 等相对路径会按每台机器自己的 Runtime 根目录解析，不要把两个节点的本地 Runtime 根目录写成同一个共享路径。
+配置中的 `app/...`、`data/...`、`logs/...`、`spool/...` 等相对路径会按每台机器自己的 Runtime 根目录解析；只有 data 根（应用数据与观测数据集）应当指向共享存储，其余本地目录不要写成共享路径。
 
 ## Session 和附件
 
@@ -101,7 +101,7 @@ Session 和附件不由 Runtime 配置管理：
 
 ## 观测数据
 
-每个节点拥有唯一 `nodeID`，向共享 Parquet 根目录写入自己的 `node=<nodeID>` 分区。节点不共享 `.duckdb` 文件，也不覆盖其他节点的 part 文件。共享数据集不可用时，事件先写入本地 `spool/observability`，达到上限后标记 degraded；这不能阻断业务请求。
+每个节点拥有唯一 `nodeID`，向共享 Parquet 根目录写入自己的 `node=<nodeID>` 分区。节点不共享 `.duckdb` 文件，也不覆盖其他节点的 part 文件。共享数据集不可用时，事件先写入本地 `spool/observability`，达到上限后标记 degraded；这不能阻断业务请求。Runtime 默认开启观测；显式设置 `observability.enabled = false` 会退回节点本地文件模式，多节点将无法统一查看应用日志。
 
 ## 上线步骤
 

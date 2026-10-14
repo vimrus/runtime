@@ -172,9 +172,11 @@ Runtime 制品不包含应用代码。应用是独立的平台无关制品，Hos
 - 一个 Host 实例可以托管多个应用：单一监听、单一 host，应用按 URL 子目录
   前缀区分；最多一个应用使用 `/`，`/_runtime/` 为 Host 保留前缀。配置
   校验拒绝重复前缀和嵌套前缀冲突。
-- 每个应用使用独立的数据库环境、附件根、Session 根和临时根；Host 为每个
-  应用注入 `ZT_WEB_ROOT`、`ZT_APP_ID`、`ZT_DATA_ROOT`、`ZT_TMP_ROOT`、
-  `ZT_SESSION_PATH`、`ZT_APISESSION_PATH`，显式配置的 `env` 优先。
+- 每个应用使用独立的数据库环境、数据目录（附件位于 `<ZT_DATA_ROOT>/upload`）、
+  Session、临时和日志根（`ZENTAO_LOG_DIR=<dataDir>/observability/raw-logs`）；
+  Host 为每个应用注入 `ZT_WEB_ROOT`、`ZT_APP_ID`、`ZT_DATA_ROOT`、`ZT_TMP_ROOT`、
+  `ZT_SESSION_PATH`、`ZT_APISESSION_PATH`、`ZT_BACKUP_PATH`、`ZENTAO_LOG_DIR`，
+  启用观测时再注入该应用专属的 `ZENTAO_OBSERVABILITY_*`；显式配置的 `env` 优先。
 - 子目录前缀只作用于文件查找与 `PATH_INFO`/`SCRIPT_NAME`：PHP 仍会收到
   带前缀的原始 `REQUEST_URI`，应用的公开前缀通过 `ZT_WEB_ROOT` 提供
   （实测结论，2026-10-10，真实开源版/IPD 版应用包）。

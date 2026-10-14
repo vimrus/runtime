@@ -33,7 +33,7 @@ maxHeaderBytes = 16384
 
 [observability]
 enabled = true
-datasetRoot = "observability"
+datasetRoot = "data/observability"
 spoolPath = "spool/observability"
 flushInterval = "60s"
 metricsDays = 30

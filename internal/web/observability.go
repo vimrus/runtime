@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
@@ -17,13 +18,59 @@ const (
 	defaultObservabilityMaxEvents = 100
 )
 
-var observabilityIngestSink EventSink
+var (
+	observabilityIngestMu    sync.RWMutex
+	observabilityIngestSink  EventSink
+	observabilityIngestSinks = map[string]EventSink{}
+)
 
 // SetObservabilitySink registers the process-wide telemetry sink. The sink is
 // not serializable into the Caddy JSON configuration, so the ingest handler
 // resolves it from this registry at request time.
 func SetObservabilitySink(sink EventSink) {
+	observabilityIngestMu.Lock()
+	defer observabilityIngestMu.Unlock()
 	observabilityIngestSink = sink
+}
+
+// SetObservabilitySinkFor registers the telemetry sink for one bridge token.
+// Each application has its own token so that its events are published to that
+// application's dataset; the registry is keyed by token because sinks are not
+// serializable into the Caddy JSON configuration.
+func SetObservabilitySinkFor(token string, sink EventSink) {
+	observabilityIngestMu.Lock()
+	defer observabilityIngestMu.Unlock()
+	if token == "" || sink == nil {
+		delete(observabilityIngestSinks, token)
+		return
+	}
+	observabilityIngestSinks[token] = sink
+}
+
+// observabilityTokenAllowed reports whether the request token matches the
+// legacy single token or any per-application token.
+func observabilityTokenAllowed(legacy string, tokens []string, requestToken string) bool {
+	if requestToken == "" {
+		return false
+	}
+	if legacy != "" && subtle.ConstantTimeCompare([]byte(requestToken), []byte(legacy)) == 1 {
+		return true
+	}
+	for _, token := range tokens {
+		if token != "" && subtle.ConstantTimeCompare([]byte(requestToken), []byte(token)) == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func observabilitySinkFor(token string) EventSink {
+	observabilityIngestMu.RLock()
+	defer observabilityIngestMu.RUnlock()
+	if sink, ok := observabilityIngestSinks[token]; ok {
+		return sink
+	}
+	return observabilityIngestSink
 }
 
 // EventSink accepts normalized observability events from the local PHP
@@ -38,6 +85,7 @@ type EventSink interface {
 // arbitrary SQL.
 type ObservabilityIngest struct {
 	Token     string    `json:"token,omitempty"`
+	Tokens    []string  `json:"tokens,omitempty"`
 	MaxBytes  int64     `json:"maxBytes,omitempty"`
 	MaxEvents int       `json:"maxEvents,omitempty"`
 	Sink      EventSink `json:"-"`
@@ -63,7 +111,8 @@ func (h *ObservabilityIngest) ServeHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 
-	if h.Token == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Zentao-Observability-Token")), []byte(h.Token)) != 1 {
+	requestToken := r.Header.Get("X-Zentao-Observability-Token")
+	if !observabilityTokenAllowed(h.Token, h.Tokens, requestToken) {
 		writeObservabilityError(w, http.StatusUnauthorized, "unauthenticated", "observability authentication required")
 		return nil
 	}
@@ -73,7 +122,7 @@ func (h *ObservabilityIngest) ServeHTTP(w http.ResponseWriter, r *http.Request, 
 	}
 	sink := h.Sink
 	if sink == nil {
-		sink = observabilityIngestSink
+		sink = observabilitySinkFor(requestToken)
 	}
 	if sink == nil {
 		writeObservabilityError(w, http.StatusServiceUnavailable, "unavailable", "observability pipeline is not available")
