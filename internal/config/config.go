@@ -4,7 +4,6 @@ package config
 import (
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,7 +13,17 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-const SchemaVersion = 1
+const (
+	SchemaVersion                  = 1
+	DefaultQueueBridgePort         = 8081
+	DefaultObservabilityBridgePort = 8082
+	loopbackBridgeHost             = "127.0.0.1"
+)
+
+// LoopbackBridgeAddress returns the fixed local address for a private bridge.
+func LoopbackBridgeAddress(port int) string {
+	return net.JoinHostPort(loopbackBridgeHost, strconv.Itoa(port))
+}
 
 type Config struct {
 	SchemaVersion int           `json:"schemaVersion" toml:"schemaVersion"`
@@ -28,9 +37,6 @@ type Config struct {
 	// application defaults can be materialized without re-reading the
 	// configuration file. It is never encoded or compared directly.
 	installRoot string
-	// legacyApp marks the application entry synthesized from the deprecated
-	// web.root option so that root overrides keep working for old configs.
-	legacyApp bool
 }
 
 type Runtime struct {
@@ -59,7 +65,6 @@ type Runtime struct {
 }
 
 type Web struct {
-	Root              string        `json:"root" toml:"root"`
 	Listen            string        `json:"listen" toml:"listen"`
 	Threads           int           `json:"threads" toml:"threads"`
 	ReadHeaderTimeout time.Duration `json:"readHeaderTimeout" toml:"readHeaderTimeout"`
@@ -120,8 +125,7 @@ func (a App) ObservabilityDir() string {
 
 type Queue struct {
 	Enabled           bool          `json:"enabled" toml:"enabled"`
-	BridgeBaseURL     string        `json:"bridgeBaseURL" toml:"bridgeBaseURL"`
-	BridgeToken       string        `json:"bridgeToken,omitempty" toml:"bridgeToken,omitempty"`
+	BridgePort        int           `json:"bridgePort" toml:"bridgePort"`
 	RequestTimeout    time.Duration `json:"requestTimeout" toml:"requestTimeout"`
 	ClaimBatch        int           `json:"claimBatch" toml:"claimBatch"`
 	LeaseSeconds      int           `json:"leaseSeconds" toml:"leaseSeconds"`
@@ -141,7 +145,7 @@ type QueueWorker struct {
 
 type Observability struct {
 	Enabled                 bool          `json:"enabled" toml:"enabled"`
-	BridgeListen            string        `json:"bridgeListen,omitempty" toml:"bridgeListen,omitempty"`
+	BridgePort              int           `json:"bridgePort" toml:"bridgePort"`
 	DatasetRoot             string        `json:"datasetRoot" toml:"datasetRoot"`
 	SpoolPath               string        `json:"spoolPath" toml:"spoolPath"`
 	MaxSpoolBytes           int64         `json:"maxSpoolBytes" toml:"maxSpoolBytes"`
@@ -160,28 +164,27 @@ type Observability struct {
 }
 
 type Overrides struct {
-	Root                 *string
-	Listen               *string
-	Threads              *int
-	ControlSocket        *string
-	PIDFile              *string
-	DrainTimeout         *time.Duration
-	ReadHeaderTimeout    *time.Duration
-	IdleTimeout          *time.Duration
-	MaxHeaderBytes       *int
-	AccessLog            *string
-	AuditLog             *string
-	LogPath              *string
-	LogMaxBytes          *int64
-	LogMaxBackups        *int
-	NodeID               *string
-	ClusterID            *string
-	QueueEnabled         *bool
-	QueueBridgeURL       *string
-	QueueToken           *string
-	ObservabilityEnabled *bool
-	ObservabilityRoot    *string
-	ObservabilitySpool   *string
+	Listen                  *string
+	Threads                 *int
+	ControlSocket           *string
+	PIDFile                 *string
+	DrainTimeout            *time.Duration
+	ReadHeaderTimeout       *time.Duration
+	IdleTimeout             *time.Duration
+	MaxHeaderBytes          *int
+	AccessLog               *string
+	AuditLog                *string
+	LogPath                 *string
+	LogMaxBytes             *int64
+	LogMaxBackups           *int
+	NodeID                  *string
+	ClusterID               *string
+	QueueEnabled            *bool
+	QueueBridgePort         *int
+	ObservabilityEnabled    *bool
+	ObservabilityBridgePort *int
+	ObservabilityRoot       *string
+	ObservabilitySpool      *string
 }
 
 func Default() Config {
@@ -201,7 +204,6 @@ func Default() Config {
 			AuditLogMaxBackups:    5,
 		},
 		Web: Web{
-			Root:              "app/zentaopms/www",
 			Listen:            "0.0.0.0:8080",
 			Threads:           4,
 			ReadHeaderTimeout: 10 * time.Second,
@@ -210,7 +212,7 @@ func Default() Config {
 		},
 		Queue: Queue{
 			Enabled:           true,
-			BridgeBaseURL:     "http://127.0.0.1:8081/internal/runtime/queue/v1",
+			BridgePort:        DefaultQueueBridgePort,
 			RequestTimeout:    5 * time.Second,
 			ClaimBatch:        8,
 			LeaseSeconds:      60,
@@ -226,7 +228,7 @@ func Default() Config {
 			// Observability (flush mode) is enabled by default for Runtime
 			// deployments; set enabled = false to keep file-mode logs instead.
 			Enabled:                 true,
-			BridgeListen:            "127.0.0.1:8082",
+			BridgePort:              DefaultObservabilityBridgePort,
 			DatasetRoot:             "data/observability",
 			SpoolPath:               "spool/observability",
 			MaxSpoolBytes:           1024 * 1024 * 1024,
@@ -258,7 +260,6 @@ func DefaultForRoot(root string) Config {
 	config.Runtime.ControlSocket = filepath.Join(root, "run", "runtime.sock")
 	config.Runtime.PIDFile = filepath.Join(root, "run", "runtime.pid")
 	config.Runtime.LogPath = filepath.Join(root, "logs", "runtime.log")
-	config.Web.Root = filepath.Join(root, "app", "zentaopms", "www")
 	config.Observability.DatasetRoot = filepath.Join(root, "data", "observability")
 	config.Observability.SpoolPath = filepath.Join(root, "spool", "observability")
 	return config
@@ -315,7 +316,6 @@ func (c *Config) resolvePaths(root string) error {
 	resolve(&c.Runtime.PIDFile)
 	resolve(&c.Runtime.AuditLog)
 	resolve(&c.Runtime.LogPath)
-	resolve(&c.Web.Root)
 	resolve(&c.Web.AccessLog)
 	resolve(&c.Observability.DatasetRoot)
 	resolve(&c.Observability.SpoolPath)
@@ -337,41 +337,15 @@ func (c *Config) resolvePaths(root string) error {
 	return nil
 }
 
-// normalizeApps materializes the deprecated single-application web.root into
-// an explicit application entry so that the rest of the Runtime only deals
-// with one representation. When [[apps]] is present web.root must stay empty:
-// mixing both would silently create an undeclared application.
+// normalizeApps applies defaults that depend on the final application set.
 func (c *Config) normalizeApps() error {
 	for index := range c.Apps {
 		if c.Apps[index].Queue.Enabled && c.Apps[index].Queue.BridgeURLTemplate == "" {
 			c.Apps[index].Queue.BridgeURLTemplate = DefaultAppQueueBridgeURLTemplate
 		}
 	}
-	if len(c.Apps) > 0 {
-		return nil
-	}
-	if c.Web.Root == "" {
-		return nil
-	}
-	app := App{
-		ID:      "zentao",
-		Path:    "/",
-		Dir:     filepath.Dir(c.Web.Root),
-		WebRoot: filepath.Base(c.Web.Root),
-		Enabled: true,
-	}
-	if c.installRoot != "" {
-		app.DataDir = filepath.Join(c.installRoot, "data", "apps", app.ID)
-		app.TmpDir = filepath.Join(c.installRoot, "tmp-local", app.ID)
-	}
-	c.Apps = []App{app}
-	c.legacyApp = true
 	return nil
 }
-
-// LegacyApp reports whether the configuration uses the deprecated single
-// application web.root form instead of explicit [[apps]] entries.
-func (c Config) LegacyApp() bool { return c.legacyApp }
 
 func decode(data []byte, config Config) (Config, error) {
 	type rawRuntime struct {
@@ -392,7 +366,6 @@ func decode(data []byte, config Config) (Config, error) {
 		ClusterID             *string `toml:"clusterID"`
 	}
 	type rawWeb struct {
-		Root              *string `toml:"root"`
 		Listen            *string `toml:"listen"`
 		Threads           *int    `toml:"threads"`
 		ReadHeaderTimeout *string `toml:"readHeaderTimeout"`
@@ -408,8 +381,7 @@ func decode(data []byte, config Config) (Config, error) {
 	}
 	type rawQueue struct {
 		Enabled           *bool             `toml:"enabled"`
-		BridgeBaseURL     *string           `toml:"bridgeBaseURL"`
-		BridgeToken       *string           `toml:"bridgeToken"`
+		BridgePort        *int              `toml:"bridgePort"`
 		RequestTimeout    *string           `toml:"requestTimeout"`
 		ClaimBatch        *int              `toml:"claimBatch"`
 		LeaseSeconds      *int              `toml:"leaseSeconds"`
@@ -421,7 +393,7 @@ func decode(data []byte, config Config) (Config, error) {
 	}
 	type rawObservability struct {
 		Enabled                 *bool    `toml:"enabled"`
-		BridgeListen            *string  `toml:"bridgeListen"`
+		BridgePort              *int     `toml:"bridgePort"`
 		DatasetRoot             *string  `toml:"datasetRoot"`
 		SpoolPath               *string  `toml:"spoolPath"`
 		MaxSpoolBytes           *int64   `toml:"maxSpoolBytes"`
@@ -524,9 +496,6 @@ func decode(data []byte, config Config) (Config, error) {
 		}
 	}
 	if raw.Web != nil {
-		if raw.Web.Root != nil {
-			config.Web.Root = *raw.Web.Root
-		}
 		if raw.Web.Listen != nil {
 			config.Web.Listen = *raw.Web.Listen
 		}
@@ -555,12 +524,6 @@ func decode(data []byte, config Config) (Config, error) {
 		}
 	}
 	if raw.Apps != nil {
-		if raw.Web != nil && raw.Web.Root != nil {
-			return Config{}, fmt.Errorf("web.root cannot be combined with [[apps]]; configure apps[].dir instead")
-		}
-		// The installation-local legacy default must not silently become an
-		// extra application once [[apps]] is present.
-		config.Web.Root = ""
 		apps := make([]App, 0, len(*raw.Apps))
 		for index, item := range *raw.Apps {
 			app := App{Enabled: true}
@@ -610,11 +573,8 @@ func decode(data []byte, config Config) (Config, error) {
 		if raw.Queue.Enabled != nil {
 			config.Queue.Enabled = *raw.Queue.Enabled
 		}
-		if raw.Queue.BridgeBaseURL != nil {
-			config.Queue.BridgeBaseURL = *raw.Queue.BridgeBaseURL
-		}
-		if raw.Queue.BridgeToken != nil {
-			config.Queue.BridgeToken = *raw.Queue.BridgeToken
+		if raw.Queue.BridgePort != nil {
+			config.Queue.BridgePort = *raw.Queue.BridgePort
 		}
 		if raw.Queue.RequestTimeout != nil {
 			value, err := time.ParseDuration(*raw.Queue.RequestTimeout)
@@ -685,8 +645,8 @@ func decode(data []byte, config Config) (Config, error) {
 		if raw.Observability.Enabled != nil {
 			config.Observability.Enabled = *raw.Observability.Enabled
 		}
-		if raw.Observability.BridgeListen != nil {
-			config.Observability.BridgeListen = *raw.Observability.BridgeListen
+		if raw.Observability.BridgePort != nil {
+			config.Observability.BridgePort = *raw.Observability.BridgePort
 		}
 		if raw.Observability.DatasetRoot != nil {
 			config.Observability.DatasetRoot = *raw.Observability.DatasetRoot
@@ -750,17 +710,6 @@ func decode(data []byte, config Config) (Config, error) {
 }
 
 func (c Config) Apply(overrides Overrides) (Config, error) {
-	if overrides.Root != nil {
-		if len(c.Apps) > 0 && !c.legacyApp {
-			return Config{}, fmt.Errorf("web.root/ZENTAO_RUNTIME_ROOT cannot be combined with [[apps]]; configure apps[].dir instead")
-		}
-		c.Web.Root = *overrides.Root
-		if c.legacyApp {
-			// Re-synthesize the legacy application from the new root.
-			c.Apps = nil
-			c.legacyApp = false
-		}
-	}
 	if overrides.Listen != nil {
 		c.Web.Listen = *overrides.Listen
 	}
@@ -809,14 +758,14 @@ func (c Config) Apply(overrides Overrides) (Config, error) {
 	if overrides.QueueEnabled != nil {
 		c.Queue.Enabled = *overrides.QueueEnabled
 	}
-	if overrides.QueueBridgeURL != nil {
-		c.Queue.BridgeBaseURL = *overrides.QueueBridgeURL
-	}
-	if overrides.QueueToken != nil {
-		c.Queue.BridgeToken = *overrides.QueueToken
+	if overrides.QueueBridgePort != nil {
+		c.Queue.BridgePort = *overrides.QueueBridgePort
 	}
 	if overrides.ObservabilityEnabled != nil {
 		c.Observability.Enabled = *overrides.ObservabilityEnabled
+	}
+	if overrides.ObservabilityBridgePort != nil {
+		c.Observability.BridgePort = *overrides.ObservabilityBridgePort
 	}
 	if overrides.ObservabilityRoot != nil {
 		c.Observability.DatasetRoot = *overrides.ObservabilityRoot
@@ -843,9 +792,6 @@ func ApplyEnvironment(config Config, environ []string) (Config, error) {
 	}
 
 	overrides := Overrides{}
-	if value, ok := values["ZENTAO_RUNTIME_ROOT"]; ok {
-		overrides.Root = &value
-	}
 	if value, ok := values["ZENTAO_RUNTIME_LISTEN"]; ok {
 		overrides.Listen = &value
 	}
@@ -905,11 +851,12 @@ func ApplyEnvironment(config Config, environ []string) (Config, error) {
 		}
 		overrides.QueueEnabled = &parsed
 	}
-	if value, ok := values["ZENTAO_QUEUE_BRIDGE_URL"]; ok {
-		overrides.QueueBridgeURL = &value
-	}
-	if value, ok := values["ZENTAO_QUEUE_TOKEN"]; ok {
-		overrides.QueueToken = &value
+	if value, ok := values["ZENTAO_QUEUE_BRIDGE_PORT"]; ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_QUEUE_BRIDGE_PORT: %w", err)
+		}
+		overrides.QueueBridgePort = &parsed
 	}
 	if value, ok := values["ZENTAO_OBSERVABILITY_ENABLED"]; ok {
 		parsed, err := strconv.ParseBool(value)
@@ -917,6 +864,13 @@ func ApplyEnvironment(config Config, environ []string) (Config, error) {
 			return Config{}, fmt.Errorf("parse ZENTAO_OBSERVABILITY_ENABLED: %w", err)
 		}
 		overrides.ObservabilityEnabled = &parsed
+	}
+	if value, ok := values["ZENTAO_OBSERVABILITY_BRIDGE_PORT"]; ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_OBSERVABILITY_BRIDGE_PORT: %w", err)
+		}
+		overrides.ObservabilityBridgePort = &parsed
 	}
 	if value, ok := values["ZENTAO_OBSERVABILITY_DATASET_ROOT"]; ok {
 		overrides.ObservabilityRoot = &value
@@ -931,14 +885,16 @@ func (c Config) Validate() error {
 	if c.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported runtime configuration schemaVersion %d", c.SchemaVersion)
 	}
-	if c.Web.Root != "" && !filepath.IsAbs(c.Web.Root) {
-		return fmt.Errorf("web.root must be an absolute path")
-	}
 	if err := c.validateApps(); err != nil {
 		return err
 	}
-	if _, _, err := net.SplitHostPort(c.Web.Listen); err != nil {
+	_, webPortValue, err := net.SplitHostPort(c.Web.Listen)
+	if err != nil {
 		return fmt.Errorf("web.listen: %w", err)
+	}
+	webPort, err := strconv.Atoi(webPortValue)
+	if err != nil || !validPort(webPort) {
+		return fmt.Errorf("web.listen must include a valid port")
 	}
 	if c.Web.Threads < 2 || c.Web.Threads > 256 {
 		return fmt.Errorf("web.threads must be between 2 and 256")
@@ -983,20 +939,11 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Queue.Enabled {
-		if c.Queue.BridgeBaseURL == "" {
-			return fmt.Errorf("queue.bridgeBaseURL is required when queue is enabled")
+		if !validPort(c.Queue.BridgePort) {
+			return fmt.Errorf("queue.bridgePort must be between 1 and 65535")
 		}
-		bridgeURL, err := url.Parse(c.Queue.BridgeBaseURL)
-		if err != nil || bridgeURL.Scheme != "http" || bridgeURL.User != nil {
-			return fmt.Errorf("queue.bridgeBaseURL must be an unauthenticated http URL")
-		}
-		host := bridgeURL.Hostname()
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-			return fmt.Errorf("queue.bridgeBaseURL must use a loopback address")
-		}
-		port, err := strconv.Atoi(bridgeURL.Port())
-		if err != nil || port < 1 || port > 65535 {
-			return fmt.Errorf("queue.bridgeBaseURL must include a valid port")
+		if c.Queue.BridgePort == webPort {
+			return fmt.Errorf("queue.bridgePort must differ from web.listen port")
 		}
 		if len(c.Queue.Workers) == 0 {
 			return fmt.Errorf("queue.workers must not be empty when queue is enabled")
@@ -1019,13 +966,11 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.Observability.Enabled {
-		host, port, err := net.SplitHostPort(c.Observability.BridgeListen)
-		if err != nil || (host != "localhost" && host != "127.0.0.1" && host != "::1") {
-			return fmt.Errorf("observability.bridgeListen must use a loopback address")
+		if !validPort(c.Observability.BridgePort) {
+			return fmt.Errorf("observability.bridgePort must be between 1 and 65535")
 		}
-		portNumber, err := strconv.Atoi(port)
-		if err != nil || portNumber < 1 || portNumber > 65535 {
-			return fmt.Errorf("observability.bridgeListen must include a valid port")
+		if c.Observability.BridgePort == webPort {
+			return fmt.Errorf("observability.bridgePort must differ from web.listen port")
 		}
 		if c.Observability.DatasetRoot == "" || !filepath.IsAbs(c.Observability.DatasetRoot) {
 			return fmt.Errorf("observability.datasetRoot must be an absolute path when enabled")
@@ -1054,7 +999,14 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	if c.Queue.Enabled && c.Observability.Enabled && c.Queue.BridgePort == c.Observability.BridgePort {
+		return fmt.Errorf("queue.bridgePort and observability.bridgePort must be different")
+	}
 	return nil
+}
+
+func validPort(port int) bool {
+	return port >= 1 && port <= 65535
 }
 
 func validIdentity(value string) bool {
@@ -1228,7 +1180,6 @@ func RestartRequired(current, candidate Config) bool {
 		candidate.Runtime.NodeID = current.Runtime.NodeID
 	}
 	return current.Runtime.DrainTimeout != candidate.Runtime.DrainTimeout ||
-		current.Web.Root != candidate.Web.Root ||
 		current.Web.Listen != candidate.Web.Listen ||
 		current.Web.Threads != candidate.Web.Threads ||
 		!equalApps(current.Apps, candidate.Apps) ||
@@ -1247,8 +1198,7 @@ func RestartRequired(current, candidate Config) bool {
 		current.Runtime.NodeID != candidate.Runtime.NodeID ||
 		current.Runtime.ClusterID != candidate.Runtime.ClusterID ||
 		current.Queue.Enabled != candidate.Queue.Enabled ||
-		current.Queue.BridgeBaseURL != candidate.Queue.BridgeBaseURL ||
-		current.Queue.BridgeToken != candidate.Queue.BridgeToken ||
+		current.Queue.BridgePort != candidate.Queue.BridgePort ||
 		current.Queue.RequestTimeout != candidate.Queue.RequestTimeout ||
 		current.Queue.ClaimBatch != candidate.Queue.ClaimBatch ||
 		current.Queue.LeaseSeconds != candidate.Queue.LeaseSeconds ||
@@ -1258,7 +1208,7 @@ func RestartRequired(current, candidate Config) bool {
 		current.Queue.DrainTimeout != candidate.Queue.DrainTimeout ||
 		!equalWorkers(current.Queue.Workers, candidate.Queue.Workers) ||
 		current.Observability.Enabled != candidate.Observability.Enabled ||
-		current.Observability.BridgeListen != candidate.Observability.BridgeListen ||
+		current.Observability.BridgePort != candidate.Observability.BridgePort ||
 		current.Observability.DatasetRoot != candidate.Observability.DatasetRoot ||
 		current.Observability.SpoolPath != candidate.Observability.SpoolPath ||
 		current.Observability.FlushInterval != candidate.Observability.FlushInterval ||

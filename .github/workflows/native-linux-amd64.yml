@@ -78,9 +78,6 @@ jobs:
       - name: Observability fault-recovery smoke
         run: tests/e2e/observability-fault-recovery-smoke.sh
 
-      - name: Cache bridge smoke
-        run: tests/e2e/cache-bridge-smoke.sh
-
       - name: Redis cache smoke
         run: tests/e2e/redis-cache-smoke.sh
 

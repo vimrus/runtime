@@ -46,12 +46,18 @@ drainTimeout = "10s"
 logPath = "/shared/logs/runtime.log"
 
 [web]
-root = "/shared/app/zentaopms/www"
 listen = "127.0.0.1:8080"
 threads = 4
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
+
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "/shared/app/zentaopms"
+webRoot = "www"
+enabled = true
 
 # The synthetic app used by this test does not implement Queue Bridge.
 [queue]
@@ -59,7 +65,7 @@ enabled = false
 
 [observability]
 enabled = true
-bridgeListen = "127.0.0.1:8082"
+bridgePort = 8082
 datasetRoot = "/shared/observability"
 spoolPath = "/shared/spool/observability"
 maxSpoolBytes = 1073741824

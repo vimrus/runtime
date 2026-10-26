@@ -36,9 +36,6 @@ env = { ZT_DB_NAME = "zentao_open" }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Web.Root != "" {
-		t.Fatalf("web.root should stay empty when apps are configured: %q", config.Web.Root)
-	}
 	if len(config.Apps) != 2 {
 		t.Fatalf("expected 2 applications, got %d", len(config.Apps))
 	}
@@ -113,34 +110,20 @@ path = "/x"
 	}
 }
 
-func TestLegacyWebRootBecomesApplication(t *testing.T) {
+func TestEmptyApplicationListIsAllowed(t *testing.T) {
 	config, err := loadAppsConfig(t, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(config.Apps) != 1 {
-		t.Fatalf("legacy web.root should produce one application: %#v", config.Apps)
-	}
-	app := config.Apps[0]
-	if app.ID != "zentao" || app.Path != "/" || app.WebRoot != "www" {
-		t.Fatalf("unexpected legacy application: %#v", app)
-	}
-	if !strings.HasSuffix(app.Dir, filepath.Join("app", "zentaopms")) {
-		t.Fatalf("unexpected legacy application directory: %q", app.Dir)
+	if len(config.Apps) != 0 {
+		t.Fatalf("empty apps must stay empty: %#v", config.Apps)
 	}
 }
 
-func TestWebRootRejectedTogetherWithApps(t *testing.T) {
-	_, err := loadAppsConfig(t, `
-root = "app/zentaopms/www"
-
-[[apps]]
-id = "a"
-path = "/x"
-dir = "apps/a"
-`)
-	if err == nil || !strings.Contains(err.Error(), "web.root") {
-		t.Fatalf("expected web.root conflict error, got %v", err)
+func TestWebRootFieldIsRejected(t *testing.T) {
+	_, err := loadAppsConfig(t, `root = "app/zentaopms/www"`)
+	if err == nil || !strings.Contains(err.Error(), "strict mode") {
+		t.Fatalf("expected removed web.root field to be rejected, got %v", err)
 	}
 }
 
@@ -165,7 +148,7 @@ token = "fixed-token"
 	}
 }
 
-func TestLoadAppQueueAppliesLegacyTemplateDefault(t *testing.T) {
+func TestLoadAppQueueAppliesDefaultTemplate(t *testing.T) {
 	config, err := loadAppsConfig(t, `
 [[apps]]
 id = "zentao"

@@ -96,16 +96,23 @@ pidFile = "/tmp/zentao.pid"
 drainTimeout = "10s"
 
 [web]
-root = "/shared/app/zentaopms/www"
 listen = "127.0.0.1:8080"
 threads = 2
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
 
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "/shared/app/zentaopms"
+webRoot = "www"
+enabled = true
+queue = { enabled = true }
+
 [queue]
 enabled = true
-bridgeBaseURL = "http://127.0.0.1:8081/internal/runtime/queue/v1"
+bridgePort = 8081
 requestTimeout = "5s"
 claimBatch = 8
 leaseSeconds = 60
@@ -119,9 +126,6 @@ name = "default"
 concurrency = 2
 minPoll = "100ms"
 maxPoll = "1s"
-
-[cache]
-enabled = false
 
 [observability]
 enabled = false

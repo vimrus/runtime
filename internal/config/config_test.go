@@ -18,7 +18,6 @@ pidFile = "/tmp/zentao.pid"
 drainTimeout = "15s"
 
 [web]
-root = "/srv/zentao/www"
 listen = "127.0.0.1:8081"
 threads = 8
 idleTimeout = "45s"`
@@ -51,8 +50,19 @@ func TestLoadExampleTOML(t *testing.T) {
 	if config.SchemaVersion != SchemaVersion || config.Web.Threads != 4 || len(config.Queue.Workers) != 1 {
 		t.Fatalf("example configuration was not loaded: %#v", config)
 	}
-	if !filepath.IsAbs(config.Web.Root) || !filepath.IsAbs(config.Runtime.LogPath) || !filepath.IsAbs(config.Observability.DatasetRoot) {
+	if len(config.Apps) != 1 || !filepath.IsAbs(config.Apps[0].Dir) ||
+		!filepath.IsAbs(config.Runtime.LogPath) || !filepath.IsAbs(config.Observability.DatasetRoot) {
 		t.Fatalf("relative paths were not resolved: %#v", config)
+	}
+}
+
+func TestLoadRuntimeFixtureUsesApplicationsOnly(t *testing.T) {
+	loaded, err := Load(filepath.Join("..", "..", "tests", "fixtures", "runtime", "runtime.toml"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Apps) != 1 || loaded.Apps[0].ID != "zentao" || loaded.Apps[0].WebRoot != "." {
+		t.Fatalf("unexpected runtime fixture applications: %#v", loaded.Apps)
 	}
 }
 
@@ -63,8 +73,8 @@ func TestLoadMissingConfigurationUsesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := filepath.Dir(filepath.Dir(path))
-	if config.Web.Root != filepath.Join(root, "app/zentaopms/www") {
-		t.Fatalf("unexpected default web root: %q", config.Web.Root)
+	if len(config.Apps) != 0 {
+		t.Fatalf("missing configuration must not synthesize an application: %#v", config.Apps)
 	}
 	if config.Runtime.LogPath != filepath.Join(root, "logs/runtime.log") {
 		t.Fatalf("unexpected default log path: %q", config.Runtime.LogPath)
@@ -94,10 +104,29 @@ listen = "127.0.0.1:8090"
 		t.Fatal(err)
 	}
 	root := filepath.Dir(filepath.Dir(path))
-	if loaded.Web.Root != filepath.Join(root, "app/zentaopms/www") ||
-		loaded.Runtime.ControlSocket != filepath.Join(root, "run/runtime.sock") ||
+	if loaded.Runtime.ControlSocket != filepath.Join(root, "run/runtime.sock") ||
 		loaded.Runtime.PIDFile != filepath.Join(root, "run/runtime.pid") {
 		t.Fatalf("partial configuration did not retain rooted defaults: %#v", loaded)
+	}
+}
+
+func TestLoadIgnoresRemovedLegacyOverrides(t *testing.T) {
+	loaded, err := Load(pathWithContent(t, `schemaVersion = 1
+
+[web]
+listen = "127.0.0.1:8090"
+`), []string{
+		"ZENTAO_RUNTIME_ROOT=/srv/legacy-app",
+		"ZENTAO_QUEUE_TOKEN=legacy-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Apps) != 0 {
+		t.Fatalf("removed root override must not synthesize an application: %#v", loaded.Apps)
+	}
+	if loaded.Queue.BridgePort != Default().Queue.BridgePort {
+		t.Fatalf("removed global queue token override changed queue settings: %#v", loaded.Queue)
 	}
 }
 
@@ -113,7 +142,7 @@ func TestLoadRejectsJSONConfiguration(t *testing.T) {
 
 func TestLoadRejectsUnknownAndInvalidFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runtime.toml")
-	content := "schemaVersion = 1\n[web]\nroot = \"/app\"\nunknown = true\n"
+	content := "schemaVersion = 1\n[web]\nunknown = true\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +151,7 @@ func TestLoadRejectsUnknownAndInvalidFields(t *testing.T) {
 		t.Fatalf("expected unknown-field error, got %v", err)
 	}
 
-	content = "schemaVersion = 2\n[web]\nroot = \"/app\"\n"
+	content = "schemaVersion = 2\n[web]\nlisten = \"127.0.0.1:8080\"\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +163,6 @@ func TestLoadRejectsUnknownAndInvalidFields(t *testing.T) {
 
 func TestRestartRequired(t *testing.T) {
 	current := Default()
-	current.Web.Root = "/app"
 	current.Runtime.NodeID = "node-generated"
 	candidate := current
 	candidate.Web.IdleTimeout *= 2
@@ -177,7 +205,6 @@ nodeID = "node-a"
 clusterID = "cluster-prod-1"
 
 [web]
-root = "/opt/zentao/app/zentaopms/www"
 listen = "127.0.0.1:8080"`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -198,7 +225,6 @@ listen = "127.0.0.1:8080"`
 
 func TestValidateRejectsInvalidIdentityAndRelativeLogPath(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Runtime.NodeID = "node with spaces"
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected invalid nodeID to be rejected")
@@ -220,16 +246,38 @@ func TestValidateRejectsInvalidIdentityAndRelativeLogPath(t *testing.T) {
 	}
 }
 
-func TestObservabilityBridgeValidation(t *testing.T) {
+func TestObservabilityBridgePortValidation(t *testing.T) {
 	config := DefaultForRoot("/opt/zentao")
 	config.Observability.Enabled = true
-	config.Observability.BridgeListen = "0.0.0.0:8082"
-	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "loopback") {
-		t.Fatalf("public observability bridge must be rejected, got %v", err)
+	config.Observability.BridgePort = 0
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "bridgePort") {
+		t.Fatalf("invalid observability bridge port must be rejected, got %v", err)
 	}
-	config.Observability.BridgeListen = "127.0.0.1:8082"
+	config.Observability.BridgePort = 8082
 	if err := config.Validate(); err != nil {
-		t.Fatalf("loopback observability bridge must be accepted: %v", err)
+		t.Fatalf("valid observability bridge port must be accepted: %v", err)
+	}
+	loaded, err := Load(pathWithContent(t, "schemaVersion = 1\n"), []string{"ZENTAO_OBSERVABILITY_BRIDGE_PORT=9082"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Observability.BridgePort != 9082 {
+		t.Fatalf("observability bridge port override not applied: %#v", loaded.Observability)
+	}
+}
+
+func TestBridgePortsMustDiffer(t *testing.T) {
+	config := DefaultForRoot("/opt/zentao")
+	config.Queue.Enabled = true
+	config.Observability.Enabled = true
+	config.Observability.BridgePort = config.Queue.BridgePort
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "must be different") {
+		t.Fatalf("colliding bridge ports must be rejected, got %v", err)
+	}
+	config.Observability.BridgePort = 8082
+	config.Queue.BridgePort = 8080
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "web.listen") {
+		t.Fatalf("bridge port colliding with the web listener must be rejected, got %v", err)
 	}
 }
 
@@ -249,13 +297,12 @@ func TestObservabilityBatchValidation(t *testing.T) {
 
 func TestQueueValidationAndEnvironmentOverride(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Queue.Enabled = true
-	config.Queue.BridgeBaseURL = ""
+	config.Queue.BridgePort = 0
 	if err := config.Validate(); err == nil {
-		t.Fatal("queue enabled without bridge URL must be rejected")
+		t.Fatal("queue enabled with invalid bridge port must be rejected")
 	}
-	config.Queue.BridgeBaseURL = "http://127.0.0.1:8081/internal/runtime/queue/v1"
+	config.Queue.BridgePort = 8081
 	config.Queue.Workers = nil
 	if err := config.Validate(); err == nil {
 		t.Fatal("queue enabled without workers must be rejected")
@@ -267,28 +314,26 @@ controlSocket = "/run/zentao/runtime.sock"
 pidFile = "/run/zentao/runtime.pid"
 
 [web]
-root = "/opt/zentao/app/zentaopms/www"
 listen = "127.0.0.1:8080"
 
 [queue]
 enabled = true
-bridgeBaseURL = "http://127.0.0.1:8081/internal/runtime/queue/v1"
+bridgePort = 9081
 
 [[queue.workers]]
 name = "mail"
 concurrency = 2
-`), []string{"ZENTAO_QUEUE_TOKEN=secret"})
+`), []string{"ZENTAO_QUEUE_BRIDGE_PORT=9082"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.Queue.Enabled || loaded.Queue.BridgeToken != "secret" {
+	if !loaded.Queue.Enabled || loaded.Queue.BridgePort != 9082 {
 		t.Fatalf("queue settings not applied: %#v", loaded.Queue)
 	}
 }
 
 func TestObservabilityValidation(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Observability.Enabled = true
 	if err := config.Validate(); err == nil {
 		t.Fatal("observability enabled without dataset root must be rejected")
@@ -302,7 +347,6 @@ func TestObservabilityValidation(t *testing.T) {
 
 func TestObservabilityJSONLDefaultsAndValidation(t *testing.T) {
 	config := Default()
-	config.Web.Root = "/opt/zentao/app/zentaopms/www"
 	config.Observability.Enabled = true
 	config.Observability.DatasetRoot = "/opt/zentao/observability"
 	config.Observability.SpoolPath = "/opt/zentao/spool/observability"
@@ -320,7 +364,6 @@ controlSocket = "/run/zentao/runtime.sock"
 pidFile = "/run/zentao/runtime.pid"
 
 [web]
-root = "/opt/zentao/app/zentaopms/www"
 listen = "127.0.0.1:8080"
 
 [observability]

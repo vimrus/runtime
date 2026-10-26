@@ -42,12 +42,18 @@ pidFile = "/tmp/zentao.pid"
 drainTimeout = "10s"
 
 [web]
-root = "/shared/app/zentaopms/www"
 listen = "127.0.0.1:8080"
 threads = 4
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
+
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "/shared/app/zentaopms"
+webRoot = "www"
+enabled = true
 
 # This smoke test verifies PHP hosting only. Its staged application need not
 # expose the private Queue Bridge, so do not inherit the production default.

@@ -120,7 +120,6 @@ version             输出版本和构建能力
 
 ```text
 serve:
-  --root              覆盖 PHP 文档根目录
   --listen            覆盖 Web 监听地址
   --pid-file          覆盖 PID 文件
   --control-socket    覆盖控制 socket/Named Pipe
@@ -191,6 +190,7 @@ zentao.exe service install
 
 ## 文档入口
 
+- 使用与开发：[Runtime 使用开发指南](./docs/usage/README.md)
 - 产品/部署设计：[docs/design/](./docs/design/)
 - 开发与验证：[docs/development/](./docs/development/)
 - 配置与安全：[docs/configuration-and-security.md](./docs/configuration-and-security.md)

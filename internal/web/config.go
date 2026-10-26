@@ -19,10 +19,6 @@ import (
 )
 
 type Options struct {
-	// Root is the deprecated single-application document root. It is only
-	// used when Apps is empty, keeping installations that still configure
-	// web.root working unchanged.
-	Root                string
 	Apps                []App
 	Listen              string
 	Threads             int
@@ -56,9 +52,6 @@ type App struct {
 type QueueBridgeOptions struct {
 	Enabled bool
 	Listen  string
-	// Token is the legacy single-application bridge token. It is only used
-	// when Apps is empty.
-	Token string
 	// Apps declares per-application bridges: namespaced loopback paths, one
 	// token per application and the in-application URL template the bridge
 	// endpoint names are rewritten into.
@@ -89,11 +82,6 @@ type ObservabilityBridgeOptions struct {
 // Config builds the smallest useful Classic-mode Caddy configuration.
 func Config(options Options) *caddy.Config {
 	apps := options.Apps
-	if len(apps) == 0 && options.Root != "" {
-		// The deprecated direct-root form always describes an installed
-		// application; availability is only evaluated by the Runtime.
-		apps = []App{{ID: "zentao", Prefix: "/", Root: options.Root, Available: true}}
-	}
 	healthRoute := func(kind string, paths ...string) caddyhttp.Route {
 		return caddyhttp.Route{
 			MatcherSetsRaw: []caddy.ModuleMap{{
@@ -143,58 +131,34 @@ func Config(options Options) *caddy.Config {
 			IdleTimeout:       caddy.Duration(options.IdleTimeout),
 			MaxHeaderBytes:    options.MaxHeaderBytes,
 		}
-		if len(options.QueueBridge.Apps) == 0 {
-			/* Legacy single-application bridge: flat endpoint paths, one token. */
-			bridgeRoutes := caddyhttp.RouteList{}
+		/* Each application gets its own namespace, token and URL template. */
+		bridgeRoutes := caddyhttp.RouteList{}
+		for _, queueApp := range options.QueueBridge.Apps {
+			bridgeTarget, found := findApp(apps, queueApp.ID)
+			if !found || !bridgeTarget.Available {
+				continue
+			}
+			appRoutes := caddyhttp.RouteList{}
 			for _, endpoint := range queueBridgeEndpoints {
-				bridgeRoutes = append(bridgeRoutes, bridgeRewriteRoute("/internal/runtime/queue/v1/"+endpoint, "/index.php/queue-"+endpoint))
+				target := strings.ReplaceAll(queueApp.Template, "{endpoint}", endpoint)
+				appRoutes = append(appRoutes, bridgeRewriteRoute(bridge.AppBasePath(queueApp.ID)+"/"+endpoint, joinBridgePath(queueApp.Prefix, target)))
 			}
-			bridge := bridgeApp(apps)
-			bridgeInner := caddyhttp.RouteList{}
-			if bridge.Available {
-				bridgeInner = applicationInnerRoutes(bridge)
-			} else {
-				bridgeInner = caddyhttp.RouteList{
-					staticResponseRoute(503, `{"status":"unavailable","reason":"queue bridge has no application"}`),
-				}
-			}
-			bridgeServer.Routes = caddyhttp.RouteList{
-				{HandlersRaw: []json.RawMessage{
-					caddyconfig.JSONModuleObject(QueueAuth{Token: options.QueueBridge.Token}, "handler", "zentao_queue_auth", nil),
-					caddyconfig.JSONModuleObject(caddyhttp.Subroute{Routes: append(bridgeRoutes, bridgeInner...)}, "handler", "subroute", nil),
+			appRoutes = append(appRoutes, applicationInnerRoutes(bridgeTarget)...)
+			bridgeRoutes = append(bridgeRoutes, caddyhttp.Route{
+				MatcherSetsRaw: []caddy.ModuleMap{{
+					"path": caddyconfig.JSON(caddyhttp.MatchPath{bridge.AppBasePath(queueApp.ID), bridge.AppBasePath(queueApp.ID) + "/*"}, nil),
 				}},
-			}
-		} else {
-			/* Per-application bridges: each application gets its own namespace,
-			 * its own token and its own in-application URL template. */
-			bridgeRoutes := caddyhttp.RouteList{}
-			for _, queueApp := range options.QueueBridge.Apps {
-				bridgeTarget, found := findApp(apps, queueApp.ID)
-				if !found || !bridgeTarget.Available {
-					continue
-				}
-				appRoutes := caddyhttp.RouteList{}
-				for _, endpoint := range queueBridgeEndpoints {
-					target := strings.ReplaceAll(queueApp.Template, "{endpoint}", endpoint)
-					appRoutes = append(appRoutes, bridgeRewriteRoute(bridge.AppBasePath(queueApp.ID)+"/"+endpoint, joinBridgePath(queueApp.Prefix, target)))
-				}
-				appRoutes = append(appRoutes, applicationInnerRoutes(bridgeTarget)...)
-				bridgeRoutes = append(bridgeRoutes, caddyhttp.Route{
-					MatcherSetsRaw: []caddy.ModuleMap{{
-						"path": caddyconfig.JSON(caddyhttp.MatchPath{bridge.AppBasePath(queueApp.ID), bridge.AppBasePath(queueApp.ID) + "/*"}, nil),
-					}},
-					HandlersRaw: []json.RawMessage{
-						caddyconfig.JSONModuleObject(QueueAuth{Token: queueApp.Token}, "handler", "zentao_queue_auth", nil),
-						caddyconfig.JSONModuleObject(caddyhttp.Subroute{Routes: appRoutes}, "handler", "subroute", nil),
-					},
-				})
-			}
-			if len(bridgeRoutes) == 0 {
-				bridgeRoutes = append(bridgeRoutes, staticResponseRoute(503, `{"status":"unavailable","reason":"queue bridge has no application"}`))
-			}
-			bridgeRoutes = append(bridgeRoutes, staticResponseRoute(404, `{"status":"not_found"}`))
-			bridgeServer.Routes = bridgeRoutes
+				HandlersRaw: []json.RawMessage{
+					caddyconfig.JSONModuleObject(QueueAuth{Token: queueApp.Token}, "handler", "zentao_queue_auth", nil),
+					caddyconfig.JSONModuleObject(caddyhttp.Subroute{Routes: appRoutes}, "handler", "subroute", nil),
+				},
+			})
 		}
+		if len(bridgeRoutes) == 0 {
+			bridgeRoutes = append(bridgeRoutes, staticResponseRoute(503, `{"status":"unavailable","reason":"queue bridge has no application"}`))
+		}
+		bridgeRoutes = append(bridgeRoutes, staticResponseRoute(404, `{"status":"not_found"}`))
+		bridgeServer.Routes = bridgeRoutes
 		servers["queuebridge"] = bridgeServer
 	}
 	if options.ObservabilityBridge.Enabled {
@@ -337,21 +301,6 @@ func unavailableApplicationRoute(app App) caddyhttp.Route {
 		}, "handler", "static_response", nil)},
 		Terminal: true,
 	}
-}
-
-// bridgeApp selects the application that serves the private Queue Bridge
-// endpoints, keeping its document root and PHP environment. The root
-// application wins; otherwise the first declared application is used.
-func bridgeApp(apps []App) App {
-	for _, app := range apps {
-		if app.Prefix == "/" {
-			return App{ID: "queuebridge", Prefix: "/", Root: app.Root, Env: app.Env, Available: app.Available}
-		}
-	}
-	if len(apps) > 0 {
-		return App{ID: "queuebridge", Prefix: "/", Root: apps[0].Root, Env: apps[0].Env, Available: apps[0].Available}
-	}
-	return App{ID: "queuebridge", Prefix: "/"}
 }
 
 var queueBridgeEndpoints = []string{"capabilities", "claim", "execute", "heartbeat", "reap", "stats", "control", "schedule"}

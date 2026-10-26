@@ -24,12 +24,18 @@ nodeID = "node-a"
 clusterID = "cluster-prod-1"
 
 [web]
-root = "app/zentaopms/www"
 listen = "0.0.0.0:8080"
 threads = 4
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
+
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentao"
+webRoot = "www"
+enabled = true
 
 [observability]
 enabled = true
@@ -43,11 +49,10 @@ jsonlConvertSources = ["access", "runtime"]
 jsonlKeepDays = 7
 ```
 
-应用、日志和观测目录等路径默认按安装根目录解析，通常使用 `app/...`、`logs/...`、`observability/...` 等相对路径；系统级 socket/PID 或其他特殊目录可以填写绝对路径。`web.threads` 的范围为 2 至 256，Header 限制范围为 1 KiB 至 1 MiB，全部超时必须为正的 Go duration 字符串。
+应用、日志和观测目录等路径默认按安装根目录解析，通常使用 `apps/...`、`logs/...`、`observability/...` 等相对路径；系统级 socket/PID 或其他特殊目录可以填写绝对路径。应用只能通过 `[[apps]]` 声明，允许配置零个应用。`web.threads` 的范围为 2 至 256，Header 限制范围为 1 KiB 至 1 MiB，全部超时必须为正的 Go duration 字符串。
 
 环境变量只覆盖明确字段：
 
-- `ZENTAO_RUNTIME_ROOT`
 - `ZENTAO_RUNTIME_LISTEN`
 - `ZENTAO_RUNTIME_THREADS`
 - `ZENTAO_RUNTIME_CONTROL_SOCKET`
@@ -61,13 +66,13 @@ jsonlKeepDays = 7
 - `ZENTAO_RUNTIME_CLUSTER_ID`
 - `ZENTAO_RUNTIME_ACCESS_LOG`
 - `ZENTAO_QUEUE_ENABLED`
-- `ZENTAO_QUEUE_BRIDGE_URL`
-- `ZENTAO_QUEUE_TOKEN`
+- `ZENTAO_QUEUE_BRIDGE_PORT`
 - `ZENTAO_OBSERVABILITY_ENABLED`
+- `ZENTAO_OBSERVABILITY_BRIDGE_PORT`
 - `ZENTAO_OBSERVABILITY_DATASET_ROOT`
 - `ZENTAO_OBSERVABILITY_SPOOL_PATH`
 
-CLI 的 `serve --root/--listen/--threads/--control-socket/--pid-file` 优先级高于配置文件。没有配置文件时，PoC 只允许通过 `serve --root <absolute-path>` 启动，便于兼容已有调用方式。
+CLI 的 `serve --listen/--threads/--control-socket/--pid-file` 优先级高于配置文件。配置文件是必需文件；应用只能通过 `[[apps]]` 声明，允许配置零个应用。
 
 ## 3. 生命周期和健康
 
@@ -152,11 +157,15 @@ app-root 以及未来的数据库、Session、NFS 探针），组件状态为
 
 ## 6. Queue 配置
 
-`queue` 段默认禁用。启用时 `bridgeBaseURL` 必须为 loopback 地址，Worker
-必须至少一个；Bridge Token 通过 `ZENTAO_QUEUE_TOKEN` 或
-`queue.bridgeToken` 提供，每次部署轮换，不写入日志和审计。Queue 启动时先
+`queue` 段默认禁用。启用时 `bridgePort` 必须在 1 至 65535 之间，Runtime
+固定监听 `127.0.0.1:<bridgePort>`，Worker 必须至少一个。每个应用通过
+`apps[].queue` 启用自己的 Bridge；Token 由
+`apps[].queue.token`、`apps[].env.ZENTAO_QUEUE_TOKEN` 提供，或由 Runtime
+每次启动随机生成并注入该应用，不写入日志和审计。Queue 启动时先
 执行 `capabilities` 协商，失败只标记 Queue 组件降级，不影响 Web Ready。
 批量 Claim、Heartbeat、Reap 和租约参数见 [`design/03-message-queue.md`](../03-message-queue.md)。
+
+`queue.bridgePort` 和 `observability.bridgePort` 不能与 `web.listen` 的端口相同，两者同时启用时也不能互相冲突。
 
 ## 7. 可观测性
 
@@ -219,7 +228,6 @@ Runtime 自身结构化日志写入 `runtime-<nodeID>.jsonl`，按
 
 以下字段返回 `restartRequired: true`，不在运行中修改：
 
-- `web.root`
 - `web.listen`
 - `web.threads`
 - `runtime.controlSocket`
@@ -230,6 +238,7 @@ Runtime 自身结构化日志写入 `runtime-<nodeID>.jsonl`，按
 - `runtime.logMaxBackups`
 - `runtime.nodeID`
 - `runtime.clusterID`
+- `[[apps]]`
 - `observability.jsonlConvertInterval`
 - `observability.jsonlConvertSources`
 - `observability.jsonlKeepDays`

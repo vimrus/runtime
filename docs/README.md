@@ -8,6 +8,10 @@
 
 ## 文档分层
 
+### 使用开发
+
+- [Runtime 使用开发指南](./usage/README.md)：按快速开始、应用接入、可观测性、队列和运维任务组织的使用文档。
+
 ### 设计
 
 - [系统总设计](./design/00-system-overview.md)：产品目标、边界、组件、数据流和部署模型。
@@ -41,12 +45,12 @@
 
 ## 当前状态
 
-Runtime 侧 Host、控制面、健康检查、队列 Worker、DuckDB/Parquet、升级事务、平台服务、制品组装和 CI 已有实现。定时任务 PHP Queue Bridge 与三种执行模式已实现；Runtime 缓存客户端接入、Session/附件适配和跨版本联合测试仍按开发计划推进。正式安装器、代码签名和镜像发布需要发布环境与权限。
+Runtime 侧 Host、控制面、健康检查、队列 Worker、DuckDB/Parquet、平台服务、制品组装和 CI 已有实现。定时任务 PHP Queue Bridge 与三种执行模式已实现；Runtime 不提供 Cache Service 或 Cache Bridge，应用缓存由 PHP 侧的 APCu/Redis 后端承担。Session/附件适配和跨版本联合测试仍按开发计划推进。正式安装器、代码签名和镜像发布需要发布环境与权限。
 
 ## 设计原则
 
 1. 单机是首要交付入口，企业级双节点和外部负载均衡是可组合的部署扩展。
 2. Runtime 管理自己的库、服务和受控的外部独立二进制服务；不把禅道业务逻辑搬入 Go。
-3. Go 不直连禅道业务数据库；队列由 PHP DAO 执行；Go 可以使用内嵌 DuckDB 处理观测数据，并提供 Runtime 缓存。
+3. Go 不直连禅道业务数据库；队列由 PHP DAO 执行；Go 可以使用内嵌 DuckDB 处理观测数据；业务缓存归 PHP `lib/cache`，Runtime 只提供 APCu/Redis PHP 扩展环境。
 4. 业务数据库是业务状态和队列状态的事实来源，缓存和 Parquet 都不能成为业务正确性的前提。
 5. 所有跨边界接口版本化、可鉴权、可测试，并明确失败降级行为。

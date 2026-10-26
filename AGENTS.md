@@ -37,7 +37,6 @@ Runtime/Full 打包、签名供应链和 CI workflow。
 - `docs/design/01-runtime-host.md`：Caddy、FrankenPHP 和 Runtime Host 设计。
 - `docs/design/02-frankenphp-integration.md`：PHP、Classic mode 和 ionCube 集成设计。
 - `docs/design/03-message-queue.md`：数据库消息队列和 PHP Queue Bridge 设计。
-- `docs/design/04-runtime-cache.md`：Runtime Cache Service 和客户端设计。
 - `docs/design/05-observability.md`：DuckDB、度量项、日志和共享 Parquet 数据集设计。
 - `docs/design/06-deployment-and-ha.md`：PHP Session、NFS、外部负载均衡和双节点高可用设计。
 - `docs/design/07-build-and-release.md`：Windows、Linux、Docker 构建与打包设计。
@@ -175,7 +174,7 @@ runtime/
 - Runtime 启动、重载、优雅停止和子进程管理。
 - MySQL、PostgreSQL 和信创数据库的 PHP DAO 契约。
 - 消息队列的并发领取、租约、重试、死信和 Worker 崩溃恢复。
-- Runtime Cache 的显式 `get/set/delete`、过期、容量、降级和 Bridge 性能。
+- PHP APCu/Redis 缓存后端的过期、容量、故障降级和多应用 namespace 隔离。
 - DuckDB 三平台加载、共享 Parquet 原子发布、NFS 故障补发、查询资源限制和日志脱敏。
 
 没有执行某个平台或数据库测试时，必须在交付说明中明确列出未验证项和剩余风险。

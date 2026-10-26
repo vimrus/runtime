@@ -305,7 +305,6 @@ eventID, source, kind(metrics|logs)
 环境缺失时继续运行：
 
 ```text
-ZENTAO_RUNTIME_ROOT
 ZENTAO_RUNTIME_LISTEN
 ZENTAO_RUNTIME_NODE_ID
 ZENTAO_RUNTIME_CLUSTER_ID

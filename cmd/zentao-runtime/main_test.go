@@ -76,3 +76,10 @@ func TestResolveNodeIDRejectsInvalidFile(t *testing.T) {
 		t.Fatal("resolveNodeID() expected error for invalid node id file")
 	}
 }
+
+func TestServeRejectsRemovedRootFlag(t *testing.T) {
+	err := serve([]string{"--root", "/srv/legacy-app"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("serve --root must be rejected, got %v", err)
+	}
+}

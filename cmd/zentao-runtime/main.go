@@ -11,7 +11,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -277,7 +276,6 @@ func observabilityCommand(operation string, args []string) error {
 
 func serve(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	root := flags.String("root", "", "PHP document root override")
 	listen := flags.String("listen", "", "HTTP listen address override")
 	pidFile := flags.String("pid-file", "", "PID file override")
 	controlSocket := flags.String("control-socket", "", "Control socket override")
@@ -303,7 +301,7 @@ func serve(args []string) error {
 			filepath.Join(installRootPath, "config", "runtime.example.toml"),
 			configPath)
 	}
-	cfg, err := loadServeConfig(configPath, *root, *listen, *pidFile, *controlSocket, *threads)
+	cfg, err := loadServeConfig(configPath, *listen, *pidFile, *controlSocket, *threads)
 	if err != nil {
 		return err
 	}
@@ -457,7 +455,7 @@ func serve(args []string) error {
 		}
 		observabilityBridge = web.ObservabilityBridgeOptions{
 			Enabled: true,
-			Listen:  cfg.Observability.BridgeListen,
+			Listen:  config.LoopbackBridgeAddress(cfg.Observability.BridgePort),
 			Tokens:  tokens,
 		}
 	}
@@ -480,7 +478,7 @@ func serve(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "zentao: listening on %s\n", cfg.Web.Listen)
-	logger.Info("runtime ready", slog.String("listen", cfg.Web.Listen), slog.String("root", cfg.Web.Root), slog.String("mode", "classic"))
+	logger.Info("runtime ready", slog.String("listen", cfg.Web.Listen), slog.Int("applications", len(cfg.ActiveApps())), slog.String("mode", "classic"))
 	serveCtx, serveCancel := context.WithCancel(context.Background())
 	defer serveCancel()
 	go runLogPruneLoop(serveCtx, logger)
@@ -672,37 +670,11 @@ type queueEngineEntry struct {
 	engine *queueengine.Engine
 }
 
-// prepareQueueEngines builds one queue engine per configured application.
-// Legacy single-application configurations keep the previous behavior: one
-// process-wide token and one flat bridge. Explicit [[apps]] configurations
-// get one engine per queue-enabled application with its own token, its own
-// namespaced loopback path and its own in-application bridge URL.
+// prepareQueueEngines builds one queue engine per queue-enabled application.
 func prepareQueueEngines(cfg *config.Config, logger *logging.Logger, nodeID string) ([]queueEngineEntry, error) {
 	if !cfg.Queue.Enabled {
 		return nil, nil
 	}
-	if cfg.LegacyApp() || len(cfg.Apps) == 0 {
-		// The bridge credential is generated per Runtime start: it is exposed
-		// to PHP through the environment and used by the Go bridge client.
-		tokenBytes := make([]byte, 32)
-		if _, err := rand.Read(tokenBytes); err != nil {
-			return nil, fmt.Errorf("generate queue bridge token: %w", err)
-		}
-		token := hex.EncodeToString(tokenBytes)
-		if err := os.Setenv("ZENTAO_QUEUE_TOKEN", token); err != nil {
-			return nil, fmt.Errorf("set queue bridge token: %w", err)
-		}
-		cfg.Queue.BridgeToken = token
-		engine, err := newQueueEngine(*cfg, logger, nodeID)
-		if err != nil {
-			return nil, err
-		}
-		if engine == nil {
-			return nil, nil
-		}
-		return []queueEngineEntry{{name: "queue", engine: engine}}, nil
-	}
-
 	entries := make([]queueEngineEntry, 0, len(cfg.Apps))
 	for index := range cfg.Apps {
 		app := &cfg.Apps[index]
@@ -745,21 +717,7 @@ func newAppQueueEngine(cfg config.Config, app config.App, logger *logging.Logger
 }
 
 func queueBridgeListen(cfg config.Config) string {
-	listen := "127.0.0.1:8081"
-	if parsed, err := url.Parse(cfg.Queue.BridgeBaseURL); err == nil && parsed.Host != "" {
-		listen = parsed.Host
-	}
-	return listen
-}
-
-func newQueueEngine(cfg config.Config, logger *logging.Logger, nodeID string) (*queueengine.Engine, error) {
-	if !cfg.Queue.Enabled {
-		return nil, nil
-	}
-	if cfg.Queue.BridgeToken == "" {
-		return nil, errors.New("queue is enabled but ZENTAO_QUEUE_TOKEN or queue.bridgeToken is missing")
-	}
-	return newQueueEngineWithBridge(cfg, cfg.Queue.BridgeBaseURL, cfg.Queue.BridgeToken, logger, nodeID)
+	return config.LoopbackBridgeAddress(cfg.Queue.BridgePort)
 }
 
 func newQueueEngineWithBridge(cfg config.Config, baseURL, token string, logger *logging.Logger, nodeID string) (*queueengine.Engine, error) {
@@ -870,12 +828,13 @@ func prepareObservabilityApps(cfg *config.Config, nodeID string, flush bool) ([]
 		if app.Env == nil {
 			app.Env = make(map[string]string)
 		}
-		setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_URL", "http://"+cfg.Observability.BridgeListen+"/internal/runtime/observability/v1/events")
+		bridgeAddress := config.LoopbackBridgeAddress(cfg.Observability.BridgePort)
+		setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_URL", "http://"+bridgeAddress+"/internal/runtime/observability/v1/events")
 		setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_TOKEN", token)
 		setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_SCHEMA", strconv.Itoa(observability.SchemaVersion))
 		if flush {
 			// 只读查询桥可用时才进入 flush 模式，避免与本地 JSONL 双写。
-			setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_QUERY_URL", "http://"+cfg.Observability.BridgeListen+"/internal/runtime/observability/v1/query")
+			setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_QUERY_URL", "http://"+bridgeAddress+"/internal/runtime/observability/v1/query")
 			setEnvDefault(app.Env, "ZENTAO_OBSERVABILITY_QUERY_TOKEN", token)
 			setEnvDefault(app.Env, "ZENTAO_LOG_MODE", "flush")
 		}
@@ -1049,19 +1008,12 @@ func (p hostStatusProvider) HTTPStatus() web.HTTPStatus {
 	}
 }
 
-func loadServeConfig(path, root, listen, pidFile, controlSocket string, threads int) (config.Config, error) {
+func loadServeConfig(path, listen, pidFile, controlSocket string, threads int) (config.Config, error) {
 	cfg, err := config.Load(path, os.Environ())
 	if err != nil {
 		return config.Config{}, err
 	}
 	overrides := config.Overrides{}
-	if root != "" {
-		absolute, err := filepath.Abs(root)
-		if err != nil {
-			return config.Config{}, fmt.Errorf("resolve document root: %w", err)
-		}
-		overrides.Root = &absolute
-	}
 	if listen != "" {
 		overrides.Listen = &listen
 	}
@@ -1511,7 +1463,7 @@ func (h *host) reload() control.Response {
 		}
 		observabilityBridge = web.ObservabilityBridgeOptions{
 			Enabled: true,
-			Listen:  candidate.Observability.BridgeListen,
+			Listen:  config.LoopbackBridgeAddress(candidate.Observability.BridgePort),
 			Tokens:  tokens,
 		}
 	}
@@ -1540,23 +1492,19 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 	queueBridge := web.QueueBridgeOptions{}
 	if cfg.Queue.Enabled {
 		bridgeListen := queueBridgeListen(cfg)
-		if cfg.LegacyApp() || len(cfg.Apps) == 0 {
-			queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Token: cfg.Queue.BridgeToken}
-		} else {
-			queueApps := make([]web.QueueBridgeApp, 0, len(cfg.Apps))
-			for _, app := range cfg.Apps {
-				if !app.Enabled || !app.Queue.Enabled {
-					continue
-				}
-				prefix, err := config.NormalizePath(app.Path)
-				if err != nil {
-					prefix = app.Path
-				}
-				queueApps = append(queueApps, web.QueueBridgeApp{ID: app.ID, Prefix: prefix, Token: app.Queue.Token, Template: app.Queue.BridgeURLTemplate})
+		queueApps := make([]web.QueueBridgeApp, 0, len(cfg.Apps))
+		for _, app := range cfg.Apps {
+			if !app.Enabled || !app.Queue.Enabled {
+				continue
 			}
-			if len(queueApps) > 0 {
-				queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Apps: queueApps}
+			prefix, err := config.NormalizePath(app.Path)
+			if err != nil {
+				prefix = app.Path
 			}
+			queueApps = append(queueApps, web.QueueBridgeApp{ID: app.ID, Prefix: prefix, Token: app.Queue.Token, Template: app.Queue.BridgeURLTemplate})
+		}
+		if len(queueApps) > 0 {
+			queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Apps: queueApps}
 		}
 	}
 	return web.Config(web.Options{

@@ -48,7 +48,6 @@ func TestConfigRoutesSubPathApplication(t *testing.T) {
 func TestConfigWithoutApplicationsServesPlaceholder(t *testing.T) {
 	options := testOptions()
 	options.Apps = nil
-	options.Root = ""
 	rendered := renderConfig(t, options)
 	if !strings.Contains(rendered, `"http.handlers.static_response"`) ||
 		!strings.Contains(rendered, `no application configured`) {

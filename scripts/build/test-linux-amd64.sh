@@ -50,7 +50,7 @@ docker exec "${container}" sh -c 'printf zentao-poc > /tmp/upload.txt && curl --
 
 docker exec "${container}" stat -c '%a' /tmp/zentao-runtime.sock | grep -Fx '600'
 docker exec "${container}" zentao status --control-socket /tmp/zentao-runtime.sock \
-    | jq --exit-status '.lifecycle.state == "ready" and .web.root == "/app"' >/dev/null
+    | jq --exit-status '.lifecycle.state == "ready" and .web.apps[0].id == "zentao" and .web.apps[0].dir == "/app"' >/dev/null
 docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-runtime.sock \
     | jq --exit-status '.live == true and .ready == true and .deep == "ok"' >/dev/null
 docker exec "${container}" zentao health --deep --control-socket /tmp/zentao-runtime.sock \

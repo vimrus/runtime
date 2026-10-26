@@ -376,7 +376,7 @@ zentao metrics --since 1h --metric-name http.request.duration
 禅道后台“日志”查看器在 flush 模式下经 loopback 查询桥读取日志：
 
 ```text
-POST http://<observability.bridgeListen>/internal/runtime/observability/v1/query
+POST http://127.0.0.1:<observability.bridgePort>/internal/runtime/observability/v1/query
 X-Zentao-Observability-Token: <token>
 X-Zentao-Observability-Schema: 1
 {"schemaVersion":1,"filters":{"topic":"error","level":"error","module":"common",

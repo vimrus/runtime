@@ -84,9 +84,9 @@ Session 和附件不由 Runtime 配置管理：
 
 如果启用 Queue：
 
-- 两台节点使用相同的 `queue.bridgeBaseURL` 规则和 Worker 配置。
+- 两台节点使用相同的 `queue.bridgePort` 和 Worker 配置。
 - Queue Bridge 通常绑定本机回环地址，由每台节点自己的 PHP 应用提供。
-- `bridgeToken` 不提交到配置文件；Runtime 启动时生成本次运行的 token。
+- 每个应用的 Queue Token 不提交到配置文件；Runtime 启动时生成本次运行的 token。
 - 队列状态在业务数据库中持久化，Worker 通过租约和 fencing token 避免重复领取。
 
 ## 接入负载均衡

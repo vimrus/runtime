@@ -6,12 +6,18 @@ pidFile = "/tmp/zentao-runtime.pid"
 drainTimeout = "10s"
 
 [web]
-root = "/app"
 listen = "127.0.0.1:8080"
 threads = 4
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
+
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "/app"
+webRoot = "."
+enabled = true
 
 [observability]
 enabled = true

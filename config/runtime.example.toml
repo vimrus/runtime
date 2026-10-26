@@ -1,5 +1,5 @@
 # Runtime configuration. Relative paths are resolved from the installation root.
-# Optional overrides. Runtime uses these system defaults when runtime.toml is absent.
+# This file is required at config/runtime.toml; omitted fields use system defaults.
 # Durations use Go syntax, for example 30s, 5m, or 1h.
 # Configuration is strict: unknown keys and unsupported schema versions are errors.
 # Configuration schema version.
@@ -38,10 +38,6 @@ nodeID = ""
 clusterID = ""
 
 [web]
-# Deprecated single-application document root, relative to the installation root.
-# New installations declare applications with [[apps]] below; web.root is kept
-# for existing installations and is rejected when [[apps]] is present.
-root = "app/zentaopms/www"
 # HTTP bind address and port. 0.0.0.0 listens on all IPv4 interfaces.
 listen = "0.0.0.0:8080"
 # Number of PHP worker threads.
@@ -54,8 +50,8 @@ idleTimeout = "30s"
 maxHeaderBytes = 16384
 
 # Applications are pluggable: the Runtime artifact never contains application
-# code. Each entry declares one application served on this listener. At most
-# one application may use "/"; other applications use a unique sub-path prefix.
+# code. [[apps]] is the only supported application declaration. At most one
+# application may use "/"; other applications use a unique sub-path prefix.
 # Every application keeps its own database environment, data, session and temp
 # roots. Explicit env values win over the generated defaults
 # (ZT_WEB_ROOT, ZT_APP_ID, ZT_DATA_ROOT, ZT_TMP_ROOT, ZT_SESSION_PATH,
@@ -63,16 +59,15 @@ maxHeaderBytes = 16384
 # enabled, every application also receives its own
 # ZENTAO_OBSERVABILITY_URL/TOKEN and, when the read-only query bridge is
 # available, ZENTAO_OBSERVABILITY_QUERY_URL/TOKEN and ZENTAO_LOG_MODE=flush.
-#
-# [[apps]]
-# id = "zentao-ipd"
-# path = "/ipd"
-# dir = "apps/zentao-ipd-22.6"
-# webRoot = "www"
-# dataDir = "data/apps/zentao-ipd"     # optional, default data/apps/<id>
-# tmpDir = "tmp-local/zentao-ipd"      # optional, default tmp-local/<id>
-# enabled = true
-# env = { ZT_DB_NAME = "zentao_ipd" }
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentao"
+webRoot = "www"
+dataDir = "data/apps/zentao"         # optional, default data/apps/<id>
+tmpDir = "tmp-local/zentao"          # optional, default tmp-local/<id>
+enabled = true
+# env = { ZT_DB_NAME = "zentao" }
 #
 # Per-application Queue Bridge. Every queue-enabled application gets its own
 # loopback namespace (/internal/runtime/queue/v1/apps/<id>), its own token
@@ -83,16 +78,15 @@ maxHeaderBytes = 16384
 #
 # queue = { enabled = true, bridgeUrlTemplate = "/bridge.php?endpoint={endpoint}" }
 #
-# Applications that still expose the bridge through their router can keep the
-# legacy default by omitting bridgeUrlTemplate (PATH_INFO request mode only).
+# When omitted, bridgeUrlTemplate defaults to the PATH_INFO form
+# "/index.php/queue-{endpoint}".
 
 [queue]
 # Enable the PHP Queue Bridge worker engine.
 enabled = true
-# Local PHP Queue Bridge URL; required when queue is enabled.
-bridgeBaseURL = "http://127.0.0.1:8081/internal/runtime/queue/v1"
-# Shared secret for authenticating Queue Bridge requests.
-# bridgeToken = "change-me"
+# Private Queue Bridge port. Runtime always binds it to 127.0.0.1.
+# It must differ from web.listen and observability.bridgePort.
+bridgePort = 8081
 # Timeout for one Queue Bridge request.
 requestTimeout = "5s"
 # Maximum number of jobs claimed in one batch.
@@ -123,8 +117,9 @@ maxPoll = "5s"
 # deployments default to flush mode; set enabled = false to keep file-mode
 # JSONL logs instead.
 enabled = true
-# Private loopback listener for PHP telemetry events.
-bridgeListen = "127.0.0.1:8082"
+# Private Observability Bridge port. Runtime always binds it to 127.0.0.1.
+# It must differ from web.listen and queue.bridgePort.
+bridgePort = 8082
 # Root directory for the Runtime's own Parquet telemetry datasets
 # (access/runtime logs and self-monitoring metrics). Each application
 # publishes to <dataDir>/observability instead.
