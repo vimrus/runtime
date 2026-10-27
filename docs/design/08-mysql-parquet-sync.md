@@ -4,8 +4,12 @@
 > 机制，随付费 DuckDB 扩展一起下线：`zentaopms/lib/parquet`、`module/bi` 的
 > `syncBITableByWatermark` / `syncBITableSnapshot` / `syncMetricLibDate` /
 > `syncParquetIncremental`、`zt_duckdbsync`、cron handler `bi.syncIncremental` 均已移除，
-> `zt_duckdbqueue` 在 22.7 升级脚本中 DROP。BI 与度量查询回到业务库。当前 DuckDB 只用于
-> Runtime 日志域，见 [DuckDB 数据方案设计](./09-unified-duckdb-design.md)。
+> `zt_duckdbqueue` 在 22.7 升级脚本中 DROP。该旧链路不代表当前 BI 实现；新的
+> Runtime BI 数据集见 [BI Parquet 同步与 DuckDB 查询方案](./11-bi-parquet-query-plan.md)，
+> Runtime 日志域见 [DuckDB 数据方案设计](./09-unified-duckdb-design.md)。
+>
+> 新的 BI 同步与三引擎 SQL 兼容方向见
+> [BI Parquet 同步与 DuckDB 查询方案](./11-bi-parquet-query-plan.md)。
 
 ## 1. 目标与范围
 

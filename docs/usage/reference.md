@@ -18,6 +18,8 @@
 | `/_runtime/readiness` | 公共 | 无 | 是否接收业务流量 |
 | `/internal/runtime/observability/v1/events` | 回环 | Observability Token | 写入日志和度量 |
 | `/internal/runtime/observability/v1/query` | 回环 | Observability Token | 查询应用日志 |
+| `/internal/runtime/bi/v1/publish` | 回环 | BI Token | 发布应用 BI Parquet 数据集 |
+| `/internal/runtime/bi/v1/query` | 回环 | BI Token | 只读查询应用 BI 数据集 |
 | `/internal/runtime/queue/v1/apps/<id>/<endpoint>` | 回环 | Queue Token | 调用应用 Queue Bridge |
 
 Queue Bridge 端点：
@@ -43,8 +45,9 @@ Runtime 不提供缓存 HTTP 端点、Cache Bridge、`ZENTAO_CACHE_*` 环境变�
 | --- | --- | --- |
 | `queue.bridgePort` | `8081` | 固定 `127.0.0.1` |
 | `observability.bridgePort` | `8082` | 固定 `127.0.0.1` |
+| `bi.bridgePort` | `8083` | 固定 `127.0.0.1`，默认关闭 |
 
-两个端口必须互不相同，也不能与 `web.listen` 的端口相同。
+这些端口必须互不相同，也不能与 `web.listen` 的端口相同。
 
 ## Runtime 注入的环境
 
@@ -65,6 +68,12 @@ Runtime 不提供缓存 HTTP 端点、Cache Bridge、`ZENTAO_CACHE_*` 环境变�
 | `ZENTAO_OBSERVABILITY_QUERY_URL` | 查询桥可用 | 应用日志查询地址 |
 | `ZENTAO_OBSERVABILITY_QUERY_TOKEN` | 查询桥可用 | 应用日志查询 Token |
 | `ZENTAO_LOG_MODE` | 查询桥可用 | 当前为 `flush` |
+| `ZENTAO_BI_TOKEN` | BI 启用 | 应用 BI 发布和查询 Token |
+| `ZENTAO_BI_STAGING_DIR` | BI 启用 | 应用 NDJSON staging 目录 |
+| `ZENTAO_BI_PUBLISH_URL` | BI 启用 | BI Manifest 发布地址 |
+| `ZENTAO_BI_QUERY_URL` | BI 启用 | BI 查询地址 |
+| `ZENTAO_BI_SCHEMA` | BI 启用 | BI Bridge Schema 版本 |
+| `ZENTAO_BI_MAX_ROWS` | BI 启用 | 单次 BI 查询的最大返回行数 |
 
 Runtime 进程还提供：
 
@@ -91,6 +100,9 @@ Runtime 进程还提供：
 | Observability `labels` | 16 个 |
 | Observability 查询 `limit` | 200 |
 | Observability 查询 `offset` | 100000 |
+| BI Bridge 请求 | 256 KiB |
+| BI 查询 `maxRows` | Runtime 默认上限 10000 |
+| BI 查询 `offset` | 1000000 |
 | 应用深探针响应 | 64 KiB |
 
 ## 超时和轮询
@@ -104,6 +116,8 @@ Runtime 进程还提供：
 | Queue 调度触发 | 20 秒 |
 | Observability 事件发送 | 由应用客户端控制，应使用短超时 |
 | Observability 查询 | 10 秒 |
+| BI Manifest 发布客户端 | 300 秒 |
+| BI DuckDB 查询 | 30 秒，可由 `bi.queryTimeout` 覆盖 |
 | 应用深探针 | 5 秒 |
 | Control Plane 服务端处理 | 5 秒 |
 
@@ -122,6 +136,22 @@ Observability：
 | `401` | `unauthenticated` |
 | `413` | `request_too_large` |
 | `503` | `unavailable` |
+
+BI：
+
+| 状态 | 错误码 |
+| --- | --- |
+| `400` | `invalid_request` |
+| `400` | `unsupported_schema` |
+| `400` | `publish_failed` |
+| `400` | `query_failed` |
+| `401` | `unauthenticated` |
+| `503` | `unavailable` |
+| `503` | `query_failed`（数据集不可用） |
+| `504` | `query_failed`（查询超时） |
+
+BI 查询连接仅允许访问当前应用 `<dataDir>/bi/` 数据集；Runtime 随后关闭
+DuckDB 外部访问并锁定配置，不读取数据集之外的本地文件。
 
 Queue Bridge：
 
@@ -218,6 +248,7 @@ zentao service install|uninstall
 | `[[apps]]` | 应用代码、路由、数据目录、Session 和环境 |
 | `[queue]` | Worker、租约、Bridge 和轮询 |
 | `[observability]` | Bridge、批次、Parquet、保留和 JSONL |
+| `[bi]` | BI Parquet 发布、DuckDB 查询资源和 Bridge 端口，当前默认关闭 |
 
 完整字段和默认值以[配置样例](../../config/runtime.example.toml)和[配置校验](../../internal/config/config.go)为准。
 
@@ -256,3 +287,5 @@ zentao service install|uninstall
 | Queue DTO | [queue/bridge/bridge.go](../../internal/queue/bridge/bridge.go) |
 | Observability Schema | [observability/events.go](../../internal/observability/events.go) |
 | Metric Registry | [observability/registry.go](../../internal/observability/registry.go) |
+| BI DTO、Manifest 和 Publisher | [bi/query.go](../../internal/bi/query.go)、[bi/manifest.go](../../internal/bi/manifest.go)、[bi/publisher.go](../../internal/bi/publisher.go) |
+| BI Private Bridge | [web/bi.go](../../internal/web/bi.go) |

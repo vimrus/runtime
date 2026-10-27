@@ -1,11 +1,14 @@
-# DuckDB 数据方案设计（22.7 起仅日志域）
+# DuckDB 数据方案设计（日志域与 BI 边界）
 
 > **22.7 变更**：PHP 侧 DuckDB 已整体下线。付费扩展 `zentaomisc/duckdb`（本地 DuckDB CLI 与
 > BI 驱动）、`zentaopms/lib/duckdb`、`zentaopms/lib/parquet`、`zt_duckdbqueue`、
 > `zt_duckdbsync`，以及度量/BI 的 Parquet 同步（`biModel::syncParquetIncremental` 系列、
-> queue handler `bi.syncIncremental`）全部移除；BI 与度量的数据源回到业务库
-> （`bi/config.php` 的 `drivers = array('mysql', 'dm')`）。DuckDB 只保留 Runtime 内嵌
-> Library，服务日志域的 Parquet 生成与受控查询。
+> queue handler `bi.syncIncremental`）全部移除。业务库仍是事实来源；日志域
+> 继续由 Runtime DuckDB 处理，BI 的新同步链路通过 PHP DAO 导出后交给 Runtime。
+>
+> 新的 BI Parquet/DuckDB 方案已完成基础同步与查询链路，默认关闭，见
+> [BI Parquet 同步与 DuckDB 查询方案](./11-bi-parquet-query-plan.md)。BI 与日志
+> 使用独立数据集、Token 和 Manifest，不共享 Event Schema。
 
 ## 1. 背景
 
@@ -121,7 +124,8 @@ zentao logs
 
 - 不允许用户提交任意 SQL、任意文件路径或任意 DuckDB 扩展。
 - 查询模板由系统固定生成，参数只影响时间、节点、topic 和行数。
-- 业务库查询（BI、度量、报表）走 PHP DAO，不允许 DuckDB 直连。
+- 业务库写操作和实时度量走 PHP DAO，不允许 DuckDB 直连；BI 只读取 PHP
+  导出的 Parquet 分析副本。
 - 日志域例外：查询层在 DuckDB 返回 Parquet 结果后，合并 active/未转换
   JSONL 行。
 
@@ -139,7 +143,8 @@ zentao logs
 |---|---|---|
 | 实时运维/日志 | JSONL + 内存状态 | 秒级 |
 | 历史日志 | Parquet | 周期同步延迟 |
-| BI / 度量 / 报表 | 业务库（PHP DAO） | 业务库实时 |
+| BI 分析查询 | BI Parquet + Runtime DuckDB | 增量同步周期 |
+| 实时度量 / 业务判断 | 业务库（PHP DAO） | 业务库实时 |
 
 对“必须实时”的业务判断，不从 Parquet 读取。
 
@@ -167,6 +172,8 @@ zentao logs
 - 日志域：JSONL 转换成功后删除（`jsonlDeleteAfterConvert`）已实现；
   `zentao logs` 已合并 active/未转换 JSONL 与 Parquet 结果。
 - 日志域的 DuckDB/Parquet 实现全部在 `runtime/internal/observability/`，PHP 侧只通过 HTTP 桥交互。
-- PHP 侧度量/BI 分析副本：22.7 已按第 9 章移除，业务查询回到业务库；
-  升级脚本负责清理遗留表、配置与 `driver` 数据。
+- PHP 侧旧度量/BI 分析副本：22.7 已按第 9 章移除；升级脚本负责清理遗留表、
+  配置与 `driver` 数据。
+- 新 BI 数据集：PHP `service/bi` 负责业务库导出、租约和水位，
+  `runtime/internal/bi` 负责 Parquet、Manifest 与 DuckDB 查询，默认关闭。
 - 待验证：PostgreSQL/DM/Gauss 环境下 BI/度量查询走业务库的端到端矩阵。

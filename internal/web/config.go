@@ -29,6 +29,7 @@ type Options struct {
 	AccessLogKeepDays   int
 	QueueBridge         QueueBridgeOptions
 	ObservabilityBridge ObservabilityBridgeOptions
+	BIBridge            BIBridgeOptions
 }
 
 // App is one application route served by the Runtime. Applications are
@@ -77,6 +78,13 @@ type ObservabilityBridgeOptions struct {
 	Token  string
 	Tokens []string
 	Sink   EventSink
+}
+
+// BIBridgeOptions configures the private loopback BI publish/query listener.
+type BIBridgeOptions struct {
+	Enabled bool
+	Listen  string
+	Tokens  []string
 }
 
 // Config builds the smallest useful Classic-mode Caddy configuration.
@@ -194,6 +202,32 @@ func Config(options Options) *caddy.Config {
 			},
 		}
 		servers["observability"] = observabilityServer
+	}
+	if options.BIBridge.Enabled {
+		biListen := options.BIBridge.Listen
+		if biListen == "" {
+			biListen = "127.0.0.1:8083"
+		}
+		servers["bi"] = &caddyhttp.Server{
+			Listen:            []string{biListen},
+			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
+			IdleTimeout:       caddy.Duration(options.IdleTimeout),
+			MaxHeaderBytes:    options.MaxHeaderBytes,
+			Routes: caddyhttp.RouteList{
+				{
+					MatcherSetsRaw: []caddy.ModuleMap{{
+						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/bi/v1/publish"}, nil),
+					}},
+					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(BIPublish{Tokens: options.BIBridge.Tokens}, "handler", "zentao_bi_publish", nil)},
+				},
+				{
+					MatcherSetsRaw: []caddy.ModuleMap{{
+						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/bi/v1/query"}, nil),
+					}},
+					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(BIQuery{Tokens: options.BIBridge.Tokens}, "handler", "zentao_bi_query", nil)},
+				},
+			},
+		}
 	}
 
 	persist := false

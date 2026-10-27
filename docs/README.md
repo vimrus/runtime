@@ -22,8 +22,9 @@
 - [部署与高可用](./design/06-deployment-and-ha.md)：单机、Docker、双节点和外部负载均衡。
 - [构建与发布](./design/07-build-and-release.md)：原生构建、制品组装、供应链和发布。
 - [MySQL 到 Parquet 增量同步](./design/08-mysql-parquet-sync.md)（22.7 已废弃）：PHP 侧 BI 分析副本的历史设计。
-- [DuckDB 数据方案](./design/09-unified-duckdb-design.md)：22.7 起 DuckDB 只服务日志域，含 PHP 侧下线清单。
+- [DuckDB 数据方案](./design/09-unified-duckdb-design.md)：日志域与 BI 分析副本的边界、旧 PHP DuckDB 下线清单。
 - [禅道 Service 层设计](./design/10-service-layer.md)：定时/缓存/队列/日志/度量的服务化封装。
+- [BI Parquet 同步与 DuckDB 查询方案](./design/11-bi-parquet-query-plan.md)（基础链路已实现，默认关闭）：BI 数据同步、Manifest、DuckDB 查询、三引擎 SQL 兼容和实施计划。
 
 ### 契约
 
@@ -45,7 +46,7 @@
 
 ## 当前状态
 
-Runtime 侧 Host、控制面、健康检查、队列 Worker、DuckDB/Parquet、平台服务、制品组装和 CI 已有实现。定时任务 PHP Queue Bridge 与三种执行模式已实现；Runtime 不提供 Cache Service 或 Cache Bridge，应用缓存由 PHP 侧的 APCu/Redis 后端承担。Session/附件适配和跨版本联合测试仍按开发计划推进。正式安装器、代码签名和镜像发布需要发布环境与权限。
+Runtime 侧 Host、控制面、健康检查、队列 Worker、DuckDB/Parquet、平台服务、制品组装和 CI 已有实现。定时任务 PHP Queue Bridge 与三种执行模式已实现；BI 的 Parquet 发布、Manifest、DuckDB 查询、三引擎 SQL 回归和 PHP 联合端到端测试已落地，默认关闭以便受控灰度。Runtime 不提供 Cache Service 或 Cache Bridge，应用缓存由 PHP 侧的 APCu/Redis 后端承担。Session/附件适配和跨版本联合测试仍按开发计划推进。正式安装器、代码签名和镜像发布需要发布环境与权限。
 
 ## 设计原则
 

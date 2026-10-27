@@ -4,11 +4,13 @@ go 1.26.0
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.4
-	github.com/dgraph-io/ristretto v0.2.0
 	github.com/dunglas/frankenphp v1.12.7
 	github.com/dunglas/frankenphp/caddy v1.12.7
+	github.com/gofrs/flock v0.12.1
 	github.com/pelletier/go-toml/v2 v2.4.3
 )
+
+require github.com/dgraph-io/ristretto v0.2.0 // indirect
 
 require (
 	cel.dev/expr v0.25.2 // indirect
@@ -28,7 +30,7 @@ require (
 	github.com/MauriceGit/skiplist v0.0.0-20211105230623-77f5c8d3e145 // indirect
 	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/MicahParks/keyfunc/v3 v3.8.0 // indirect
-	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/RoaringBitmap/roaring/v2 v2.24.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.26.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
@@ -57,7 +59,7 @@ require (
 	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10505.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10505.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10505.0 // indirect
-	github.com/duckdb/duckdb-go/v2 v2.10505.0 // indirect
+	github.com/duckdb/duckdb-go/v2 v2.10505.0
 	github.com/dunglas/mercure v0.24.2 // indirect
 	github.com/dunglas/mercure/caddy v0.24.2 // indirect
 	github.com/dunglas/skipfilter v1.0.0 // indirect

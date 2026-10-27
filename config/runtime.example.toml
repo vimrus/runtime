@@ -153,3 +153,16 @@ jsonlKeepDays = 7
 # Remove sealed JSONL segments after successful conversion and state save.
 # Disable only when raw JSONL must be retained for compliance or debugging.
 jsonlDeleteAfterConvert = true
+
+[bi]
+# BI Parquet publication and private DuckDB query bridge. Synchronization is
+# scheduled by the Zentao application; Runtime only stores and queries datasets.
+enabled = false
+# Private BI Bridge port. Runtime will always bind it to 127.0.0.1.
+# It must differ from web.listen, queue.bridgePort and observability.bridgePort.
+bridgePort = 8083
+queryThreads = 4
+queryMemoryLimit = "1GB"
+queryTimeout = "30s"
+maxRows = 10000
+maxConcurrentQueries = 4

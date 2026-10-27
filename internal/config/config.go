@@ -17,6 +17,7 @@ const (
 	SchemaVersion                  = 1
 	DefaultQueueBridgePort         = 8081
 	DefaultObservabilityBridgePort = 8082
+	DefaultBIBridgePort            = 8083
 	loopbackBridgeHost             = "127.0.0.1"
 )
 
@@ -32,6 +33,7 @@ type Config struct {
 	Apps          []App         `json:"apps,omitempty" toml:"apps,omitempty"`
 	Queue         Queue         `json:"queue,omitempty" toml:"queue,omitempty"`
 	Observability Observability `json:"observability,omitempty" toml:"observability,omitempty"`
+	BI            BI            `json:"bi,omitempty" toml:"bi,omitempty"`
 
 	// installRoot remembers the Runtime installation directory so that
 	// application defaults can be materialized without re-reading the
@@ -163,6 +165,16 @@ type Observability struct {
 	JSONLDeleteAfterConvert bool          `json:"jsonlDeleteAfterConvert,omitempty" toml:"jsonlDeleteAfterConvert,omitempty"`
 }
 
+type BI struct {
+	Enabled              bool          `json:"enabled" toml:"enabled"`
+	BridgePort           int           `json:"bridgePort" toml:"bridgePort"`
+	QueryThreads         int           `json:"queryThreads" toml:"queryThreads"`
+	QueryMemoryLimit     string        `json:"queryMemoryLimit" toml:"queryMemoryLimit"`
+	QueryTimeout         time.Duration `json:"queryTimeout" toml:"queryTimeout"`
+	MaxRows              int           `json:"maxRows" toml:"maxRows"`
+	MaxConcurrentQueries int           `json:"maxConcurrentQueries" toml:"maxConcurrentQueries"`
+}
+
 type Overrides struct {
 	Listen                  *string
 	Threads                 *int
@@ -185,6 +197,13 @@ type Overrides struct {
 	ObservabilityBridgePort *int
 	ObservabilityRoot       *string
 	ObservabilitySpool      *string
+	BIEnabled               *bool
+	BIBridgePort            *int
+	BIQueryThreads          *int
+	BIQueryMemoryLimit      *string
+	BIQueryTimeout          *time.Duration
+	BIMaxRows               *int
+	BIMaxConcurrentQueries  *int
 }
 
 func Default() Config {
@@ -244,6 +263,15 @@ func Default() Config {
 			JSONLConvertSources:     []string{"access", "runtime"},
 			JSONLKeepDays:           7,
 			JSONLDeleteAfterConvert: true,
+		},
+		BI: BI{
+			Enabled:              false,
+			BridgePort:           DefaultBIBridgePort,
+			QueryThreads:         4,
+			QueryMemoryLimit:     "1GB",
+			QueryTimeout:         30 * time.Second,
+			MaxRows:              10000,
+			MaxConcurrentQueries: 4,
 		},
 	}
 }
@@ -410,6 +438,15 @@ func decode(data []byte, config Config) (Config, error) {
 		JSONLKeepDays           *int     `toml:"jsonlKeepDays"`
 		JSONLDeleteAfterConvert *bool    `toml:"jsonlDeleteAfterConvert"`
 	}
+	type rawBI struct {
+		Enabled              *bool   `toml:"enabled"`
+		BridgePort           *int    `toml:"bridgePort"`
+		QueryThreads         *int    `toml:"queryThreads"`
+		QueryMemoryLimit     *string `toml:"queryMemoryLimit"`
+		QueryTimeout         *string `toml:"queryTimeout"`
+		MaxRows              *int    `toml:"maxRows"`
+		MaxConcurrentQueries *int    `toml:"maxConcurrentQueries"`
+	}
 	type rawAppQueue struct {
 		Enabled           *bool   `toml:"enabled"`
 		BridgeURLTemplate *string `toml:"bridgeUrlTemplate"`
@@ -433,6 +470,7 @@ func decode(data []byte, config Config) (Config, error) {
 		Apps          *[]rawApp         `toml:"apps"`
 		Queue         *rawQueue         `toml:"queue"`
 		Observability *rawObservability `toml:"observability"`
+		BI            *rawBI            `toml:"bi"`
 	}
 
 	var raw rawConfig
@@ -706,6 +744,33 @@ func decode(data []byte, config Config) (Config, error) {
 			config.Observability.JSONLDeleteAfterConvert = *raw.Observability.JSONLDeleteAfterConvert
 		}
 	}
+	if raw.BI != nil {
+		if raw.BI.Enabled != nil {
+			config.BI.Enabled = *raw.BI.Enabled
+		}
+		if raw.BI.BridgePort != nil {
+			config.BI.BridgePort = *raw.BI.BridgePort
+		}
+		if raw.BI.QueryThreads != nil {
+			config.BI.QueryThreads = *raw.BI.QueryThreads
+		}
+		if raw.BI.QueryMemoryLimit != nil {
+			config.BI.QueryMemoryLimit = *raw.BI.QueryMemoryLimit
+		}
+		if raw.BI.QueryTimeout != nil {
+			value, err := time.ParseDuration(*raw.BI.QueryTimeout)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse bi.queryTimeout: %w", err)
+			}
+			config.BI.QueryTimeout = value
+		}
+		if raw.BI.MaxRows != nil {
+			config.BI.MaxRows = *raw.BI.MaxRows
+		}
+		if raw.BI.MaxConcurrentQueries != nil {
+			config.BI.MaxConcurrentQueries = *raw.BI.MaxConcurrentQueries
+		}
+	}
 	return config, nil
 }
 
@@ -772,6 +837,27 @@ func (c Config) Apply(overrides Overrides) (Config, error) {
 	}
 	if overrides.ObservabilitySpool != nil {
 		c.Observability.SpoolPath = *overrides.ObservabilitySpool
+	}
+	if overrides.BIEnabled != nil {
+		c.BI.Enabled = *overrides.BIEnabled
+	}
+	if overrides.BIBridgePort != nil {
+		c.BI.BridgePort = *overrides.BIBridgePort
+	}
+	if overrides.BIQueryThreads != nil {
+		c.BI.QueryThreads = *overrides.BIQueryThreads
+	}
+	if overrides.BIQueryMemoryLimit != nil {
+		c.BI.QueryMemoryLimit = *overrides.BIQueryMemoryLimit
+	}
+	if overrides.BIQueryTimeout != nil {
+		c.BI.QueryTimeout = *overrides.BIQueryTimeout
+	}
+	if overrides.BIMaxRows != nil {
+		c.BI.MaxRows = *overrides.BIMaxRows
+	}
+	if overrides.BIMaxConcurrentQueries != nil {
+		c.BI.MaxConcurrentQueries = *overrides.BIMaxConcurrentQueries
 	}
 	if err := c.normalizeApps(); err != nil {
 		return Config{}, err
@@ -877,6 +963,51 @@ func ApplyEnvironment(config Config, environ []string) (Config, error) {
 	}
 	if value, ok := values["ZENTAO_OBSERVABILITY_SPOOL_PATH"]; ok {
 		overrides.ObservabilitySpool = &value
+	}
+	if value, ok := values["ZENTAO_BI_ENABLED"]; ok {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_BI_ENABLED: %w", err)
+		}
+		overrides.BIEnabled = &parsed
+	}
+	if value, ok := values["ZENTAO_BI_BRIDGE_PORT"]; ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_BI_BRIDGE_PORT: %w", err)
+		}
+		overrides.BIBridgePort = &parsed
+	}
+	if value, ok := values["ZENTAO_BI_QUERY_THREADS"]; ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_BI_QUERY_THREADS: %w", err)
+		}
+		overrides.BIQueryThreads = &parsed
+	}
+	if value, ok := values["ZENTAO_BI_QUERY_MEMORY_LIMIT"]; ok {
+		overrides.BIQueryMemoryLimit = &value
+	}
+	if value, ok := values["ZENTAO_BI_QUERY_TIMEOUT"]; ok {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_BI_QUERY_TIMEOUT: %w", err)
+		}
+		overrides.BIQueryTimeout = &parsed
+	}
+	if value, ok := values["ZENTAO_BI_MAX_ROWS"]; ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_BI_MAX_ROWS: %w", err)
+		}
+		overrides.BIMaxRows = &parsed
+	}
+	if value, ok := values["ZENTAO_BI_MAX_CONCURRENT_QUERIES"]; ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_BI_MAX_CONCURRENT_QUERIES: %w", err)
+		}
+		overrides.BIMaxConcurrentQueries = &parsed
 	}
 	return config.Apply(overrides)
 }
@@ -1001,6 +1132,29 @@ func (c Config) Validate() error {
 	}
 	if c.Queue.Enabled && c.Observability.Enabled && c.Queue.BridgePort == c.Observability.BridgePort {
 		return fmt.Errorf("queue.bridgePort and observability.bridgePort must be different")
+	}
+	if c.BI.Enabled {
+		if !validPort(c.BI.BridgePort) {
+			return fmt.Errorf("bi.bridgePort must be between 1 and 65535")
+		}
+		if c.BI.BridgePort == webPort {
+			return fmt.Errorf("bi.bridgePort must differ from web.listen port")
+		}
+		if c.Queue.Enabled && c.BI.BridgePort == c.Queue.BridgePort {
+			return fmt.Errorf("bi.bridgePort must differ from queue.bridgePort")
+		}
+		if c.Observability.Enabled && c.BI.BridgePort == c.Observability.BridgePort {
+			return fmt.Errorf("bi.bridgePort must differ from observability.bridgePort")
+		}
+		if c.BI.QueryTimeout <= 0 {
+			return fmt.Errorf("BI query timeout must be positive")
+		}
+		if c.BI.QueryThreads <= 0 || c.BI.MaxRows <= 0 || c.BI.MaxConcurrentQueries <= 0 {
+			return fmt.Errorf("BI query limits must be positive")
+		}
+		if c.BI.QueryMemoryLimit == "" {
+			return fmt.Errorf("bi.queryMemoryLimit is required when BI is enabled")
+		}
 	}
 	return nil
 }
@@ -1223,7 +1377,14 @@ func RestartRequired(current, candidate Config) bool {
 		current.Observability.JSONLConvertInterval != candidate.Observability.JSONLConvertInterval ||
 		current.Observability.JSONLKeepDays != candidate.Observability.JSONLKeepDays ||
 		current.Observability.JSONLDeleteAfterConvert != candidate.Observability.JSONLDeleteAfterConvert ||
-		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources)
+		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources) ||
+		current.BI.Enabled != candidate.BI.Enabled ||
+		current.BI.BridgePort != candidate.BI.BridgePort ||
+		current.BI.QueryThreads != candidate.BI.QueryThreads ||
+		current.BI.QueryMemoryLimit != candidate.BI.QueryMemoryLimit ||
+		current.BI.QueryTimeout != candidate.BI.QueryTimeout ||
+		current.BI.MaxRows != candidate.BI.MaxRows ||
+		current.BI.MaxConcurrentQueries != candidate.BI.MaxConcurrentQueries
 }
 
 func equalWorkers(left, right []QueueWorker) bool {

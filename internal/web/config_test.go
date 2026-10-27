@@ -88,3 +88,23 @@ func TestConfigRoutesPerApplicationQueueBridge(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigRoutesBIBridge(t *testing.T) {
+	options := testOptions()
+	options.BIBridge = BIBridgeOptions{
+		Enabled: true,
+		Listen:  "127.0.0.1:8083",
+		Tokens:  []string{"bi-token"},
+	}
+	rendered := renderConfig(t, options)
+	for _, want := range []string{
+		`"listen":["127.0.0.1:8083"]`,
+		`"/internal/runtime/bi/v1/publish"`,
+		`"/internal/runtime/bi/v1/query"`,
+		`"tokens":["bi-token"]`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered configuration is missing %s\n%s", want, rendered)
+		}
+	}
+}

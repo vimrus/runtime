@@ -26,6 +26,7 @@ import (
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 	"github.com/dunglas/frankenphp"
 	_ "github.com/dunglas/frankenphp/caddy"
+	runtimeBI "github.com/vimrus/runtime/internal/bi"
 	"github.com/vimrus/runtime/internal/config"
 	"github.com/vimrus/runtime/internal/control"
 	"github.com/vimrus/runtime/internal/diagnostics"
@@ -381,6 +382,34 @@ func serve(args []string) error {
 	for _, app := range obsApps {
 		registerObservabilityHealth(registry, "observability:"+app.id, app.publisher)
 	}
+	var biQueryEngine runtimeBI.QueryEngine
+	var biApps []biApp
+	if cfg.BI.Enabled {
+		if !runtimeBI.DuckDBSupported() {
+			return errors.New("BI is enabled but DuckDB support is not compiled in")
+		}
+		writer, err := runtimeBI.NewDuckDBWriter(cfg.BI.QueryThreads, cfg.BI.QueryMemoryLimit)
+		if err != nil {
+			return fmt.Errorf("initialize BI DuckDB writer: %w", err)
+		}
+		biQueryEngine, err = runtimeBI.NewDuckDBQueryEngine(
+			cfg.BI.QueryThreads,
+			cfg.BI.QueryMemoryLimit,
+			cfg.BI.QueryTimeout,
+			cfg.BI.MaxRows,
+			cfg.BI.MaxConcurrentQueries,
+		)
+		if err != nil {
+			return fmt.Errorf("initialize BI DuckDB query engine: %w", err)
+		}
+		biApps, err = prepareBIApps(&cfg, writer, biQueryEngine)
+		if err != nil {
+			return err
+		}
+		for _, app := range biApps {
+			registerBIHealth(registry, "bi:"+app.id, app.datasetRoot, app.stagingRoot)
+		}
+	}
 	queueEngines, err := prepareQueueEngines(&cfg, logger, nodeID)
 	if err != nil {
 		return err
@@ -413,7 +442,7 @@ func serve(args []string) error {
 			return fmt.Errorf("initialize jsonl converter: %w", err)
 		}
 	}
-	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, obsApps, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
+	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, obsApps, biApps, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
 	host.logsDir = logsDir
 	host.jsonlSources = cfg.Observability.JSONLConvertSources
 	host.collector = &diagnostics.Collector{
@@ -459,7 +488,7 @@ func serve(args []string) error {
 			Tokens:  tokens,
 		}
 	}
-	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge)); err != nil {
+	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge, biApps)); err != nil {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
@@ -520,6 +549,10 @@ func serve(args []string) error {
 		}
 		go jsonlConverter.Run(serveCtx)
 		logger.Info("observability publisher started", slog.Int("applications", len(obsApps)))
+	}
+	if len(biApps) > 0 {
+		go runBICleanupLoop(serveCtx, logger, biApps)
+		logger.Info("BI cleanup loop started", slog.Int("applications", len(biApps)))
 	}
 
 	signals := make(chan os.Signal, 1)
@@ -794,6 +827,80 @@ type observabilityApp struct {
 	publisher *observability.Publisher
 }
 
+// biApp binds one application to its private BI Bridge token and dataset.
+type biApp struct {
+	id          string
+	datasetRoot string
+	stagingRoot string
+	token       string
+	publisher   *runtimeBI.Publisher
+}
+
+// prepareBIApps creates one BI dataset and private bridge handler per enabled
+// application. Each application gets a separate token, dataset and staging root.
+func prepareBIApps(cfg *config.Config, writer runtimeBI.ParquetWriter, queryEngine runtimeBI.QueryEngine) ([]biApp, error) {
+	if !cfg.BI.Enabled {
+		return nil, nil
+	}
+	bridgeAddress := config.LoopbackBridgeAddress(cfg.BI.BridgePort)
+	apps := make([]biApp, 0, len(cfg.Apps))
+	seenTokens := make(map[string]struct{})
+	for index := range cfg.Apps {
+		app := &cfg.Apps[index]
+		if !app.Enabled {
+			continue
+		}
+		if app.Env == nil {
+			app.Env = make(map[string]string)
+		}
+		token := app.Env["ZENTAO_BI_TOKEN"]
+		if token == "" {
+			tokenBytes := make([]byte, 32)
+			if _, err := rand.Read(tokenBytes); err != nil {
+				return nil, fmt.Errorf("generate BI bridge token for %s: %w", app.ID, err)
+			}
+			token = hex.EncodeToString(tokenBytes)
+		}
+		if _, exists := seenTokens[token]; exists {
+			return nil, fmt.Errorf("BI bridge token is reused by application %s", app.ID)
+		}
+		seenTokens[token] = struct{}{}
+
+		datasetRoot := filepath.Join(app.DataDir, "bi")
+		stagingRoot := filepath.Join(app.DataDir, "bi-staging")
+		for _, dir := range []string{filepath.Join(datasetRoot, "manifests"), filepath.Join(datasetRoot, "tables"), stagingRoot} {
+			if err := os.MkdirAll(dir, 0o770); err != nil {
+				return nil, fmt.Errorf("create BI directory for %s: %w", app.ID, err)
+			}
+		}
+		publisher, err := runtimeBI.NewPublisher(runtimeBI.PublisherConfig{
+			DatasetRoot: datasetRoot,
+			StagingRoot: stagingRoot,
+		}, writer)
+		if err != nil {
+			return nil, fmt.Errorf("initialize BI publisher for %s: %w", app.ID, err)
+		}
+
+		setEnvDefault(app.Env, "ZENTAO_BI_TOKEN", token)
+		setEnvDefault(app.Env, "ZENTAO_BI_STAGING_DIR", stagingRoot)
+		setEnvDefault(app.Env, "ZENTAO_BI_PUBLISH_URL", "http://"+bridgeAddress+"/internal/runtime/bi/v1/publish")
+		setEnvDefault(app.Env, "ZENTAO_BI_QUERY_URL", "http://"+bridgeAddress+"/internal/runtime/bi/v1/query")
+		setEnvDefault(app.Env, "ZENTAO_BI_SCHEMA", strconv.Itoa(runtimeBI.QuerySchemaVersion))
+		setEnvDefault(app.Env, "ZENTAO_BI_MAX_ROWS", strconv.Itoa(cfg.BI.MaxRows))
+
+		dataset := datasetRoot
+		web.SetBIHandlersFor(
+			token,
+			publisher.Publish,
+			func(ctx context.Context, request runtimeBI.QueryRequest) (runtimeBI.QueryResult, error) {
+				return queryEngine.Query(ctx, dataset, request)
+			},
+		)
+		apps = append(apps, biApp{id: app.ID, datasetRoot: datasetRoot, stagingRoot: stagingRoot, token: token, publisher: publisher})
+	}
+	return apps, nil
+}
+
 // observabilityRoot names one dataset root handled by retention and cleanup.
 type observabilityRoot struct {
 	name string
@@ -859,6 +966,52 @@ func registerObservabilityHealth(registry *health.Registry, name string, publish
 		}
 		return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusOK}
 	})
+}
+
+func registerBIHealth(registry *health.Registry, name, datasetRoot, stagingRoot string) {
+	registry.Register(name, health.KindShared, false, true, func(context.Context) health.Result {
+		for _, dir := range []string{filepath.Join(datasetRoot, "manifests"), filepath.Join(datasetRoot, "tables"), stagingRoot} {
+			info, err := os.Stat(dir)
+			if err != nil || !info.IsDir() {
+				return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusFailed, Message: "BI data directory is unavailable"}
+			}
+		}
+		return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusOK}
+	})
+}
+
+func runBICleanupLoop(ctx context.Context, logger *logging.Logger, apps []biApp) {
+	const (
+		cleanupInterval = time.Hour
+		partGracePeriod = time.Hour
+	)
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			for _, app := range apps {
+				result, err := app.publisher.Cleanup(now.UTC(), partGracePeriod)
+				if err != nil {
+					logger.Warn("BI cleanup failed", slog.String("app", app.id), slog.Any("error", err))
+					continue
+				}
+				if result.RemovedParts > 0 || result.RemovedTemp > 0 || result.RemovedStaging > 0 {
+					logger.Info(
+						"BI cleanup completed",
+						slog.String("app", app.id),
+						slog.Int("parts", result.RemovedParts),
+						slog.Int("tempFiles", result.RemovedTemp),
+						slog.Int("stagingDirectories", result.RemovedStaging),
+						slog.Int64("bytes", result.RemovedBytes),
+					)
+				}
+			}
+		}
+	}
 }
 
 func observabilityRoots(cfg config.Config, apps []observabilityApp) []observabilityRoot {
@@ -1050,6 +1203,7 @@ type host struct {
 	queryEngine       query.Engine
 	obsPublisher      *observability.Publisher
 	obsApps           []observabilityApp
+	biApps            []biApp
 	jsonlConverter    *jsonl.Converter
 	accessLogPath     string
 	accessLogKeepDays int
@@ -1058,7 +1212,7 @@ type host struct {
 	collector         *diagnostics.Collector
 }
 
-func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, obsApps []observabilityApp, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
+func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, obsApps []observabilityApp, biApps []biApp, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
 	return &host{
 		configPath:        configPath,
 		config:            cfg,
@@ -1070,6 +1224,7 @@ func newHost(configPath string, cfg config.Config, logger *logging.Logger, regis
 		queryEngine:       queryEngine,
 		obsPublisher:      obsPublisher,
 		obsApps:           obsApps,
+		biApps:            biApps,
 		jsonlConverter:    jsonlConverter,
 		accessLogPath:     accessLogPath,
 		accessLogKeepDays: accessLogKeepDays,
@@ -1104,6 +1259,9 @@ func (h *host) HandleControl(ctx context.Context, request control.Request) contr
 		}
 		if stats := h.observabilityStats(); stats != nil {
 			diagnose["observability"] = stats
+		}
+		if stats := h.biStats(); len(stats) > 0 {
+			diagnose["bi"] = stats
 		}
 		return control.Success(diagnose)
 	case "logs", "metrics":
@@ -1399,7 +1557,45 @@ func (h *host) status() map[string]any {
 	if stats := h.observabilityStats(); stats != nil {
 		result["observability"] = stats
 	}
+	if stats := h.biStats(); len(stats) > 0 {
+		result["bi"] = stats
+	}
 	return result
+}
+
+// biStats reports manifest inventory without exposing BI rows or SQL text.
+func (h *host) biStats() []map[string]any {
+	apps := append([]biApp(nil), h.biApps...)
+	if len(apps) == 0 {
+		return nil
+	}
+
+	stats := make([]map[string]any, 0, len(apps))
+	for _, app := range apps {
+		item := map[string]any{"app": app.id}
+		manifests, err := runtimeBI.LoadManifests(app.datasetRoot)
+		if err != nil {
+			item["status"] = "unavailable"
+			item["error"] = err.Error()
+			stats = append(stats, item)
+			continue
+		}
+
+		var rows uint64
+		var generation uint64
+		for _, manifest := range manifests {
+			rows += manifest.RowCount
+			if manifest.Generation > generation {
+				generation = manifest.Generation
+			}
+		}
+		item["status"] = "ok"
+		item["tables"] = len(manifests)
+		item["rows"] = rows
+		item["latestGeneration"] = generation
+		stats = append(stats, item)
+	}
+	return stats
 }
 
 func (h *host) configSummary() map[string]any {
@@ -1467,7 +1663,7 @@ func (h *host) reload() control.Response {
 			Tokens:  tokens,
 		}
 	}
-	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge))
+	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge, h.biApps))
 	if err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy configuration rendering failed")
 		return control.Failure("reload_failed", "render Caddy configuration")
@@ -1488,7 +1684,7 @@ func (h *host) reload() control.Response {
 	return control.Success(map[string]any{"reloaded": true, "restartRequired": false})
 }
 
-func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions) *caddy.Config {
+func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions, biApps []biApp) *caddy.Config {
 	queueBridge := web.QueueBridgeOptions{}
 	if cfg.Queue.Enabled {
 		bridgeListen := queueBridgeListen(cfg)
@@ -1507,6 +1703,18 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 			queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Apps: queueApps}
 		}
 	}
+	biBridge := web.BIBridgeOptions{}
+	if cfg.BI.Enabled && len(biApps) > 0 {
+		tokens := make([]string, 0, len(biApps))
+		for _, app := range biApps {
+			tokens = append(tokens, app.token)
+		}
+		biBridge = web.BIBridgeOptions{
+			Enabled: true,
+			Listen:  config.LoopbackBridgeAddress(cfg.BI.BridgePort),
+			Tokens:  tokens,
+		}
+	}
 	return web.Config(web.Options{
 		Apps:                appRoutes(cfg),
 		Listen:              cfg.Web.Listen,
@@ -1518,6 +1726,7 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 		AccessLogKeepDays:   accessLogKeepDays,
 		QueueBridge:         queueBridge,
 		ObservabilityBridge: observabilityBridge,
+		BIBridge:            biBridge,
 	})
 }
 

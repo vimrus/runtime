@@ -2,7 +2,7 @@
 
 ## 1. 范围
 
-本文定义 Runtime Alpha 已实现的基础契约：版本化配置、生命周期状态、健康检查和本地 Control Plane。它不定义 PHP Queue Bridge、Scheduler、MySQL 管理、DuckDB 或禅道业务健康检查协议。
+本文定义 Runtime Alpha 已实现的基础契约：版本化配置、生命周期状态、健康检查和本地 Control Plane。它不定义 PHP Queue Bridge、Scheduler、MySQL 管理、BI/日志查询协议或禅道业务健康检查协议；这些能力只通过对应 Private Bridge 和设计文档约束。
 
 Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-service` 已接入 Windows Service）；Linux 和 Docker 使用 Unix domain socket。
 
@@ -36,6 +36,10 @@ path = "/"
 dir = "apps/zentao"
 webRoot = "www"
 enabled = true
+
+[bi]
+enabled = false
+bridgePort = 8083
 
 [observability]
 enabled = true
@@ -71,8 +75,20 @@ jsonlKeepDays = 7
 - `ZENTAO_OBSERVABILITY_BRIDGE_PORT`
 - `ZENTAO_OBSERVABILITY_DATASET_ROOT`
 - `ZENTAO_OBSERVABILITY_SPOOL_PATH`
+- `ZENTAO_BI_ENABLED`
+- `ZENTAO_BI_BRIDGE_PORT`
+- `ZENTAO_BI_QUERY_THREADS`
+- `ZENTAO_BI_QUERY_MEMORY_LIMIT`
+- `ZENTAO_BI_QUERY_TIMEOUT`
+- `ZENTAO_BI_MAX_ROWS`
+- `ZENTAO_BI_MAX_CONCURRENT_QUERIES`
 
 CLI 的 `serve --listen/--threads/--control-socket/--pid-file` 优先级高于配置文件。配置文件是必需文件；应用只能通过 `[[apps]]` 声明，允许配置零个应用。
+
+`bi` 段当前默认关闭。启用后 Runtime 提供应用隔离的 Parquet 发布和 DuckDB
+查询 Bridge；同步调度、表级水位和周期配置属于 PHP 应用，不在 Runtime
+Control Plane 中配置。完整条件见
+[BI Parquet 同步与 DuckDB 查询方案](../11-bi-parquet-query-plan.md)。
 
 ## 3. 生命周期和健康
 

@@ -177,16 +177,20 @@ RUN GOPROXY="${GOPROXY}" go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY config ./config
+COPY tests/fixtures/runtime/runtime.toml ./tests/fixtures/runtime/runtime.toml
 COPY scripts/package/bundle-runtime-libs.sh /build/bundle-runtime-libs.sh
 
 RUN go test ./internal/config ./internal/lifecycle ./internal/health ./internal/control \
     ./internal/logging ./internal/queue/bridge ./internal/queue/fake \
     ./internal/queue/client ./internal/queue/lease ./internal/queue/worker ./internal/queue/engine ./internal/scheduler \
+    ./internal/bi \
     ./internal/observability ./internal/observability/query ./internal/observability/retention \
     ./internal/observability/jsonl \
     ./internal/observability/duckdb
 
 RUN go test -tags duckdb ./internal/observability/duckdb
+RUN go test -tags duckdb ./internal/bi
+RUN go test -tags duckdb internal/web/bi.go internal/web/bi_test.go internal/web/bi_integration_duckdb_test.go
 
 RUN export CGO_CFLAGS="$(/opt/zentao/php/bin/php-config --includes)" \
     && export CGO_LDFLAGS="-L/opt/zentao/php/lib -Wl,-rpath,\$ORIGIN/../php/lib,--disable-new-dtags -lphp $(/opt/zentao/php/bin/php-config --ldflags) $(/opt/zentao/php/bin/php-config --libs)" \

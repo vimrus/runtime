@@ -281,6 +281,32 @@ func TestBridgePortsMustDiffer(t *testing.T) {
 	}
 }
 
+func TestBIValidationAndEnvironment(t *testing.T) {
+	config := DefaultForRoot("/opt/zentao")
+	config.BI.Enabled = true
+	config.BI.BridgePort = 8083
+	if err := config.Validate(); err != nil {
+		t.Fatalf("valid BI config must be accepted: %v", err)
+	}
+
+	config.BI.BridgePort = config.Queue.BridgePort
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "queue.bridgePort") {
+		t.Fatalf("BI/queue bridge port collision must be rejected, got %v", err)
+	}
+
+	loaded, err := Load(pathWithContent(t, "schemaVersion = 1\n"), []string{
+		"ZENTAO_BI_ENABLED=true",
+		"ZENTAO_BI_BRIDGE_PORT=9083",
+		"ZENTAO_BI_MAX_ROWS=2000",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.BI.Enabled || loaded.BI.BridgePort != 9083 || loaded.BI.MaxRows != 2000 {
+		t.Fatalf("BI environment overrides not applied: %#v", loaded.BI)
+	}
+}
+
 func TestObservabilityBatchValidation(t *testing.T) {
 	config := DefaultForRoot("/opt/zentao")
 	config.Observability.Enabled = true
