@@ -26,11 +26,13 @@
 - [禅道 Service 层设计](./design/10-service-layer.md)：定时/缓存/队列/日志/度量的服务化封装。
 - [OLAP Parquet 同步与 DuckDB 查询方案](./design/11-bi-parquet-query-plan.md)（基础链路已实现，默认开启）：OLAP 数据同步、Manifest、DuckDB 查询、三引擎 SQL 兼容和实施计划。
 - [Runtime 多节点配置自动诊断](./design/12-cluster-config-consistency.md)：复用 `zt_servernode`，自动检查应用、日志、OLAP、Queue、Cache、Session 和共享存储配置；配置差异只显示错误，不阻断业务。
+- [常驻 PHP 进程](./design/13-resident-php-process.md)：由 Runtime 监管 PHP CLI 常驻子进程，并提供应用侧本机鉴权 RPC。
 
 ### 契约
 
 - [Runtime Control Plane v1](./design/contracts/runtime-control-plane-v1.md)
 - [PHP Queue Bridge v1](./design/contracts/queue-bridge-v1.md)
+- [Runtime PHP Process RPC v1](./design/contracts/process-rpc-v1.md)
 
 契约文档是跨进程、跨语言和跨仓实现的规范来源。实现不能通过读取对方内部文件或数据库表绕过契约。
 
@@ -49,6 +51,10 @@
 ## 当前状态
 
 Runtime 侧 Host、控制面、健康检查、队列 Worker、DuckDB/Parquet、平台服务、制品组装和 CI 已有实现。定时任务 PHP Queue Bridge 与三种执行模式已实现；OLAP 的 Parquet 发布、Manifest、DuckDB 查询、三引擎 SQL 回归和 PHP 联合端到端测试已落地，默认开启。多节点 Profile 自动上报、单/多节点配置诊断、错误展示、实例接管和后台节点能力展示已实现；配置差异只告警，不阻断业务流量。滚动升级和正式数据库矩阵仍待验收。Runtime 不提供 Cache Service 或 Cache Bridge，应用缓存由 PHP 侧的 APCu/Redis 后端承担。Session/附件适配和跨版本联合测试仍按开发计划推进。正式安装器、代码签名和镜像发布需要发布环境与权限。
+
+常驻 PHP 进程 v1 已实现配置、PHP CLI 监管、loopback Process RPC、SDK、健康状态
+和本地重启入口；Linux amd64 正式制品 smoke 已通过，Windows、Linux arm64、
+Docker 和长稳回归仍待执行。
 
 ## 设计原则
 

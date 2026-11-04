@@ -39,7 +39,8 @@ zentao-runtime
   +-- ZenTao Runtime Host
         +-- configuration and validation
         +-- lifecycle and graceful shutdown
-        +-- Scheduler/MySQL supervision
+        +-- Scheduler/MySQL/PHP process supervision
+        +-- private PHP Process RPC bridge
         +-- local control plane
         +-- health and diagnostics
         +-- installation, upgrade and backup hooks
@@ -128,11 +129,13 @@ php_request_startup
 |---|---|---|---|
 | Web/Caddy/FrankenPHP | `zentao-runtime` 主进程 | `zentao-runtime` 主进程 | Web 容器主进程 |
 | Scheduler | Host 管理的子进程或独立服务 | Host 管理的子进程或独立服务 | 独立 Scheduler 容器 |
+| PHP 常驻进程（可选） | Host 管理的 PHP CLI 子进程 | Host 管理的 PHP CLI 子进程 | 同 Web 容器 |
 | MySQL | Host 管理的子进程或独立服务 | 无 | 独立 MySQL 容器 |
 | Control plane | Host 本地 IPC | Host 本地 IPC | 容器命令/本地 IPC |
 | DuckDB Observability | Host 内嵌 Library | Host 内嵌 Library | Web 容器内嵌 Library |
 
-Host 对子进程提供统一管理接口，但 Scheduler 和 MySQL 不进入 Caddy/FrankenPHP 线程池。
+Host 对子进程提供统一管理接口，但 Scheduler、常驻 PHP 进程和 MySQL 不进入
+Caddy/FrankenPHP 线程池。
 
 ## 6. Runtime Host 职责
 
@@ -144,6 +147,7 @@ Host 对子进程提供统一管理接口，但 Scheduler 和 MySQL 不进入 Ca
 - 注册 Caddy 和 FrankenPHP modules。
 - 启动、重载和停止 Caddy。
 - 管理可选 MySQL 和 Scheduler 生命周期。
+- 管理显式声明的应用常驻 PHP CLI 进程，并提供本机鉴权 RPC。
 - 提供本地管理 API。
 - 输出结构化日志、健康状态和诊断信息。
 - 使用 DuckDB 批量生成和查询本地或共享 NFS 上的指标/日志 Parquet 数据集。
@@ -160,6 +164,7 @@ Host 对子进程提供统一管理接口，但 Scheduler 和 MySQL 不进入 Ca
 - 不启用 FrankenPHP worker mode。
 - 不通过公共 HTTP 接口暴露高权限管理操作。
 - 不在 Runtime 制品中携带应用代码；应用是外部制品，由 Host 按配置装载。
+- 不把常驻 PHP 进程变成持久化队列，也不依赖其进程内状态实现跨节点一致性。
 
 ### 6.3 应用装载（可拔插多应用）
 
@@ -186,6 +191,10 @@ Runtime 制品不包含应用代码。应用是独立的平台无关制品，Hos
   静态文件 handler——否则 FrankenPHP 会在 provision 阶段因 root 不存在而
   直接中断 Host 启动；队列 Bridge 在没有可用应用时同样返回占位响应。
 - 新增、替换或移除应用通过重启 Host 生效；首版不实现应用热加载。
+- 应用可在 `[[apps.processes]]` 中声明 Runtime 监管的 PHP CLI 常驻进程。它们
+  使用同一 PHP、`php.ini` 和 ionCube Loader，但使用独立 OS 进程，不占用
+  FrankenPHP Classic 线程池；应用通过 Runtime SDK 和 loopback Process Bridge
+  调用。
 - PHP ZTS 线程池是进程级共享的，应用之间的隔离边界是 document root、环境
   变量和数据目录，而不是独立的 PHP 进程。
 
@@ -203,6 +212,7 @@ runtime-host/
     web/            Caddy config generation and lifecycle
     php/            PHP/FrankenPHP compatibility inspection
     supervisor/     Scheduler and MySQL process management
+    appprocess/     resident PHP CLI supervision and Process Bridge
     control/        local IPC and administrative commands
     health/         liveness, readiness and dependency state
     logging/        structured logs, rotation and redaction
@@ -467,7 +477,10 @@ ManagedProcess
   Logs()
 ```
 
-Scheduler 和 MySQL 分别实现，不允许用字符串拼接 shell command。
+Scheduler、MySQL 和应用常驻 PHP 进程分别实现，不允许用字符串拼接 shell
+command。常驻 PHP 进程只接受配置中声明的脚本和参数数组，并支持 Ready 握手、
+协议 shutdown、指数退避重启和有界强制终止。协议见
+[Process RPC v1](./contracts/process-rpc-v1.md)。
 
 ### 13.2 Linux
 
@@ -508,6 +521,8 @@ zentao-runtime restore
 zentao-runtime diagnose
 zentao-runtime logs --since <duration>
 zentao-runtime metrics --since <duration> --name <metric>
+zentao-runtime processes
+zentao-runtime process-restart --app <app-id> --process <name>
 zentao-runtime version
 zentao-runtime php-cli -- <args>
 ```
@@ -542,6 +557,7 @@ zentao-runtime php-cli -- <args>
 - 数据库查询。
 - 按实际 PHP Handler 执行 Session 临时写入、读取和删除；文件模式同时检查共享挂载，Redis 模式不由 Go 直接连接。
 - Scheduler heartbeat。
+- Resident PHP process Ready/backoff/failed 状态。
 - 磁盘空间和备份目录检查。
 - DuckDB 最小内存查询、Parquet 临时文件发布能力、本地 spool 配额和共享数据集挂载身份。
 
@@ -558,6 +574,7 @@ caddy.error
 php
 zentao
 scheduler
+php-process
 mysql
 upgrade
 audit
@@ -584,6 +601,7 @@ Host 使用 Go `slog` 或兼容接口输出结构化日志。Caddy 和 FrankenPH
 - FrankenPHP thread total/busy/wait。
 - PHP request duration/error。
 - Scheduler last success。
+- PHP resident process state/restarts/RPC errors。
 - MySQL child process state。
 - Runtime reload/restart count。
 
@@ -732,6 +750,8 @@ RuntimeRevision
 7. Linux ionCube ABI shim 仍是 PHP 构建的一部分，与 Host Library 架构无冲突。
 8. 不共享 `.duckdb` 文件，不允许两个节点修改同一个 Parquet 文件。
 9. 可观测性故障只能降级指标/日志能力，不能阻止 Web、Scheduler 和队列继续运行。
+10. 常驻 PHP 进程使用独立 CLI 进程和本机 RPC，不改变 Classic mode，也不提供
+    持久化任务语义。
 
 ## 23. 实施阶段
 

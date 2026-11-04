@@ -95,6 +95,7 @@ Docker 中 FrankenPHP 与 MySQL 必须使用不同容器。默认 Compose 可以
 
 独立后台进程：
   - 禅道计划任务服务
+  - 应用声明的常驻 PHP CLI 进程（不启用 FrankenPHP worker mode）
   - MySQL 服务（仅 Full 版或 Compose）
 ```
 
@@ -333,6 +334,11 @@ Classic mode 只约束 HTTP 请求模型。禅道计划任务程序仍需要独�
 - Docker 中使用相同应用镜像启动独立 Scheduler 容器。
 - Scheduler 异常不得导致 Web 服务退出。
 - Web 和 Scheduler 使用相同的 PHP Runtime、ionCube Loader 和应用版本。
+
+应用需要跨调用保留 PHP 进程内状态时，使用 Runtime 监管的
+`[[apps.processes]]`。它启动独立 PHP CLI，并使用本机 Process RPC；这不是
+FrankenPHP worker mode，不改变 Web 的 Classic 请求隔离。可靠任务仍由 Queue
+和 Scheduler 处理。
 
 ## 12. 数据库方案
 

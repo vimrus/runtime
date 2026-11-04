@@ -11,14 +11,18 @@ import (
 func TestBuildProfileIsDeterministicAndSeparatesCapacity(t *testing.T) {
 	cfg := config.DefaultForRoot("/opt/zentao")
 	cfg.Cluster.ReleaseID = "release-1"
+	process := config.DefaultAppProcess()
+	process.Name = "event-worker"
+	process.Script = "service/event-worker.php"
 	cfg.Apps = []config.App{{
-		ID:      "zentao",
-		Path:    "/",
-		Dir:     "/opt/zentao/apps/zentao",
-		WebRoot: "www",
-		DataDir: "/shared/zentao",
-		TmpDir:  "/tmp/zentao",
-		Enabled: true,
+		ID:        "zentao",
+		Path:      "/",
+		Dir:       "/opt/zentao/apps/zentao",
+		WebRoot:   "www",
+		DataDir:   "/shared/zentao",
+		TmpDir:    "/tmp/zentao",
+		Enabled:   true,
+		Processes: []config.AppProcess{process},
 	}}
 	storage := map[string]StorageIdentity{
 		"zentao": {
@@ -57,6 +61,12 @@ func TestBuildProfileIsDeterministicAndSeparatesCapacity(t *testing.T) {
 	}
 	if changed.Runtime.Domains["olap"].Critical != first.Runtime.Domains["olap"].Critical {
 		t.Fatal("capacity-only changes must not alter the critical digest")
+	}
+	appBehaviorBefore := first.Apps["zentao"].Domains["processes"].Behavioral
+	cfg.Apps[0].Processes[0].RequestTimeout += time.Second
+	changed = BuildProfile(cfg, "node-a", "instance-a", "boot-a", "runtime-a", storage)
+	if changed.Apps["zentao"].Domains["processes"].Behavioral == appBehaviorBefore {
+		t.Fatal("resident process behavior changes must be visible in the app digest")
 	}
 }
 

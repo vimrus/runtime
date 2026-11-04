@@ -99,6 +99,9 @@ type App struct {
 	Env     map[string]string `json:"env,omitempty" toml:"env,omitempty"`
 	Enabled bool              `json:"enabled" toml:"enabled"`
 	Queue   AppQueue          `json:"queue,omitempty" toml:"queue,omitempty"`
+	// Processes declares Runtime-supervised PHP CLI processes owned by this
+	// application. These are OS processes, not ZenTao application services.
+	Processes []AppProcess `json:"processes,omitempty" toml:"processes,omitempty"`
 }
 
 // DefaultAppQueueBridgeURLTemplate keeps applications that still expose the
@@ -118,6 +121,54 @@ type AppQueue struct {
 	Enabled           bool   `json:"enabled" toml:"enabled"`
 	BridgeURLTemplate string `json:"bridgeUrlTemplate,omitempty" toml:"bridgeUrlTemplate,omitempty"`
 	Token             string `json:"token,omitempty" toml:"token,omitempty"`
+}
+
+// AppProcess declares one Runtime-supervised PHP CLI process. Script and
+// WorkDir are relative to the owning application directory.
+type AppProcess struct {
+	Name           string        `json:"name" toml:"name"`
+	Script         string        `json:"script" toml:"script"`
+	Args           []string      `json:"args,omitempty" toml:"args,omitempty"`
+	WorkDir        string        `json:"workDir,omitempty" toml:"workDir,omitempty"`
+	Enabled        bool          `json:"enabled" toml:"enabled"`
+	Required       bool          `json:"required,omitempty" toml:"required,omitempty"`
+	ReadyTimeout   time.Duration `json:"readyTimeout" toml:"readyTimeout"`
+	RequestTimeout time.Duration `json:"requestTimeout" toml:"requestTimeout"`
+	StopTimeout    time.Duration `json:"stopTimeout" toml:"stopTimeout"`
+	MaxPending     int           `json:"maxPending" toml:"maxPending"`
+	Restart        string        `json:"restart" toml:"restart"`
+	MaxRestarts    int           `json:"maxRestarts" toml:"maxRestarts"`
+	RestartWindow  time.Duration `json:"restartWindow" toml:"restartWindow"`
+	MinBackoff     time.Duration `json:"minBackoff" toml:"minBackoff"`
+	MaxBackoff     time.Duration `json:"maxBackoff" toml:"maxBackoff"`
+}
+
+// DefaultAppProcess returns the documented defaults for one resident process.
+func DefaultAppProcess() AppProcess {
+	return AppProcess{
+		WorkDir:        ".",
+		Enabled:        true,
+		ReadyTimeout:   30 * time.Second,
+		RequestTimeout: 15 * time.Second,
+		StopTimeout:    20 * time.Second,
+		MaxPending:     32,
+		Restart:        "on-failure",
+		MaxRestarts:    8,
+		RestartWindow:  10 * time.Minute,
+		MinBackoff:     500 * time.Millisecond,
+		MaxBackoff:     30 * time.Second,
+	}
+}
+
+// ScriptPath returns the configured script path relative to the app root.
+func (a App) ScriptPath(process AppProcess) string {
+	return filepath.Join(a.Dir, process.Script)
+}
+
+// ProcessWorkingDir returns the configured working directory relative to the
+// app root.
+func (a App) ProcessWorkingDir(process AppProcess) string {
+	return filepath.Join(a.Dir, process.WorkDir)
 }
 
 // DocumentRoot returns the absolute document root of the application.
@@ -495,16 +546,34 @@ func decode(data []byte, config Config) (Config, error) {
 		BridgeURLTemplate *string `toml:"bridgeUrlTemplate"`
 		Token             *string `toml:"token"`
 	}
+	type rawAppProcess struct {
+		Name           *string  `toml:"name"`
+		Script         *string  `toml:"script"`
+		Args           []string `toml:"args"`
+		WorkDir        *string  `toml:"workDir"`
+		Enabled        *bool    `toml:"enabled"`
+		Required       *bool    `toml:"required"`
+		ReadyTimeout   *string  `toml:"readyTimeout"`
+		RequestTimeout *string  `toml:"requestTimeout"`
+		StopTimeout    *string  `toml:"stopTimeout"`
+		MaxPending     *int     `toml:"maxPending"`
+		Restart        *string  `toml:"restart"`
+		MaxRestarts    *int     `toml:"maxRestarts"`
+		RestartWindow  *string  `toml:"restartWindow"`
+		MinBackoff     *string  `toml:"minBackoff"`
+		MaxBackoff     *string  `toml:"maxBackoff"`
+	}
 	type rawApp struct {
-		ID      *string           `toml:"id"`
-		Path    *string           `toml:"path"`
-		Dir     *string           `toml:"dir"`
-		WebRoot *string           `toml:"webRoot"`
-		DataDir *string           `toml:"dataDir"`
-		TmpDir  *string           `toml:"tmpDir"`
-		Env     map[string]string `toml:"env"`
-		Enabled *bool             `toml:"enabled"`
-		Queue   *rawAppQueue      `toml:"queue"`
+		ID        *string           `toml:"id"`
+		Path      *string           `toml:"path"`
+		Dir       *string           `toml:"dir"`
+		WebRoot   *string           `toml:"webRoot"`
+		DataDir   *string           `toml:"dataDir"`
+		TmpDir    *string           `toml:"tmpDir"`
+		Env       map[string]string `toml:"env"`
+		Enabled   *bool             `toml:"enabled"`
+		Queue     *rawAppQueue      `toml:"queue"`
+		Processes *[]rawAppProcess  `toml:"processes"`
 	}
 	type rawConfig struct {
 		SchemaVersion *int              `toml:"schemaVersion"`
@@ -640,6 +709,59 @@ func decode(data []byte, config Config) (Config, error) {
 				if item.Queue.Token != nil {
 					app.Queue.Token = *item.Queue.Token
 				}
+			}
+			if item.Processes != nil {
+				processes := make([]AppProcess, 0, len(*item.Processes))
+				for processIndex, rawProcess := range *item.Processes {
+					process := DefaultAppProcess()
+					if rawProcess.Name != nil {
+						process.Name = *rawProcess.Name
+					}
+					if rawProcess.Script != nil {
+						process.Script = *rawProcess.Script
+					}
+					process.Args = append([]string(nil), rawProcess.Args...)
+					if rawProcess.WorkDir != nil {
+						process.WorkDir = *rawProcess.WorkDir
+					}
+					if rawProcess.Enabled != nil {
+						process.Enabled = *rawProcess.Enabled
+					}
+					if rawProcess.Required != nil {
+						process.Required = *rawProcess.Required
+					}
+					if rawProcess.MaxPending != nil {
+						process.MaxPending = *rawProcess.MaxPending
+					}
+					if rawProcess.Restart != nil {
+						process.Restart = *rawProcess.Restart
+					}
+					if rawProcess.MaxRestarts != nil {
+						process.MaxRestarts = *rawProcess.MaxRestarts
+					}
+					for field, value := range map[string]struct {
+						raw    *string
+						target *time.Duration
+					}{
+						"readyTimeout":   {raw: rawProcess.ReadyTimeout, target: &process.ReadyTimeout},
+						"requestTimeout": {raw: rawProcess.RequestTimeout, target: &process.RequestTimeout},
+						"stopTimeout":    {raw: rawProcess.StopTimeout, target: &process.StopTimeout},
+						"restartWindow":  {raw: rawProcess.RestartWindow, target: &process.RestartWindow},
+						"minBackoff":     {raw: rawProcess.MinBackoff, target: &process.MinBackoff},
+						"maxBackoff":     {raw: rawProcess.MaxBackoff, target: &process.MaxBackoff},
+					} {
+						if value.raw == nil {
+							continue
+						}
+						parsed, parseErr := time.ParseDuration(*value.raw)
+						if parseErr != nil {
+							return Config{}, fmt.Errorf("parse apps[%d].processes[%d].%s: %w", index, processIndex, field, parseErr)
+						}
+						*value.target = parsed
+					}
+					processes = append(processes, process)
+				}
+				app.Processes = processes
 			}
 			if app.ID == "" {
 				return Config{}, fmt.Errorf("apps[%d].id is required", index)
@@ -1407,9 +1529,15 @@ func (c Config) validateApps() error {
 			if name == "" || strings.ContainsAny(name, "=\x00") {
 				return fmt.Errorf("%s.env contains an invalid variable name", where)
 			}
+			if strings.HasPrefix(name, "ZENTAO_PROCESS_") {
+				return fmt.Errorf("%s.env must not set Runtime-managed variable %s", where, name)
+			}
 		}
 		if err := validateAppQueue(app.Queue); err != nil {
 			return fmt.Errorf("%s.queue: %w", where, err)
+		}
+		if err := validateAppProcesses(app.Processes); err != nil {
+			return fmt.Errorf("%s.processes: %w", where, err)
 		}
 	}
 	for _, prefix := range prefixes {
@@ -1423,6 +1551,75 @@ func (c Config) validateApps() error {
 		}
 	}
 	return nil
+}
+
+func validateAppProcesses(processes []AppProcess) error {
+	seen := make(map[string]struct{}, len(processes))
+	for index, process := range processes {
+		where := fmt.Sprintf("[%d]", index)
+		if !validProcessName(process.Name) {
+			return fmt.Errorf("%s.name must be a valid process name", where)
+		}
+		key := strings.ToLower(process.Name)
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("process %q is configured more than once", process.Name)
+		}
+		seen[key] = struct{}{}
+		if !validAppRelativePath(process.Script, false) {
+			return fmt.Errorf("%s.script must be a relative path inside the application directory", where)
+		}
+		if !validAppRelativePath(process.WorkDir, true) {
+			return fmt.Errorf("%s.workDir must be a relative path inside the application directory", where)
+		}
+		for _, arg := range process.Args {
+			if strings.ContainsRune(arg, '\x00') {
+				return fmt.Errorf("%s.args must not contain NUL", where)
+			}
+		}
+		if process.ReadyTimeout <= 0 || process.ReadyTimeout > 10*time.Minute ||
+			process.RequestTimeout <= 0 || process.RequestTimeout > 5*time.Minute ||
+			process.StopTimeout <= 0 || process.StopTimeout > 10*time.Minute {
+			return fmt.Errorf("%s timeouts are outside supported limits", where)
+		}
+		if process.MaxPending < 1 || process.MaxPending > 1024 {
+			return fmt.Errorf("%s.maxPending must be between 1 and 1024", where)
+		}
+		switch process.Restart {
+		case "on-failure", "always", "never":
+		default:
+			return fmt.Errorf("%s.restart must be one of on-failure, always or never", where)
+		}
+		if process.MaxRestarts < 0 || process.RestartWindow <= 0 ||
+			process.MinBackoff <= 0 || process.MaxBackoff < process.MinBackoff {
+			return fmt.Errorf("%s restart limits are invalid", where)
+		}
+	}
+	return nil
+}
+
+func validProcessName(value string) bool {
+	if value == "" || value == "." || value == ".." || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validAppRelativePath(value string, allowDot bool) bool {
+	if value == "" || strings.ContainsRune(value, '\x00') || filepath.IsAbs(value) || filepath.VolumeName(value) != "" {
+		return false
+	}
+	clean := filepath.Clean(value)
+	if clean == "." {
+		return allowDot
+	}
+	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }
 
 func validateAppQueue(queue AppQueue) error {
@@ -1460,7 +1657,8 @@ func equalApps(left, right []App) bool {
 			left[index].DataDir != right[index].DataDir ||
 			left[index].TmpDir != right[index].TmpDir ||
 			left[index].Enabled != right[index].Enabled ||
-			left[index].Queue != right[index].Queue {
+			left[index].Queue != right[index].Queue ||
+			!equalAppProcesses(left[index].Processes, right[index].Processes) {
 			return false
 		}
 		if len(left[index].Env) != len(right[index].Env) {
@@ -1470,6 +1668,32 @@ func equalApps(left, right []App) bool {
 			if right[index].Env[name] != value {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+func equalAppProcesses(left, right []AppProcess) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index].Name != right[index].Name ||
+			left[index].Script != right[index].Script ||
+			left[index].WorkDir != right[index].WorkDir ||
+			left[index].Enabled != right[index].Enabled ||
+			left[index].Required != right[index].Required ||
+			left[index].ReadyTimeout != right[index].ReadyTimeout ||
+			left[index].RequestTimeout != right[index].RequestTimeout ||
+			left[index].StopTimeout != right[index].StopTimeout ||
+			left[index].MaxPending != right[index].MaxPending ||
+			left[index].Restart != right[index].Restart ||
+			left[index].MaxRestarts != right[index].MaxRestarts ||
+			left[index].RestartWindow != right[index].RestartWindow ||
+			left[index].MinBackoff != right[index].MinBackoff ||
+			left[index].MaxBackoff != right[index].MaxBackoff ||
+			!equalStrings(left[index].Args, right[index].Args) {
+			return false
 		}
 	}
 	return true

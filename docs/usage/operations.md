@@ -170,6 +170,17 @@ Linux 使用 Unix Domain Socket，Windows 使用 Named Pipe。控制协议 v1：
 
 PID 回退只用于兼容诊断，正常管理应修复 Control Plane。
 
+### 常驻 PHP 进程
+
+```bash
+./bin/zentao processes
+./bin/zentao process-restart --app zentao --process event-worker
+```
+
+`processes` 显示 `[[apps.processes]]` 的状态、PID、实例 ID、重启次数、待处理
+请求数和最近错误。`process-restart` 只触发已配置进程的异步重启，不会重新加载
+`runtime.toml`；命令返回后应再次查询 `processes`，等待状态恢复为 `ready`。
+
 ### 可观测性
 
 ```bash
@@ -204,7 +215,9 @@ PID 回退只用于兼容诊断，正常管理应修复 Control Plane。
 | `convert-jsonl` | 将已封闭的 Runtime JSONL 转为 Parquet |
 | `collect-logs` | 生成受大小限制的诊断压缩包 |
 
-`collect-logs` 只收集本地日志、审计记录、版本和脱敏配置摘要，不收集业务数据库内容、请求正文或凭据。
+`collect-logs` 收集本地 Runtime/应用日志、审计记录、版本和脱敏配置摘要，不收集
+业务数据库内容、Process RPC 请求正文或凭据。常驻进程自身写入 stdout/stderr 的
+内容属于应用日志，应用必须在输出前自行脱敏。
 
 ### 系统服务
 

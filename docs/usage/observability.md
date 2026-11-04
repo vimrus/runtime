@@ -6,19 +6,35 @@ Runtime 接收应用发送的结构化日志和度量，将事件发布为 Parqu
 
 ## 工作方式
 
+Runtime 向应用提供两类本地私有 API：
+
+- **写入接口**：应用把日志和度量事件提交给 Runtime。
+- **查询接口**：应用日志查看器通过受控模板查询已写入的日志数据。
+
+职责边界：
+
+| 组件 | 负责 |
+| --- | --- |
+| Runtime | 提供事件写入和日志查询 API，完成鉴权、校验、脱敏、缓冲、Parquet 发布和资源限制 |
+| 应用 | 在业务代码中产生日志/度量、调用写入 API、在日志查看器中调用查询 API，并完成业务权限校验 |
+
+Runtime 只存取可观测性数据，不读取或修改禅道业务数据，也不连接业务数据库。
+
 ```text
-应用
-  -> POST /internal/runtime/observability/v1/events
+应用业务代码
+  -> Runtime 写入 API（ZENTAO_OBSERVABILITY_URL）
   -> Runtime 校验、脱敏、缓冲
   -> Parquet
 
 应用日志查看器
-  -> POST /internal/runtime/observability/v1/query
+  -> Runtime 查询 API（ZENTAO_OBSERVABILITY_QUERY_URL）
   -> Runtime 固定查询模板
   -> 应用自己的 Parquet 数据集
 ```
 
-每个应用使用独立 Token 和数据集。一个应用不能使用自己的 Token 查询另一个应用。
+应用必须主动调用 API：Runtime 不会自动获知业务操作，也不会替应用生成业务日志
+或度量。每个应用使用独立 Token 和数据集，一个应用不能使用自己的 Token 查询
+另一个应用的数据。
 
 Runtime 自身还会生成访问日志、运行日志和自监控指标。它们写入 Runtime 自己的数据集，不与应用日志混在一起。
 
@@ -63,7 +79,7 @@ jsonlDeleteAfterConvert = true
 ## 发送事件
 
 ```http
-POST /internal/runtime/observability/v1/events
+POST <ZENTAO_OBSERVABILITY_URL>
 Content-Type: application/json
 X-Zentao-Observability-Token: <per-application-token>
 X-Zentao-Observability-Schema: 1
@@ -195,7 +211,7 @@ Runtime 在进入缓冲区前会：
 应用日志查看器使用查询桥：
 
 ```http
-POST /internal/runtime/observability/v1/query
+POST <ZENTAO_OBSERVABILITY_QUERY_URL>
 Content-Type: application/json
 X-Zentao-Observability-Token: <per-application-token>
 X-Zentao-Observability-Schema: 1

@@ -389,6 +389,8 @@ func TestPreserveManagedAppStateKeepsRuntimeTokens(t *testing.T) {
 			"ZENTAO_QUEUE_TOKEN":        "allowed-token",
 			"ZENTAO_OBSERVABILITY_URL":  "http://127.0.0.1:8082",
 			"ZENTAO_OLAP_TOKEN":         "olap-token",
+			"ZENTAO_PROCESS_BRIDGE_URL": "http://127.0.0.1:49152/internal/runtime/processes/v1",
+			"ZENTAO_PROCESS_CALL_TOKEN": "process-token",
 			"ZENTAO_UNRELATED_INTERNAL": "not-managed",
 		},
 		Queue: AppQueue{Token: "queue-token"},
@@ -405,7 +407,8 @@ func TestPreserveManagedAppStateKeepsRuntimeTokens(t *testing.T) {
 	}
 	if app.Env["ZENTAO_QUEUE_TOKEN"] != "allowed-token" ||
 		app.Env["ZENTAO_OBSERVABILITY_URL"] != "http://127.0.0.1:8082" ||
-		app.Env["ZENTAO_OLAP_TOKEN"] != "olap-token" {
+		app.Env["ZENTAO_OLAP_TOKEN"] != "olap-token" ||
+		app.Env["ZENTAO_PROCESS_CALL_TOKEN"] != "process-token" {
 		t.Fatalf("managed env was not preserved: %#v", app.Env)
 	}
 	if _, ok := app.Env["ZENTAO_UNRELATED_INTERNAL"]; ok {
@@ -413,6 +416,30 @@ func TestPreserveManagedAppStateKeepsRuntimeTokens(t *testing.T) {
 	}
 	if app.Env["EXPLICIT_VALUE"] != "kept-in-candidate" {
 		t.Fatal("candidate explicit env was overwritten")
+	}
+}
+
+func TestRestartRequiredForApplicationProcessChanges(t *testing.T) {
+	process := DefaultAppProcess()
+	process.Name = "worker"
+	process.Script = "service/worker.php"
+	current := Default()
+	current.Apps = []App{{
+		ID:        "zentao",
+		Path:      "/",
+		Dir:       "/opt/zentao/apps/zentao",
+		WebRoot:   "www",
+		DataDir:   "/opt/zentao/data/apps/zentao",
+		TmpDir:    "/opt/zentao/tmp-local/zentao",
+		Enabled:   true,
+		Processes: []AppProcess{process},
+	}}
+	candidate := current
+	candidate.Apps = append([]App(nil), current.Apps...)
+	candidate.Apps[0].Processes = append([]AppProcess(nil), current.Apps[0].Processes...)
+	candidate.Apps[0].Processes[0].RequestTimeout = 9 * time.Second
+	if !RestartRequired(current, candidate) {
+		t.Fatal("resident process configuration changes must require a restart")
 	}
 }
 

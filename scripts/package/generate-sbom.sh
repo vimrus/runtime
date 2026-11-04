@@ -60,7 +60,8 @@ esac
             {type: "library", name: "frankenphp", version: $frankenphp},
             {type: "library", name: "caddy", version: $caddy},
             {type: "library", name: "duckdb-go", version: $duckdb},
-            {type: "library", name: "ioncube-loader", version: $ioncube}
+            {type: "library", name: "ioncube-loader", version: $ioncube},
+            {type: "library", name: "zentao-process-rpc-sdk", version: "1"}
         ] + (if $php_patch_applied then [{type: "library", name: "zentao-zend-signal-shim", version: "1"}] else [] end)
           + (if $dm8_enabled then [{type: "library", name: "dm8-pdo-driver", version: $dm8}] else [] end)))
     }' > "${staging}/sbom.json"

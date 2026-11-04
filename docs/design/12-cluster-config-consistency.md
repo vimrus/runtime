@@ -7,7 +7,7 @@
 | 状态 | 已实现自动注册、单/多节点比较和错误展示 |
 | 日期 | 2026-10-27 |
 | 核心数据表 | `zt_servernode` |
-| 检查范围 | Runtime、应用、数据库、共享存储、Session、Cache、Queue、日志、OLAP、安全 |
+| 检查范围 | Runtime、应用、常驻 PHP 进程、数据库、共享存储、Session、Cache、Queue、日志、OLAP、安全 |
 | 失败策略 | 显示具体错误，不阻断业务、管理、Queue 或 Cron |
 
 ## 2. 设计目标
@@ -83,6 +83,7 @@ Runtime 提供：
 - Runtime 版本和 Release ID。
 - Web 线程、Queue、Observability、OLAP 启停和容量摘要。
 - 共享数据 Storage ID。
+- 应用常驻 PHP 进程的名称、脚本、参数、超时和重启策略摘要。
 - 扩展与 Runtime 能力。
 
 PHP 补充：

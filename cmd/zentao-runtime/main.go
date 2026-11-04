@@ -26,6 +26,7 @@ import (
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 	"github.com/dunglas/frankenphp"
 	_ "github.com/dunglas/frankenphp/caddy"
+	"github.com/vimrus/runtime/internal/appprocess"
 	runtimeCluster "github.com/vimrus/runtime/internal/cluster"
 	"github.com/vimrus/runtime/internal/config"
 	"github.com/vimrus/runtime/internal/control"
@@ -105,7 +106,7 @@ func notRunningError(format string, args ...any) error {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|php-cli|version|service|run-service>")
+		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|processes|process-restart|php-cli|version|service|run-service>")
 	}
 	switch args[0] {
 	case "serve", "start":
@@ -128,6 +129,10 @@ func run(args []string) error {
 		return convertJSONLCommand(args[1:])
 	case "collect-logs":
 		return collectLogsCommand(args[1:])
+	case "processes":
+		return processesCommand(args[1:])
+	case "process-restart":
+		return processRestartCommand(args[1:])
 	case "version":
 		return printJSON(versionData())
 	default:
@@ -167,6 +172,47 @@ func collectLogsCommand(args []string) error {
 	return printRawJSON(response.Result)
 }
 
+func processesCommand(args []string) error {
+	flags := flag.NewFlagSet("processes", flag.ContinueOnError)
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
+	if err := flags.Parse(args); err != nil {
+		return usageError("%v", err)
+	}
+	response, err := callControl(*controlSocket, control.Request{Operation: "processes"})
+	if err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("%s: %s", response.Error.Code, response.Error.Message)
+	}
+	return printRawJSON(response.Result)
+}
+
+func processRestartCommand(args []string) error {
+	flags := flag.NewFlagSet("process-restart", flag.ContinueOnError)
+	controlSocket := flags.String("control-socket", defaultControlSocketPath(), "Runtime control socket")
+	appID := flags.String("app", "", "Application ID")
+	processName := flags.String("process", "", "Resident process name")
+	if err := flags.Parse(args); err != nil {
+		return usageError("%v", err)
+	}
+	if *appID == "" || *processName == "" {
+		return usageError("process-restart requires --app and --process")
+	}
+	payload, err := json.Marshal(map[string]string{"appID": *appID, "name": *processName})
+	if err != nil {
+		return err
+	}
+	response, err := callControlWithTimeout(*controlSocket, control.Request{Operation: "process-restart", Payload: payload}, 60*time.Second)
+	if err != nil {
+		return err
+	}
+	if !response.OK {
+		return fmt.Errorf("%s: %s", response.Error.Code, response.Error.Message)
+	}
+	return printRawJSON(response.Result)
+}
+
 // phpCLICommand runs the bundled PHP CLI with the same Runtime configuration,
 // so Web and command-line execution always use the same PHP build, extensions
 // and ionCube Loader.
@@ -181,22 +227,7 @@ func phpCLICommand(args []string) error {
 		binary = os.Getenv("ZENTAO_PHP_BIN")
 	}
 	if binary == "" {
-		executable, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		dir := filepath.Dir(executable)
-		candidates := []string{
-			filepath.Join(dir, "php"),
-			filepath.Join(dir, "php.exe"),
-			filepath.Join(defaultInstallRoot(), "php", "bin", "php"),
-		}
-		for _, candidate := range candidates {
-			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-				binary = candidate
-				break
-			}
-		}
+		binary, _ = bundledPHPBinary(defaultInstallRoot())
 	}
 	if binary == "" {
 		return errors.New("PHP CLI binary not found; set ZENTAO_PHP_BIN or --php")
@@ -217,6 +248,27 @@ func phpCLICommand(args []string) error {
 		return err
 	}
 	return nil
+}
+
+func bundledPHPBinary(installRoot string) (string, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(executable)
+	candidates := []string{
+		filepath.Join(dir, "php"),
+		filepath.Join(dir, "php.exe"),
+		filepath.Join(dir, "..", "php", "bin", "php"),
+		filepath.Join(installRoot, "php", "bin", "php"),
+		filepath.Join(installRoot, "runtime", "php.exe"),
+	}
+	for _, candidate := range candidates {
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("PHP CLI binary not found; set ZENTAO_PHP_BIN")
 }
 
 func cleanObservabilityCommand(args []string) error {
@@ -434,6 +486,11 @@ func serve(args []string) error {
 			return result
 		})
 	}
+	processManager, err := prepareAppProcesses(&cfg, installRootPath, logger)
+	if err != nil {
+		return err
+	}
+	processManager.RegisterHealth(registry)
 	var jsonlConverter *jsonl.Converter
 	if obsPublisher != nil {
 		jsonlConverter, err = jsonl.New(jsonl.Config{
@@ -449,16 +506,18 @@ func serve(args []string) error {
 			return fmt.Errorf("initialize jsonl converter: %w", err)
 		}
 	}
-	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, obsApps, olapApps, clusterGates, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
+	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, obsApps, olapApps, clusterGates, processManager, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
 	host.logsDir = logsDir
 	host.jsonlSources = cfg.Observability.JSONLConvertSources
+	diagnosticLogs := []string{
+		effectiveLogPath,
+		effectiveAuditLog,
+		effectiveAccessLog,
+		filepath.Join(installRootPath, "logs", "php-error.log"),
+	}
+	diagnosticLogs = append(diagnosticLogs, processManager.LogPaths()...)
 	host.collector = &diagnostics.Collector{
-		LogPaths: []string{
-			effectiveLogPath,
-			effectiveAuditLog,
-			effectiveAccessLog,
-			filepath.Join(installRootPath, "logs", "php-error.log"),
-		},
+		LogPaths:  diagnosticLogs,
 		OutputDir: logsDir,
 		Summary: func() map[string]any {
 			return map[string]any{"version": versionData(), "config": host.configSummary()}
@@ -499,17 +558,47 @@ func serve(args []string) error {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
+	if err := processManager.Start(context.Background()); err != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = processManager.Stop(stopCtx)
+		stopCancel()
+		_ = caddy.Stop()
+		host.machine.Fail("resident process startup failed")
+		return fmt.Errorf("start resident processes: %w", err)
+	}
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		if err := processManager.Stop(stopCtx); err != nil {
+			logger.Warn("resident process cleanup failed", slog.Any("error", err))
+		}
+	}()
+	for _, status := range processManager.Statuses() {
+		logger.Info("resident process status",
+			slog.String("app", status.AppID),
+			slog.String("process", status.Name),
+			slog.String("state", string(status.State)),
+			slog.Bool("required", status.Required),
+			slog.Int("pid", status.PID),
+		)
+	}
 	controlServer, err := control.ListenWithOptions(cfg.Runtime.ControlSocket, host, control.Options{
 		Authorizer: controlAuthorizer(),
 		Auditor:    auditor,
 	})
 	if err != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = processManager.Stop(stopCtx)
+		stopCancel()
 		_ = caddy.Stop()
 		host.machine.Fail("control plane startup failed")
 		return err
 	}
 	defer controlServer.Close()
 	if err := host.machine.Transition(lifecycle.Ready, "Caddy and FrankenPHP started"); err != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = processManager.Stop(stopCtx)
+		stopCancel()
 		_ = caddy.Stop()
 		return err
 	}
@@ -542,7 +631,11 @@ func serve(args []string) error {
 	}
 	go runLogPruneLoop(serveCtx, logger)
 	phpErrorRotator := logging.NewExternalRotator(filepath.Join(installRootPath, "logs", "php-error.log"), cfg.Runtime.PHPErrorLogMaxBytes, cfg.Runtime.PHPErrorLogMaxBackups, cfg.Observability.JSONLKeepDays)
-	go runExternalLogLoop(serveCtx, logger, phpErrorRotator)
+	externalRotators := []*logging.ExternalRotator{phpErrorRotator}
+	for _, path := range processManager.LogPaths() {
+		externalRotators = append(externalRotators, logging.NewExternalRotator(path, cfg.Runtime.PHPErrorLogMaxBytes, cfg.Runtime.PHPErrorLogMaxBackups, cfg.Observability.JSONLKeepDays))
+	}
+	go runExternalLogLoop(serveCtx, logger, externalRotators...)
 	if obsPublisher != nil {
 		_ = obsPublisher.Add(serveCtx, observability.Event{
 			NodeID:    nodeID,
@@ -607,9 +700,15 @@ func serve(args []string) error {
 		}
 		flushCancel()
 	}
-	if err := stopCaddyBounded(cfg.Runtime.DrainTimeout); err != nil {
+	caddyStopErr := stopCaddyBounded(cfg.Runtime.DrainTimeout)
+	processStopCtx, processStopCancel := context.WithTimeout(context.Background(), cfg.Runtime.DrainTimeout)
+	if err := processManager.Stop(processStopCtx); err != nil {
+		logger.Warn("resident process drain failed", slog.Any("error", err))
+	}
+	processStopCancel()
+	if caddyStopErr != nil {
 		host.machine.Fail("Caddy shutdown timed out")
-		return err
+		return caddyStopErr
 	}
 	if err := host.machine.Transition(lifecycle.Stopped, "Caddy stopped"); err != nil {
 		return err
@@ -695,19 +794,21 @@ func runLogPruneLoop(ctx context.Context, logger *logging.Logger) {
 	}
 }
 
-// runExternalLogLoop keeps php-error.log bounded. The file is written by the
-// embedded PHP error_log, so it is rotated with copytruncate at a fixed check
-// interval; day-based retention reuses observability.jsonlKeepDays.
-func runExternalLogLoop(ctx context.Context, logger *logging.Logger, rotator *logging.ExternalRotator) {
+// runExternalLogLoop keeps externally written PHP logs bounded. Active writers
+// keep the file open, so rotation uses copytruncate at a fixed check interval;
+// day-based retention reuses observability.jsonlKeepDays.
+func runExternalLogLoop(ctx context.Context, logger *logging.Logger, rotators ...*logging.ExternalRotator) {
 	maintain := func() {
-		rotated, err := rotator.RotateIfNeeded()
-		if err != nil {
-			logger.Warn("php error log rotation failed", slog.Any("error", err))
-		} else if rotated {
-			logger.Info("php error log rotated")
-		}
-		if err := rotator.Prune(); err != nil {
-			logger.Warn("php error log prune failed", slog.Any("error", err))
+		for _, rotator := range rotators {
+			rotated, err := rotator.RotateIfNeeded()
+			if err != nil {
+				logger.Warn("external log rotation failed", slog.Any("error", err))
+			} else if rotated {
+				logger.Info("external log rotated")
+			}
+			if err := rotator.Prune(); err != nil {
+				logger.Warn("external log prune failed", slog.Any("error", err))
+			}
 		}
 	}
 
@@ -729,6 +830,52 @@ func runExternalLogLoop(ctx context.Context, logger *logging.Logger, rotator *lo
 type queueEngineEntry struct {
 	name   string
 	engine *queueengine.Engine
+}
+
+func prepareAppProcesses(cfg *config.Config, installRoot string, logger *logging.Logger) (*appprocess.Manager, error) {
+	hasProcess := false
+	for _, app := range cfg.Apps {
+		if !app.Enabled {
+			continue
+		}
+		for _, process := range app.Processes {
+			if process.Enabled {
+				hasProcess = true
+				break
+			}
+		}
+		if hasProcess {
+			break
+		}
+	}
+	if !hasProcess {
+		return appprocess.Prepare(cfg, appprocess.Options{})
+	}
+	phpBinary := os.Getenv("ZENTAO_PHP_BIN")
+	if phpBinary == "" {
+		var err error
+		phpBinary, err = bundledPHPBinary(installRoot)
+		if err != nil {
+			return nil, err
+		}
+	}
+	manager, err := appprocess.Prepare(cfg, appprocess.Options{
+		PHPBinary: phpBinary,
+		SDKPath:   filepath.Join(installRoot, "lib", "php", "runtime-process.php"),
+		NodeID:    processLogNodeID(cfg.Runtime.NodeID),
+		Logger:    logger.Slog(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("prepare PHP resident processes: %w", err)
+	}
+	return manager, nil
+}
+
+func processLogNodeID(nodeID string) string {
+	if nodeID != "" {
+		return nodeID
+	}
+	return instanceID()
 }
 
 // prepareQueueEngines builds one queue engine per queue-enabled application.
@@ -1350,6 +1497,7 @@ type host struct {
 	obsApps           []observabilityApp
 	olapApps          []olapApp
 	clusterGates      *runtimeCluster.Gates
+	processes         *appprocess.Manager
 	jsonlConverter    *jsonl.Converter
 	accessLogPath     string
 	accessLogKeepDays int
@@ -1358,7 +1506,7 @@ type host struct {
 	collector         *diagnostics.Collector
 }
 
-func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, obsApps []observabilityApp, olapApps []olapApp, clusterGates *runtimeCluster.Gates, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
+func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, obsApps []observabilityApp, olapApps []olapApp, clusterGates *runtimeCluster.Gates, processes *appprocess.Manager, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
 	return &host{
 		configPath:        configPath,
 		config:            cfg,
@@ -1372,6 +1520,7 @@ func newHost(configPath string, cfg config.Config, logger *logging.Logger, regis
 		obsApps:           obsApps,
 		olapApps:          olapApps,
 		clusterGates:      clusterGates,
+		processes:         processes,
 		jsonlConverter:    jsonlConverter,
 		accessLogPath:     accessLogPath,
 		accessLogKeepDays: accessLogKeepDays,
@@ -1421,9 +1570,33 @@ func (h *host) HandleControl(ctx context.Context, request control.Request) contr
 		return h.convertJSONL(ctx)
 	case "collect-logs":
 		return h.collectLogs()
+	case "processes":
+		if h.processes == nil {
+			return control.Success([]appprocess.Status{})
+		}
+		return control.Success(h.processes.Statuses())
+	case "process-restart":
+		return h.restartProcess(request.Payload)
 	default:
 		return control.Failure("unknown_operation", "unsupported control operation")
 	}
+}
+
+func (h *host) restartProcess(payload json.RawMessage) control.Response {
+	if h.processes == nil {
+		return control.Failure("unavailable", "resident process manager is not available")
+	}
+	var request struct {
+		AppID string `json:"appID"`
+		Name  string `json:"name"`
+	}
+	if err := json.Unmarshal(payload, &request); err != nil || request.AppID == "" || request.Name == "" {
+		return control.Failure("invalid_request", "appID and process name are required")
+	}
+	if err := h.processes.Restart(request.AppID, request.Name); err != nil {
+		return control.Failure("process_restart_failed", err.Error())
+	}
+	return control.Success(map[string]any{"restartRequested": true, "appID": request.AppID, "name": request.Name})
 }
 
 func (h *host) convertJSONL(ctx context.Context) control.Response {
@@ -1701,6 +1874,9 @@ func (h *host) status() map[string]any {
 	if stats := h.olapStats(); len(stats) > 0 {
 		result["olap"] = stats
 	}
+	if h.processes != nil {
+		result["processes"] = h.processes.Statuses()
+	}
 	if h.clusterGates != nil {
 		result["cluster"] = map[string]any{
 			"applications": h.clusterGates.Statuses(),
@@ -1770,11 +1946,20 @@ func appSummary(cfg config.Config) []map[string]any {
 		if err != nil {
 			prefix = app.Path
 		}
+		processes := make([]map[string]any, 0, len(app.Processes))
+		for _, process := range app.Processes {
+			processes = append(processes, map[string]any{
+				"name":     process.Name,
+				"enabled":  process.Enabled,
+				"required": process.Required,
+			})
+		}
 		apps = append(apps, map[string]any{
-			"id":      app.ID,
-			"path":    prefix,
-			"dir":     app.Dir,
-			"enabled": app.Enabled,
+			"id":        app.ID,
+			"path":      prefix,
+			"dir":       app.Dir,
+			"enabled":   app.Enabled,
+			"processes": processes,
 		})
 	}
 	return apps
@@ -1956,7 +2141,11 @@ func prepareApps(cfg config.Config) error {
 }
 
 func callControl(socket string, request control.Request) (control.Response, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return callControlWithTimeout(socket, request, 15*time.Second)
+}
+
+func callControlWithTimeout(socket string, request control.Request, timeout time.Duration) (control.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return control.Call(ctx, socket, request)
 }
@@ -2081,6 +2270,7 @@ func versionData() map[string]any {
 		"php_zts":      php.ZTS,
 		"zend_signals": php.ZendSignals,
 		"duckdb":       duckdb.Version,
+		"process_rpc":  appprocess.SchemaVersion,
 		"mode":         "classic",
 	}
 }

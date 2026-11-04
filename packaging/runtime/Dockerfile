@@ -159,7 +159,9 @@ RUN cd /build/dm8 \
 COPY packaging/runtime/php.ini /opt/zentao/config/php.ini
 COPY packaging/runtime/dm_svc.conf /opt/zentao/config/dm_svc.conf
 COPY config/runtime.example.toml /opt/zentao/config/runtime.example.toml
+COPY php /opt/zentao/lib/php
 RUN mkdir -p /opt/zentao/config/conf.d /opt/zentao/bin \
+    && /opt/zentao/php/bin/php -n -l /opt/zentao/lib/php/runtime-process.php \
     && export LD_LIBRARY_PATH=/opt/zentao/php/lib \
     && test "$(/opt/zentao/php/bin/php-config --vernum)" -ge 80400 \
     && sed 's#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g' /opt/zentao/config/php.ini > /tmp/php.ini \
@@ -198,10 +200,12 @@ RUN GOPROXY="${GOPROXY}" go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 COPY config ./config
+COPY php ./php
 COPY tests/fixtures/runtime/runtime.toml ./tests/fixtures/runtime/runtime.toml
 COPY scripts/package/bundle-runtime-libs.sh /build/bundle-runtime-libs.sh
 
 RUN go test ./internal/config ./internal/lifecycle ./internal/health ./internal/control \
+    ./internal/appprocess \
     ./internal/logging ./internal/queue/bridge ./internal/queue/fake \
     ./internal/queue/client ./internal/queue/lease ./internal/queue/worker ./internal/queue/engine ./internal/scheduler \
     ./internal/olap \

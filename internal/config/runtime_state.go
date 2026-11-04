@@ -21,6 +21,11 @@ var managedAppEnvKeys = []string{
 	"ZENTAO_CLUSTER_PROFILE_KEY",
 	"ZENTAO_CLUSTER_STALE_TIMEOUT",
 	"ZENTAO_CLUSTER_TAKEOVER_TIMEOUT",
+	"ZENTAO_PROCESS_BRIDGE_URL",
+	"ZENTAO_PROCESS_APP_ID",
+	"ZENTAO_PROCESS_CALL_TOKEN",
+	"ZENTAO_PROCESS_SDK",
+	"ZENTAO_PROCESS_SCHEMA",
 }
 
 // PreserveRuntimeIdentity carries startup-resolved defaults into a reload

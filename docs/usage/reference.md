@@ -20,9 +20,12 @@
 | `/internal/runtime/observability/v1/query` | 回环 | Observability Token | 查询应用日志 |
 | `/internal/runtime/olap/v1/publish` | 回环 | OLAP Token | 发布应用 OLAP Parquet 数据集 |
 | `/internal/runtime/olap/v1/query` | 回环 | OLAP Token | 只读查询应用 OLAP 数据集 |
-| `/internal/runtime/queue/v1/apps/<id>/<endpoint>` | 回环 | Queue Token | 调用应用 Queue Bridge |
+| `/internal/runtime/processes/v1/apps/<id>/<name>/<endpoint>` | 回环 | Process Token | 调用和驱动应用常驻 PHP 进程 |
 
-Queue Bridge 端点：
+Queue Bridge 是 Runtime 主动调用应用接口的私有通道。应用只需要实现
+`apps[].queue.bridgeUrlTemplate` 指向的端点，不需要连接 Runtime 内部路径。
+
+应用需要实现的 Queue Bridge 操作：
 
 ```text
 capabilities
@@ -48,6 +51,7 @@ Runtime 不提供缓存 HTTP 端点、Cache Bridge、`ZENTAO_CACHE_*` 环境变�
 | `olap.bridgePort` | `8083` | 固定 `127.0.0.1`，OLAP 默认开启 |
 
 这些端口必须互不相同，也不能与 `web.listen` 的端口相同。
+Process Bridge 不占用固定配置端口，Runtime 每次启动在 `127.0.0.1` 分配临时端口。
 
 ## Runtime 注入的环境
 
@@ -74,6 +78,14 @@ Runtime 不提供缓存 HTTP 端点、Cache Bridge、`ZENTAO_CACHE_*` 环境变�
 | `ZENTAO_OLAP_QUERY_URL` | OLAP 启用 | OLAP 查询地址 |
 | `ZENTAO_OLAP_SCHEMA` | OLAP 启用 | OLAP Bridge Schema 版本 |
 | `ZENTAO_OLAP_MAX_ROWS` | OLAP 启用 | 单次 OLAP 查询的最大返回行数 |
+| `ZENTAO_PROCESS_BRIDGE_URL` | 应用声明进程 | Process RPC 基础地址 |
+| `ZENTAO_PROCESS_APP_ID` | 应用声明进程 | Runtime 绑定的应用 ID |
+| `ZENTAO_PROCESS_CALL_TOKEN` | 应用声明进程 | Web 调用 Token |
+| `ZENTAO_PROCESS_SDK` | 应用声明进程 | PHP Process SDK 绝对路径 |
+| `ZENTAO_PROCESS_SCHEMA` | 应用声明进程 | Process RPC Schema 版本 |
+| `ZENTAO_PROCESS_NAME` | 常驻脚本 | 进程名 |
+| `ZENTAO_PROCESS_INSTANCE_ID` | 常驻脚本 | 当前进程实例 ID |
+| `ZENTAO_PROCESS_WORKER_TOKEN` | 常驻脚本 | 当前实例 worker Token |
 
 Runtime 进程还提供：
 
@@ -82,7 +94,9 @@ Runtime 进程还提供：
 | `ZENTAO_NODE_ID` | 节点 ID |
 | `ZENTAO_BOOT_ID` | 当前 Runtime 启动实例 ID |
 
-应用显式配置的环境变量优先。Runtime 不生成数据库凭据。
+应用显式配置的环境变量优先，但
+`ZENTAO_PROCESS_BRIDGE_URL/APP_ID/CALL_TOKEN/SDK/SCHEMA` 以及 worker 专属字段
+由 Runtime 强制设置。Runtime 不生成数据库凭据。
 
 ## 大小和批次限制
 
@@ -102,6 +116,7 @@ Runtime 进程还提供：
 | OLAP Bridge 请求 | 256 KiB |
 | OLAP 查询 `maxRows` | Runtime 默认上限 10000 |
 | OLAP 查询 `offset` | 1000000 |
+| Process RPC 请求/worker reply | 各 1 MiB |
 | 应用深探针响应 | 64 KiB |
 
 ## 超时和轮询
@@ -117,6 +132,8 @@ Runtime 进程还提供：
 | Observability 查询 | 10 秒 |
 | OLAP Manifest 发布客户端 | 300 秒 |
 | OLAP DuckDB 查询 | 30 秒，可由 `olap.queryTimeout` 覆盖 |
+| Process Next 长轮询 | 20 秒 |
+| Process 单请求 | 默认 15 秒，可由 `apps.processes.requestTimeout` 覆盖 |
 | 应用深探针 | 5 秒 |
 | Control Plane 服务端处理 | 5 秒 |
 
@@ -164,6 +181,28 @@ unavailable
 conflict
 execution_mode_conflict
 internal
+```
+
+Process RPC：
+
+```text
+unauthenticated
+invalid_request
+request_too_large
+unsupported_schema
+process_not_found
+process_unavailable
+process_busy
+process_draining
+process_restarted
+process_transport_failed
+deadline_exceeded
+outcome_unknown
+invalid_response
+stale_instance
+unknown_request
+handler_error
+method_not_found
 ```
 
 Control Plane：
@@ -219,6 +258,8 @@ zentao flush-observability
 zentao clean-observability
 zentao convert-jsonl
 zentao collect-logs
+zentao processes
+zentao process-restart --app <app-id> --process <name>
 zentao php-cli -- <args>
 zentao version
 zentao service install|uninstall
@@ -245,6 +286,7 @@ zentao service install|uninstall
 | `[runtime]` | 控制面、PID、日志、节点身份和排空 |
 | `[web]` | 公共监听、线程、Header 和超时，不声明应用 |
 | `[[apps]]` | 应用代码、路由、数据目录、Session 和环境 |
+| `[[apps.processes]]` | Runtime 监管的应用常驻 PHP CLI 进程 |
 | `[queue]` | Worker、租约、Bridge 和轮询 |
 | `[observability]` | Bridge、批次、Parquet、保留和 JSONL |
 | `[olap]` | OLAP Parquet 发布、DuckDB 查询资源和 Bridge 端口，默认开启 |

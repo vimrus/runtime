@@ -17,6 +17,10 @@ ZenTao Runtime（可执行文件：`zentao`）是禅道的统一运行环境。�
 
 Runtime 不直接访问禅道业务数据库。数据库连接由 PHP 应用和禅道 DAO 负责；启用队列或观测功能时，相关能力通过 Runtime 提供的本机服务使用。
 
+应用需要跨调用保留 PHP 进程内状态时，可在 `[[apps.processes]]` 声明常驻
+PHP CLI 进程。Runtime 负责其生命周期和本机鉴权 RPC；持久化后台任务仍使用
+Queue Bridge。
+
 ## 快速开始
 
 ### Linux
@@ -75,6 +79,7 @@ docker compose -f packaging/docker/compose.yaml --profile full up -d
 ```text
 /opt/zentao/
   bin/zentao               Runtime 程序
+  lib/php/runtime-process.php  Runtime Process RPC SDK
   apps/zentao-ipd-22.6/    可拔插应用目录（应用代码，由配置装载）
   data/apps/zentao-ipd/    应用数据：附件（upload/）、Session、备份、观测数据（多节点共享）
   tmp-local/zentao-ipd/    应用临时区：缓存、编译产物、SQLite（节点本地）
@@ -158,6 +163,8 @@ zentao flush-observability
 zentao clean-observability
 zentao convert-jsonl
 zentao collect-logs
+zentao processes
+zentao process-restart --app <app-id> --process <name>
 ```
 
 查询选项：`--since` 使用 Go duration，`--until` 使用 RFC3339 时间，另有 `--node`、`--level`、`--metric-name`、`--limit` 和 `--control-socket`。`collect-logs` 返回诊断压缩包路径；诊断包只包含本地日志和摘要，不包含业务数据库内容、请求正文或凭据。

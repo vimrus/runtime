@@ -14,8 +14,9 @@ readonly php_bin="${artifact_root}/php/bin/php"
 readonly libphp="${artifact_root}/php/lib/libphp.so"
 readonly loader="${artifact_root}/php/lib/ioncube/ioncube_loader_lin_8.4_ts.so"
 readonly config_template="${artifact_root}/config/runtime.example.toml"
+readonly process_sdk="${artifact_root}/lib/php/runtime-process.php"
 
-for required in "${runtime_bin}" "${php_bin}" "${libphp}" "${loader}" "${artifact_root}/config/php.ini" "${config_template}"; do
+for required in "${runtime_bin}" "${php_bin}" "${libphp}" "${loader}" "${artifact_root}/config/php.ini" "${config_template}" "${process_sdk}"; do
     if [[ ! -f "${required}" ]]; then
         echo "missing artifact file: ${required}" >&2
         exit 1

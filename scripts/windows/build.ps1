@@ -147,8 +147,20 @@ Copy-Item $apcuDll.FullName (Join-Path $Staging "runtime\ext\php_apcu.dll")
 Copy-Item (Join-Path $phpRoot "*.dll") (Join-Path $Staging "runtime") -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $vcpkgRoot "installed\x64-windows\bin\*.dll") (Join-Path $Staging "runtime") -ErrorAction SilentlyContinue
 
-New-Item -ItemType Directory -Force -Path (Join-Path $Staging "config\conf.d"), (Join-Path $Staging "licenses") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $Staging "config\conf.d"), (Join-Path $Staging "licenses"), (Join-Path $Staging "lib\php") | Out-Null
 Copy-Item (Join-Path $RepoRoot "config\runtime.example.toml") (Join-Path $Staging "config\runtime.example.toml")
+Copy-Item (Join-Path $RepoRoot "php\runtime-process.php") (Join-Path $Staging "lib\php\runtime-process.php")
+& (Join-Path $Staging "runtime\php.exe") -n -l (Join-Path $Staging "lib\php\runtime-process.php") | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Process RPC SDK failed PHP syntax validation" }
+$env:ZENTAO_TEST_PHP_BINARY = (Resolve-Path (Join-Path $Staging "runtime\php.exe")).Path
+$env:ZENTAO_TEST_PROCESS_SDK = (Resolve-Path (Join-Path $Staging "lib\php\runtime-process.php")).Path
+Push-Location $RepoRoot
+try {
+    & go test ./internal/appprocess
+} finally {
+    Pop-Location
+}
+if ($LASTEXITCODE -ne 0) { throw "resident process Windows integration test failed" }
 $iniRoot = $Staging.Replace('\', '/')
 $phpIni = Get-Content (Join-Path $RepoRoot "packaging\runtime\php.ini") -Raw
 $phpIni = $phpIni.Replace('/opt/zentao', $iniRoot)

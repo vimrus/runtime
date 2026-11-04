@@ -177,6 +177,10 @@ CLI 任务使用：
 
 该命令使用与 Web 相同的 PHP、扩展和 ionCube 配置。
 
+需要跨调用保留 PHP 进程内状态时，使用 Runtime 监管的
+[常驻 PHP 进程](resident-php-processes.md)。它使用独立 PHP CLI，不改变 Web
+的 FrankenPHP Classic mode。
+
 ## 应用深探针
 
 `health --deep` 会请求：

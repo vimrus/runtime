@@ -40,7 +40,7 @@
         +---------+-------+----------+
                   |
        Runtime Host / Control Plane
-       lifecycle / supervisor / upgrade / health
+       lifecycle / supervisor / resident PHP processes / upgrade / health
                   |
        DuckDB Library -> Parquet / JSONL / spool
 ```
@@ -57,6 +57,7 @@ Runtime 可以管理自身内嵌库（Caddy、FrankenPHP、DuckDB）、自身服
 | FrankenPHP | PHP SAPI、Classic 请求执行和扩展加载 | 禅道请求之间的状态共享 | PHP 请求 |
 | PHP DAO/Queue Service | 业务数据库、队列领取、ACK、重试和租约持久化 | Worker 并发和进程生命周期 | 业务数据库 |
 | Queue Worker | Claim 编排、超时、心跳、排空和重试调用 | 数据库 SQL 和业务副作用 | Bridge 响应 |
+| PHP 常驻进程 | 跨调用保留 PHP 进程内状态，通过本机 RPC 响应应用请求 | 持久化任务、重试、死信和跨节点单例 | 进程状态 / RPC 响应 |
 | PHP 缓存（APCu/Redis） | 显式缓存读写、TTL、容量和降级 | 强一致业务状态、业务数据库查询 | APCu 共享内存 / Redis |
 | DuckDB/Parquet | 日志、指标批处理和受控查询 | 事务、权限和业务状态 | 业务数据库仍为业务事实来源 |
 | Supervisor | Runtime 自身服务和受控外部进程启停 | 外部基础设施 HA | 子进程状态 |
@@ -139,3 +140,4 @@ Web Runtime 和 Scheduler 可分为容器，MySQL 使用独立容器。应用、
 | 观测存储 | DuckDB + Parquet | 无强制外部服务，支持本机和共享数据集查询 |
 | 首发入口 | 单机 | 降低安装和运维门槛，同时保留 HA 组合能力 |
 | 外部服务管理 | Runtime Supervisor | 统一启停、健康和升级边界 |
+| 常驻 PHP 进程 | PHP CLI 子进程 + Runtime Process Bridge | 需要进程内状态的应用能力；不改变 Web Classic mode，也不替代 Queue |

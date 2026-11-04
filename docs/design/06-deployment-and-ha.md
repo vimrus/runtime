@@ -265,7 +265,7 @@ Keepalived 跟踪的是本机 Gateway listener 和 Runtime Host 健康，而不�
 |---|---|---|
 | Gateway liveness | Keepalived | Caddy Gateway listener 和 Runtime event loop |
 | Backend readiness | Caddy/外部 LB | Caddy App listener、FrankenPHP、PHP 最小请求、版本与配置代数 |
-| Deep health | 管理和诊断 | 数据库、按实际 Handler 执行的 PHP Session 读写、NFS、Scheduler 和磁盘 |
+| Deep health | 管理和诊断 | 数据库、按实际 Handler 执行的 PHP Session 读写、NFS、Scheduler、常驻 PHP 进程和磁盘 |
 
 推荐基线：每 5 秒检查一次，连续 3 次失败后摘除，连续 2 次成功后恢复。实际值必须可配置并经过故障测试。
 

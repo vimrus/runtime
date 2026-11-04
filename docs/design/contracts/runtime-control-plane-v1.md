@@ -127,7 +127,8 @@ Linux 默认 Socket 为 `/run/zentao/runtime.sock`，创建后权限为 `0600`�
 
 当前支持 `status`、`version`、`health`、`diagnose`、`reload`、`stop`、
 `upgrade`、`logs`、`metrics`、`observability-flush`、
-`observability-clean`、`convert-jsonl` 和 `collect-logs`；入口同时提供
+`observability-clean`、`convert-jsonl`、`collect-logs`、`processes` 和
+`process-restart`；入口同时提供
 `start`（等价于 `serve`）以及跨平台的 `service install` / `service uninstall`。
 Windows 的 `run-service` 仅作为 Service Control Manager 的进程入口。CLI 使用同一二进制：
 
@@ -136,7 +137,14 @@ zentao-runtime status --control-socket /run/zentao/runtime.sock
 zentao-runtime health --deep --control-socket /run/zentao/runtime.sock
 zentao-runtime reload --control-socket /run/zentao/runtime.sock
 zentao-runtime stop --control-socket /run/zentao/runtime.sock
+zentao-runtime processes --control-socket /run/zentao/runtime.sock
+zentao-runtime process-restart --app zentao --process event-worker --control-socket /run/zentao/runtime.sock
 ```
+
+`processes` 返回 `[[apps.processes]]` 的状态、PID、实例 ID、重启次数和最近
+错误，不返回 Token、payload 或脚本参数。`process-restart` 只接受已配置的
+应用和进程，异步触发重启；调用成功后应再次查询 `processes` 确认 Ready。
+单项重启不会重新读取 `runtime.toml`。
 
 `php-cli -- <args>` 使用与 Web 相同的 PHP Runtime、扩展和 ionCube Loader
 执行命令行脚本，例如：

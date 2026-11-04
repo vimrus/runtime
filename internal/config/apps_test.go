@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func loadAppsConfig(t *testing.T, body string) (Config, error) {
@@ -199,5 +200,156 @@ queue = { enabled = true, bridgeUrlTemplate = "/../queue-{endpoint}" }
 		if _, err := loadAppsConfig(t, body); err == nil {
 			t.Fatalf("%s: expected validation error", name)
 		}
+	}
+}
+
+func TestLoadApplicationProcessesAppliesDefaults(t *testing.T) {
+	config, err := loadAppsConfig(t, `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+
+  [[apps.processes]]
+  name = "event-worker"
+  script = "service/event-worker.php"
+  args = ["--mode=resident"]
+
+  [[apps.processes]]
+  name = "connection-worker"
+  script = "service/connection.php"
+  required = true
+  requestTimeout = "7s"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Apps) != 1 || len(config.Apps[0].Processes) != 2 {
+		t.Fatalf("unexpected process configuration: %#v", config.Apps)
+	}
+	process := config.Apps[0].Processes[0]
+	if !process.Enabled || process.WorkDir != "." || process.Restart != "on-failure" ||
+		process.ReadyTimeout != 30*time.Second || process.RequestTimeout != 15*time.Second ||
+		process.StopTimeout != 20*time.Second || process.MaxPending != 32 {
+		t.Fatalf("process defaults were not applied: %#v", process)
+	}
+	if len(process.Args) != 1 || process.Args[0] != "--mode=resident" {
+		t.Fatalf("process args were not loaded: %#v", process.Args)
+	}
+	if got := config.Apps[0].Processes[1].RequestTimeout; got != 7*time.Second {
+		t.Fatalf("request timeout = %s", got)
+	}
+	if !config.Apps[0].Processes[1].Required {
+		t.Fatal("required process flag was not loaded")
+	}
+	if got := config.Apps[0].ScriptPath(process); got != filepath.Join(config.Apps[0].Dir, "service/event-worker.php") {
+		t.Fatalf("script path = %q", got)
+	}
+}
+
+func TestLoadRejectsInvalidApplicationProcesses(t *testing.T) {
+	cases := map[string]string{
+		"duplicate name": `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+[[apps.processes]]
+name = "worker"
+script = "worker.php"
+[[apps.processes]]
+name = "worker"
+script = "other.php"
+`,
+		"script traversal": `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+[[apps.processes]]
+name = "worker"
+script = "../worker.php"
+`,
+		"absolute script": `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+[[apps.processes]]
+name = "worker"
+script = "/tmp/worker.php"
+`,
+		"workdir traversal": `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+[[apps.processes]]
+name = "worker"
+script = "worker.php"
+workDir = "../"
+`,
+		"invalid restart policy": `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+[[apps.processes]]
+name = "worker"
+script = "worker.php"
+restart = "sometimes"
+`,
+		"invalid timeout": `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+[[apps.processes]]
+name = "worker"
+script = "worker.php"
+readyTimeout = "0s"
+`,
+		"reserved process environment": `
+[[apps]]
+id = "zentao"
+path = "/"
+dir = "apps/zentaopms"
+env = { ZENTAO_PROCESS_CALL_TOKEN = "fixed" }
+`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := loadAppsConfig(t, body); err == nil {
+				t.Fatal("expected process validation error")
+			}
+		})
+	}
+}
+
+func TestApplicationProcessTablesRemainBoundToTheirApplication(t *testing.T) {
+	config, err := loadAppsConfig(t, `
+[[apps]]
+id = "first"
+path = "/first"
+dir = "apps/first"
+[[apps.processes]]
+name = "worker"
+script = "service/worker.php"
+
+[[apps]]
+id = "second"
+path = "/second"
+dir = "apps/second"
+[[apps.processes]]
+name = "connector"
+script = "service/connector.php"
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Apps) != 2 ||
+		len(config.Apps[0].Processes) != 1 || config.Apps[0].Processes[0].Name != "worker" ||
+		len(config.Apps[1].Processes) != 1 || config.Apps[1].Processes[0].Name != "connector" {
+		t.Fatalf("process tables were not bound to their application: %#v", config.Apps)
 	}
 }

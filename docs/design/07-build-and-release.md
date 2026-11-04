@@ -256,6 +256,7 @@ FrankenPHP version/commit
 Caddy module version
 DuckDB and Go Binding versions/commits
 Runtime Host version/commit
+Process RPC schema and PHP SDK SHA256
 ionCube archive and Loader SHA256
 PHP extensions and versions
 compiler/linker/Go versions
@@ -595,6 +596,7 @@ stage/
     php.ini
     conf.d/00-ioncube.ini
     conf.d/10-opcache.ini
+  lib/php/runtime-process.php  # Runtime-owned Process RPC SDK
   observability/         # 安装后创建，staging 中保持为空
   spool/observability/   # 安装后创建且必须位于本地持久盘
   licenses/

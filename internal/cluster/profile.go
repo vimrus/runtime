@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/vimrus/runtime/internal/config"
@@ -82,10 +83,18 @@ func BuildProfile(cfg config.Config, nodeID, instanceID, bootID, runtimeVersion 
 					nil,
 					nil,
 				),
+				"processes": digestSet(
+					appProcessProfile(app.Processes),
+					appProcessBehavior(app.Processes),
+					map[string]any{
+						"maxPending": processCapacity(app.Processes),
+					},
+				),
 			},
 			RuntimeSummary: map[string]any{
 				"path":         appPath,
 				"queueEnabled": app.Queue.Enabled,
+				"processes":    processNames(app.Processes),
 			},
 		}
 	}
@@ -177,10 +186,78 @@ func BuildProfile(cfg config.Config, nodeID, instanceID, bootID, runtimeVersion 
 				"olap":       cfg.OLAP.Enabled,
 				"logs":       cfg.Observability.Enabled,
 				"sharedData": cfg.Cluster.RequireSharedData,
+				"processes":  configuredProcessCount(cfg.ActiveApps()) > 0,
 			},
 		},
 		Apps: apps,
 	}
+}
+
+func appProcessBehavior(processes []config.AppProcess) map[string]any {
+	result := make(map[string]any, len(processes))
+	for _, process := range processes {
+		if !process.Enabled {
+			continue
+		}
+		result[process.Name] = map[string]any{
+			"workDir":        process.WorkDir,
+			"readyTimeout":   process.ReadyTimeout.String(),
+			"requestTimeout": process.RequestTimeout.String(),
+			"stopTimeout":    process.StopTimeout.String(),
+			"restart":        process.Restart,
+			"maxRestarts":    process.MaxRestarts,
+			"restartWindow":  process.RestartWindow.String(),
+			"minBackoff":     process.MinBackoff.String(),
+			"maxBackoff":     process.MaxBackoff.String(),
+			"args":           append([]string(nil), process.Args...),
+		}
+	}
+	return result
+}
+
+func appProcessProfile(processes []config.AppProcess) map[string]any {
+	result := make([]string, 0, len(processes))
+	for _, process := range processes {
+		if !process.Enabled {
+			continue
+		}
+		result = append(result, process.Name+":"+process.Script+":"+strconv.FormatBool(process.Required))
+	}
+	sort.Strings(result)
+	return map[string]any{"configured": result}
+}
+
+func processNames(processes []config.AppProcess) []string {
+	result := make([]string, 0, len(processes))
+	for _, process := range processes {
+		if process.Enabled {
+			result = append(result, process.Name)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func processCapacity(processes []config.AppProcess) map[string]int {
+	result := make(map[string]int, len(processes))
+	for _, process := range processes {
+		if process.Enabled {
+			result[process.Name] = process.MaxPending
+		}
+	}
+	return result
+}
+
+func configuredProcessCount(apps []config.App) int {
+	count := 0
+	for _, app := range apps {
+		for _, process := range app.Processes {
+			if process.Enabled {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func queuePollBehavior(workers []config.QueueWorker) map[string]any {

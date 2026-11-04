@@ -60,7 +60,7 @@ docker buildx build \
 # directory (config/runtime.toml, installed applications, data, logs, run,
 # sessions, observability) is operator data and must survive a rebuild.
 mkdir -p "${artifact_dir}"
-for name in bin php; do
+for name in bin php lib; do
     [[ -d "${staging_dir}/${name}" ]] || continue
     rm -rf "${artifact_dir:?}/${name}"
     cp -a "${staging_dir}/${name}" "${artifact_dir}/${name}"

@@ -50,6 +50,8 @@ docker compose -f packaging/docker/compose.yaml up -d web
 
 - 控制 socket/Named Pipe 是管理入口，不应暴露到公网；Linux 默认使用 `0600` 和同用户鉴权。
 - Queue Bridge 仅允许本机回环地址，并使用每次 Runtime 启动生成的随机 token。
+- Process Bridge 仅允许本机回环地址；Web 只获得应用级 call Token，常驻 PHP
+  CLI 只获得本实例的 worker Token。Process RPC 不持久化，也不自动重试。
 - Runtime 日志和审计日志会对密码、token、Cookie、Authorization 等敏感字段脱敏。
 - 多节点部署需要部署方提供共享 Session/附件存储、数据库高可用和负载均衡；Runtime 不替代这些基础设施。
 - 不要将实际 `runtime.toml`、生产密码或 Bridge token 提交到仓库。

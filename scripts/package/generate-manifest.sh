@@ -26,6 +26,12 @@ php_patch_applied=false
 case "$(basename "${staging}")" in
     *-amd64) php_patch_applied=true ;;
 esac
+readonly process_sdk="${repo_root}/php/runtime-process.php"
+if [[ ! -f "${process_sdk}" ]]; then
+    echo "process SDK is missing: ${process_sdk}" >&2
+    exit 1
+fi
+readonly process_sdk_sha256="$(sha256sum "${process_sdk}" | awk '{print $1}')"
 
 if [[ ! -d "${staging}" ]]; then
     echo "staging directory does not exist: ${staging}" >&2
@@ -51,6 +57,7 @@ manifest="$(
         --arg frankenphpCommit "$(jq -r '.frankenphp.commit' "${lock}")" \
         --arg caddyVersion "$(jq -r '.caddy.version' "${lock}")" \
         --arg duckdbVersion "$(jq -r '.duckdb.go_binding.version' "${lock}")" \
+        --arg processSDKSha256 "${process_sdk_sha256}" \
         --arg ioncubeVersion "$(jq -r '.ioncube.version' "${lock}")" \
         --arg dm8Version "$(jq -r '.dm8.version' "${lock}")" \
         --arg dm8Package "$(jq -r ".dm8.${dm8_lock_key}.package" "${lock}")" \
@@ -76,6 +83,7 @@ manifest="$(
                 frankenphp: {version: $frankenphpVersion, commit: $frankenphpCommit},
                 caddy: {version: $caddyVersion},
                 duckdb: {goBinding: $duckdbVersion},
+                processRPC: {schema: 1, path: "lib/php/runtime-process.php", sha256: $processSDKSha256},
                 ioncube: {version: $ioncubeVersion},
                 go: {version: $goVersion}
             } + (if $dm8Enabled then {

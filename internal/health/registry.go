@@ -16,6 +16,7 @@ const (
 	KindRuntime    Kind = "runtime"
 	KindPHP        Kind = "php"
 	KindApp        Kind = "app"
+	KindProcess    Kind = "process"
 	KindDependency Kind = "dependency"
 	KindShared     Kind = "shared"
 )

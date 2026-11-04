@@ -78,6 +78,28 @@ enabled = true
 #
 # When omitted, bridgeUrlTemplate defaults to the PATH_INFO form
 # "/index.php/queue-{endpoint}".
+#
+# Runtime-supervised resident PHP processes are declared per application.
+# They use the bundled PHP CLI, the same php.ini and extensions as Web PHP, and
+# a private loopback RPC bridge. Script and workDir are relative to dir.
+# The process must load ZENTAO_PROCESS_SDK and use RuntimeProcessWorker.
+#
+# [[apps.processes]]
+# name = "event-worker"
+# script = "service/event-worker.php"
+# args = ["--mode=resident"]
+# workDir = "."
+# enabled = true
+# required = false
+# readyTimeout = "30s"
+# requestTimeout = "15s"
+# stopTimeout = "20s"
+# maxPending = 32
+# restart = "on-failure"
+# maxRestarts = 8
+# restartWindow = "10m"
+# minBackoff = "500ms"
+# maxBackoff = "30s"
 
 [queue]
 # Enable the PHP Queue Bridge worker engine.
