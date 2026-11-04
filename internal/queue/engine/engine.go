@@ -63,8 +63,8 @@ func New(config Config, queueBridge Bridge) (*Engine, error) {
 	if queueBridge == nil {
 		return nil, errors.New("queue bridge is required")
 	}
-	if config.NodeID == "" || config.InstanceID == "" || config.WorkerID == "" {
-		return nil, errors.New("nodeID, instanceID and workerID are required")
+	if config.InstanceID == "" || config.WorkerID == "" {
+		return nil, errors.New("instanceID and workerID are required")
 	}
 	if len(config.Workers) == 0 {
 		return nil, errors.New("at least one queue worker is required")

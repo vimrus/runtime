@@ -56,7 +56,6 @@ pidFile = "/tmp/zentao.pid"
 drainTimeout = "10s"
 logPath = "/shared/logs/runtime.log"
 nodeID = "${node_id}"
-clusterID = "cluster-dual-node"
 
 [web]
 listen = "127.0.0.1:8080"

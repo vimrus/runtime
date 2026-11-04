@@ -15,6 +15,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/logging"
 	frankencaddy "github.com/dunglas/frankenphp/caddy"
 
+	runtimelogging "github.com/vimrus/runtime/internal/logging"
 	"github.com/vimrus/runtime/internal/queue/bridge"
 )
 
@@ -29,7 +30,7 @@ type Options struct {
 	AccessLogKeepDays   int
 	QueueBridge         QueueBridgeOptions
 	ObservabilityBridge ObservabilityBridgeOptions
-	BIBridge            BIBridgeOptions
+	OLAPBridge          OLAPBridgeOptions
 }
 
 // App is one application route served by the Runtime. Applications are
@@ -80,8 +81,8 @@ type ObservabilityBridgeOptions struct {
 	Sink   EventSink
 }
 
-// BIBridgeOptions configures the private loopback BI publish/query listener.
-type BIBridgeOptions struct {
+// OLAPBridgeOptions configures the private loopback OLAP publish/query listener.
+type OLAPBridgeOptions struct {
 	Enabled bool
 	Listen  string
 	Tokens  []string
@@ -203,28 +204,28 @@ func Config(options Options) *caddy.Config {
 		}
 		servers["observability"] = observabilityServer
 	}
-	if options.BIBridge.Enabled {
-		biListen := options.BIBridge.Listen
-		if biListen == "" {
-			biListen = "127.0.0.1:8083"
+	if options.OLAPBridge.Enabled {
+		olapListen := options.OLAPBridge.Listen
+		if olapListen == "" {
+			olapListen = "127.0.0.1:8083"
 		}
-		servers["bi"] = &caddyhttp.Server{
-			Listen:            []string{biListen},
+		servers["olap"] = &caddyhttp.Server{
+			Listen:            []string{olapListen},
 			ReadHeaderTimeout: caddy.Duration(options.ReadHeaderTimeout),
 			IdleTimeout:       caddy.Duration(options.IdleTimeout),
 			MaxHeaderBytes:    options.MaxHeaderBytes,
 			Routes: caddyhttp.RouteList{
 				{
 					MatcherSetsRaw: []caddy.ModuleMap{{
-						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/bi/v1/publish"}, nil),
+						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/olap/v1/publish"}, nil),
 					}},
-					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(BIPublish{Tokens: options.BIBridge.Tokens}, "handler", "zentao_bi_publish", nil)},
+					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(OLAPPublish{Tokens: options.OLAPBridge.Tokens}, "handler", "zentao_olap_publish", nil)},
 				},
 				{
 					MatcherSetsRaw: []caddy.ModuleMap{{
-						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/bi/v1/query"}, nil),
+						"path": caddyconfig.JSON(caddyhttp.MatchPath{"/internal/runtime/olap/v1/query"}, nil),
 					}},
-					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(BIQuery{Tokens: options.BIBridge.Tokens}, "handler", "zentao_bi_query", nil)},
+					HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(OLAPQuery{Tokens: options.OLAPBridge.Tokens}, "handler", "zentao_olap_query", nil)},
 				},
 			},
 		}
@@ -460,25 +461,5 @@ func staticResponseRoute(status int, body string) caddyhttp.Route {
 // access format but redacts well-known sensitive query parameters from
 // request.uri before the line is written.
 func accessLogEncoderRaw() json.RawMessage {
-	redactedQueryParams := []string{
-		"token", "password", "passwd", "secret", "session", "session_id",
-		"api_key", "apikey", "access_key", "authorization", "signature", "sign",
-	}
-	actions := make([]map[string]any, 0, len(redactedQueryParams))
-	for _, parameter := range redactedQueryParams {
-		actions = append(actions, map[string]any{
-			"type":      "replace",
-			"parameter": parameter,
-			"value":     "[REDACTED]",
-		})
-	}
-	fields := map[string]json.RawMessage{
-		"request>uri": caddyconfig.JSONModuleObject(struct {
-			Actions []map[string]any `json:"actions"`
-		}{Actions: actions}, "filter", "query", nil),
-	}
-	return caddyconfig.JSONModuleObject(logging.FilterEncoder{
-		WrappedRaw: caddyconfig.JSONModuleObject(logging.JSONEncoder{}, "format", "json", nil),
-		FieldsRaw:  fields,
-	}, "format", "filter", nil)
+	return runtimelogging.AccessEncoderRaw()
 }

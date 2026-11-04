@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 已实施（workflow 落地，三平台原生矩阵通过） |
+| 状态 | 已实施（workflow 落地；PHP 8.4.27 Linux amd64 验证通过，arm64/Windows 回归待完成） |
 | 日期 | 2026-08-18 |
 | 关联方案 | [禅道 FrankenPHP 集成方案](./02-frankenphp-integration.md) |
 | CI 平台 | GitHub Actions |
@@ -138,17 +138,21 @@ runtime/
 schema: 1
 
 php:
-  version: 8.4.24
+  version: 8.4.27
+  api: 20240924
+  patch:
+    path: patches/php/8.4/0001-ioncube-zend-signal-abi-shim.patch
+    sha256: d12896c5026ac58f2bdc3198001e1eae40dd2a79c666937bb4543ce538633a77
   source:
-    url: https://www.php.net/distributions/php-8.4.24.tar.xz
-    sha256: e127be09a8506f4327c5cfa78a614b00d210714484ec215ce0011b4a03c00731
+    url: https://www.php.net/distributions/php-8.4.27.tar.xz
+    sha256: dcf93923b0e38e0d5252b25b796520b5a47761a08b3488b6d0b5d1115764d3f0
   windows:
     runtime:
-      url: https://downloads.php.net/~windows/releases/archives/php-8.4.24-Win32-vs17-x64.zip
-      sha256: 7b57fc9840273ab153834d0e2bd06e0bcf4fead36e381182b4b8fe9cedff3174
+      url: https://downloads.php.net/~windows/releases/archives/php-8.4.27-1-Win32-vs17-x64.zip
+      sha256: 53db2047139bdfb8e6c7c7d5860a0a6a2a4f1dcac49fcf18ae610a14d8ccdf5b
     development:
-      url: https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.4.24-Win32-vs17-x64.zip
-      sha256: 893f5b8ffe515eb07c080e1bdba8cbb0ddf935c76fc1088ddbe46d46f528236c
+      url: https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.4.27-1-Win32-vs17-x64.zip
+      sha256: f712946909d85eac71f50de8fd78462df9c78174a3b4d79c613f5090aa342c9f
 
 frankenphp:
   version: 1.12.7
@@ -173,6 +177,7 @@ runtime_host:
   revision: 1
 
 ioncube:
+  version: 15.5.1
   php: "8.4"
   linux_amd64:
     url: <fixed-or-controlled-url>
@@ -196,6 +201,7 @@ dm8:
   version: <reference-build-date>
   php: "8.4"
   api: 20240924
+  packaging_enabled: true
   thread_safety: zts
   license: proprietary-redistribution-approval-required
   linux_amd64:
@@ -258,8 +264,8 @@ build timestamp in UTC
 
 ### 6.4 达梦 DM8 PHP PDO 驱动（vendored）
 
-达梦不提供稳定的公共下载 URL，官方介质只随安装包分发。为避免每次构建
-重新解包介质，DM8 PHP 8.4 ZTS PDO 驱动和客户端接口库作为受控二进制入库：
+达梦不提供稳定的公共下载 URL，官方介质只随安装包分发。仓库保留从官方
+介质提取的 PHP 8.4 ZTS 驱动及客户端接口库：
 
 ```text
 packaging/runtime/third-party/dm8/
@@ -282,19 +288,13 @@ packaging/runtime/third-party/dm8/
 
 约束：
 
-- 只允许放入从官方介质提取且与 PHP 8.4 ZTS（API `20240924`）匹配的
-  amd64/arm64 制品；换介质或驱动版本必须同步更新 `versions.lock.json` 中的
-  SHA256 与 `README.md` 来源记录。
-- Dockerfile 使用 `COPY` 读取仓库内二进制，构建时执行
-  `sha256sum --check --strict SHA256SUMS` 强制校验，不执行任何下载；DM
-  目录按 `LOADER_ARCH`（amd64/arm64）选择 `linux-<arch>`。
-- 扩展装载到 `/opt/zentao/php/lib/php/extensions/no-debug-zts-20240924/`，
-  `libdmdpi.so` 与 `components/` 下组件平铺到 `/opt/zentao/php/lib/`
-  （php CLI RPATH `$ORIGIN/../lib`、各组件 DT_RPATH `$ORIGIN` 都指向该目录），
-  `dependencies/` 复制到 `/opt/zentao/php/lib/dependencies/`（libdmdpi
-  DT_RPATH 含 `$ORIGIN/dependencies`）。组件集是官方 PHP FAQ 的 18 库清单；
-  实测只带 `libdmdpi.so` 会在建连时报 `[-70089] Encryption module failed
-  to load`，补齐 dependencies 后进入正常建连流程。
+- `php84ts_pdo_dm.so` 的模块 API 必须保持 `20240924`，与 PHP 8.4 ZTS
+  匹配；换介质或驱动版本必须同步更新 `versions.lock.json` 中的 SHA256 与
+  `README.md` 来源记录。
+- Dockerfile 必须执行 `sha256sum --check --strict SHA256SUMS`；
+  DM 目录按 `LOADER_ARCH`（amd64/arm64）选择 `linux-<arch>`。
+- 扩展装载到
+  `/opt/zentao/php/lib/php/extensions/no-debug-zts-20240924/`。
 - DM 客户端默认从 `/etc/dm_svc.conf` 读取 `TIME_ZONE/LANGUAGE/CHAR_CODE`
   等全局参数；Docker 镜像写入 `/etc/dm_svc.conf` 并把同一文件放到
   `/opt/zentao/config/dm_svc.conf`，Runtime 入口给 PHP 进程设置
@@ -302,9 +302,8 @@ packaging/runtime/third-party/dm8/
   `/etc`。Runtime 启动会自检该文件，缺失时自动写入默认内容（已有文件不
   覆盖），用户无需手工配置。缺 `CHAR_CODE=(PG_UTF8)` 会出现中文乱码，缺
   `TIME_ZONE=(480)` 时间函数会偏移。
-- 当前支持 Linux amd64（CentOS 7 介质 20260710）与 Linux arm64
-  （FT-2000/Kylin 10 SP1 介质 20260708）；Windows 需要厂商另行提供并经
-  同样流程入库后才允许在对应平台打包。
+- 当前支持 Linux amd64（CentOS 7 基线）与 arm64（FT-2000 / Kylin 10 SP1
+  基线）；Windows 需要厂商另行提供并经同样流程入库。
 - 达梦二进制为厂商专有制品，再分发范围需获得授权，manifest/SBOM 中按
   `proprietary-redistribution-approval-required` 记录。
 
@@ -467,6 +466,7 @@ libssl-dev
 libxml2-dev
 libxslt1-dev
 libzip-dev
+patch
 pkg-config
 re2c
 unzip
@@ -475,14 +475,17 @@ xz-utils
 
 实际列表以 PHP configure 检查结果为准。Runner apt 仓库版本会变化，因此 manifest 必须记录安装后的 package version；发布前需要保留构建日志。
 
+PHP 8.4 的 OPcache 作为 `opcache.so` / `php_opcache.dll` 构建并显式加载，
+构建阶段必须验证 OPcache 已启用。
+
 ### 10.3 PHP 源码准备
 
 ```text
 下载 PHP 源码
   -> sha256sum --check
   -> 解压到工作目录
-  -> patch --dry-run
-  -> 应用 ionCube ABI patch
+  -> Linux amd64: patch --dry-run 并应用 ionCube ABI patch
+  -> Linux arm64: 不应用 Shim
   -> 记录 patched source hash
 ```
 
@@ -614,7 +617,8 @@ runs-on: windows-2025
 
 ### 11.2 PHP Runtime
 
-Windows 不需要 Linux ionCube signal ABI patch。直接下载锁定版本的：
+PHP 8.4 的 ionCube Windows Loader 不依赖 `zend_signal_*`，因此 Windows
+不应用 Linux amd64 ABI patch。Windows 直接下载锁定版本的：
 
 - PHP 8.4 VS17 x64 Thread Safe Runtime ZIP。
 - PHP 8.4 VS17 x64 Development Package。
@@ -705,10 +709,12 @@ readelf -Ws "$LIBPHP" | grep zend_signal
 
 必须满足：
 
-- `libphp.so` 导出 `zend_signal_globals_id`。
-- `libphp.so` 导出 `zend_signal_globals_offset`。
-- `libphp.so` 导出 `zend_signal_handler_unblock`。
-- ionCube 不再存在未解析的 `zend_signal_*` 符号。
+- Linux amd64 `libphp.so` 只导出 `zend_signal_globals_id`、
+  `zend_signal_globals_offset` 和 `zend_signal_handler_unblock` 三个
+  `zend_signal_*` 符号。
+- Linux amd64 Loader 的 `zend_signal_*` 未定义符号精确等于上述三个符号，
+  并由 `libphp.so` 在加载时解析。
+- Linux arm64 的 `libphp.so` 不导出上述符号，Loader 也不存在这些依赖。
 - 没有出现未评审的新 `zend_signal_*` 依赖。
 
 ### 12.2 运行验证

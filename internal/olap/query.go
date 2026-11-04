@@ -1,4 +1,4 @@
-package bi
+package olap
 
 import (
 	"context"
@@ -16,9 +16,9 @@ const (
 	MaxQueryOffset     = 1_000_000
 )
 
-var ErrDatasetUnavailable = errors.New("BI dataset is not available")
+var ErrDatasetUnavailable = errors.New("OLAP dataset is not available")
 
-// QueryRequest is the private BI query contract.
+// QueryRequest is the private OLAP query contract.
 type QueryRequest struct {
 	SchemaVersion int    `json:"schemaVersion"`
 	SQL           string `json:"sql"`
@@ -28,7 +28,7 @@ type QueryRequest struct {
 	SkipCount     bool   `json:"skipCount,omitempty"`
 }
 
-// QueryResult is consumed by the application BI query client.
+// QueryResult is consumed by the application OLAP query client.
 type QueryResult struct {
 	SchemaVersion        int               `json:"schemaVersion"`
 	CompatibilityVersion int               `json:"compatibilityVersion"`
@@ -40,7 +40,7 @@ type QueryResult struct {
 	Truncated            bool              `json:"truncated"`
 }
 
-// QueryEngine executes validated BI SQL against one application dataset.
+// QueryEngine executes validated OLAP SQL against one application dataset.
 type QueryEngine interface {
 	Query(ctx context.Context, datasetRoot string, request QueryRequest) (QueryResult, error)
 }
@@ -53,7 +53,7 @@ func LoadManifests(datasetRoot string) (map[string]Manifest, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("%w: manifests directory is missing", ErrDatasetUnavailable)
 		}
-		return nil, fmt.Errorf("read BI manifests: %w", err)
+		return nil, fmt.Errorf("read OLAP manifests: %w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	manifests := make(map[string]Manifest)
@@ -63,10 +63,10 @@ func LoadManifests(datasetRoot string) (map[string]Manifest, error) {
 		}
 		manifest, err := ReadManifest(filepath.Join(dir, entry.Name()))
 		if err != nil {
-			return nil, fmt.Errorf("load BI manifest %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("load OLAP manifest %s: %w", entry.Name(), err)
 		}
 		if _, exists := manifests[manifest.Table]; exists {
-			return nil, fmt.Errorf("duplicate BI manifest table %q", manifest.Table)
+			return nil, fmt.Errorf("duplicate OLAP manifest table %q", manifest.Table)
 		}
 		manifests[manifest.Table] = manifest
 	}
@@ -80,17 +80,17 @@ var forbiddenQueryTokens = []string{
 	"ICEBERG_SCAN", "DELTA_SCAN", "SQLITE_SCAN", "POSTGRES_SCAN", "MYSQL_SCAN",
 }
 
-// ValidateBIQuery enforces the runtime side of the read-only SQL contract.
-func ValidateBIQuery(sql string, maxBytes int) error {
+// ValidateOLAPQuery enforces the runtime side of the read-only SQL contract.
+func ValidateOLAPQuery(sql string, maxBytes int) error {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
-		return errors.New("BI SQL is empty")
+		return errors.New("OLAP SQL is empty")
 	}
 	if maxBytes > 0 && len(sql) > maxBytes {
-		return fmt.Errorf("BI SQL exceeds %d bytes", maxBytes)
+		return fmt.Errorf("OLAP SQL exceeds %d bytes", maxBytes)
 	}
 	if !regexp.MustCompile(`(?i)^\s*(SELECT|WITH)\b`).MatchString(sql) {
-		return errors.New("BI SQL must be a read-only SELECT query")
+		return errors.New("OLAP SQL must be a read-only SELECT query")
 	}
 
 	clean, err := sqlWithoutQuotedAndComments(sql)
@@ -100,11 +100,11 @@ func ValidateBIQuery(sql string, maxBytes int) error {
 	upper := strings.ToUpper(clean)
 	for _, token := range forbiddenQueryTokens {
 		if regexp.MustCompile(`\b` + regexp.QuoteMeta(token) + `\b`).MatchString(upper) {
-			return fmt.Errorf("BI SQL contains forbidden token %q", token)
+			return fmt.Errorf("OLAP SQL contains forbidden token %q", token)
 		}
 	}
 	if regexp.MustCompile(`\bREAD_[A-Z0-9_]+\b`).MatchString(upper) {
-		return errors.New("BI SQL contains forbidden file reader")
+		return errors.New("OLAP SQL contains forbidden file reader")
 	}
 	for _, pattern := range []string{
 		`\bINSERT\s+INTO\b`,
@@ -115,11 +115,11 @@ func ValidateBIQuery(sql string, maxBytes int) error {
 		`\bTRUNCATE\s+TABLE\b`,
 	} {
 		if regexp.MustCompile(`(?i)` + pattern).MatchString(clean) {
-			return errors.New("BI SQL contains a write operation")
+			return errors.New("OLAP SQL contains a write operation")
 		}
 	}
 	if strings.Contains(strings.TrimSuffix(clean, ";"), ";") {
-		return errors.New("BI SQL must contain exactly one statement")
+		return errors.New("OLAP SQL must contain exactly one statement")
 	}
 	return nil
 }
@@ -187,7 +187,7 @@ func sqlWithoutQuotedAndComments(sql string) (string, error) {
 		result.WriteByte(char)
 	}
 	if quote != 0 || blockComment {
-		return "", errors.New("BI SQL contains an unterminated string or comment")
+		return "", errors.New("OLAP SQL contains an unterminated string or comment")
 	}
 	return result.String(), nil
 }

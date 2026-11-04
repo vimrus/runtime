@@ -54,7 +54,9 @@ Runtime/Full 打包、签名供应链和 CI workflow。
 - Classic mode 不跨请求保留禅道 PHP 应用状态，但 Runtime、Caddy、PHP ZTS 线程池和扩展模块仍然常驻。
 - PHP 基线为 PHP 8.4 ZTS。
 - 付费版本必须支持 ionCube Loader。
-- Linux PHP 使用最小 `zend_signal` ABI Shim 兼容 ionCube，同时保持 Zend Signals 关闭。
+- Linux PHP 保持 Zend Signals 关闭。ionCube Loader 15.5.1 的 Linux amd64
+  PHP 8.4 TS Loader 仍依赖三个 `zend_signal_*` 符号，只能应用最小 ABI Shim；
+  Linux arm64 和 Windows PHP 8.4 Loader 不依赖这些符号。
 - Windows 当前不应用 Linux 的 `zend_signal` ABI Shim。
 
 ### 平台和构建
@@ -74,6 +76,8 @@ Runtime/Full 打包、签名供应链和 CI workflow。
 - Go Runtime 不持有禅道数据库凭据。
 - 所有数据库操作由 PHP Service 通过禅道现有 DAO 和信创数据库适配层执行。
 - 新增数据库能力时，应扩展 PHP DAO、迁移脚本和契约测试，而不是在 Go 中复制数据库适配体系。
+- 达梦 DM8 使用厂商提供的 PHP 8.4 ZTS/API `20240924` PDO 驱动；升级 PHP
+  小版本时必须验证驱动模块 API 与真实数据库连接。
 
 ### 消息队列
 
@@ -111,7 +115,7 @@ Runtime/Full 打包、签名供应链和 CI workflow。
 - Runtime 只做 Session 配置交叉检查和 PHP 侧读写诊断；NFS/Redis 高可用由部署方负责。
 - 现有文件 Handler 和 API `apisession` 分支必须适配共享后端，不能覆盖显式 `php.ini` 配置或回退节点本地目录。
 - Linux/Docker 多节点附件使用客户提供的 NFSv4.1 共享文件系统。
-- 节点配置分别维护，但 Cluster ID、应用版本、Schema、Session Handler/共享存储配置和附件路径等集群配置必须一致。
+- 节点配置分别维护，但应用版本、Schema、Session Handler/共享存储配置和附件路径等部署配置必须一致。
 - 客户已有云、硬件或托管负载均衡时优先接入。
 - 两个 Linux 节点没有外部负载均衡时，使用 Keepalived 浮动 VIP 和内嵌 Caddy Gateway。
 - Caddy Gateway 默认使用 `least_conn`，不需要 Session Sticky，不自动重试非幂等请求。

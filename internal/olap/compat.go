@@ -1,5 +1,5 @@
-// Package bi defines shared BI dataset and SQL compatibility contracts.
-package bi
+// Package olap defines shared OLAP dataset and SQL compatibility contracts.
+package olap
 
 const (
 	// SQLCompatibilityVersion identifies the bundled MySQL compatibility layer.
@@ -7,7 +7,7 @@ const (
 )
 
 // DuckDBCompatibilitySQL returns the versioned macro bootstrap required before
-// executing built-in BI SQL on DuckDB. The script must remain internal and may
+// executing built-in OLAP SQL on DuckDB. The script must remain internal and may
 // not install or load external extensions.
 func DuckDBCompatibilitySQL() string {
 	return `

@@ -49,7 +49,6 @@ func (w *Writer) WriteParquet(ctx context.Context, kind observability.Kind, targ
 		schemaVersion INTEGER NOT NULL,
 		eventTime TIMESTAMP NOT NULL,
 		ingestTime TIMESTAMP NOT NULL,
-		clusterID VARCHAR NOT NULL,
 		nodeID VARCHAR NOT NULL,
 		bootID VARCHAR NOT NULL,
 		eventID VARCHAR NOT NULL,
@@ -69,7 +68,7 @@ func (w *Writer) WriteParquet(ctx context.Context, kind observability.Kind, targ
 	)`); err != nil {
 		return 0, fmt.Errorf("create DuckDB event table: %w", err)
 	}
-	statement, err := db.PrepareContext(ctx, `INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	statement, err := db.PrepareContext(ctx, `INSERT INTO events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -81,7 +80,7 @@ func (w *Writer) WriteParquet(ctx context.Context, kind observability.Kind, targ
 		}
 		if _, err := statement.ExecContext(ctx,
 			normalized.SchemaVersion, normalized.EventTime, normalized.IngestTime,
-			normalized.ClusterID, normalized.NodeID, normalized.BootID, normalized.EventID,
+			normalized.NodeID, normalized.BootID, normalized.EventID,
 			normalized.Source, string(normalized.Kind), nullString(normalized.Level),
 			nullString(normalized.Message), nullString(normalized.MetricName), nullString(normalized.MetricKind),
 			nullableFloat(normalized.Value), nullableUint(normalized.Count),

@@ -79,11 +79,14 @@ func TestClaimLeaseDoesNotContainPayload(t *testing.T) {
 	}
 }
 
-func TestScheduleRequestRequiresIdentity(t *testing.T) {
+func TestScheduleRequestRequiresInstanceIdentity(t *testing.T) {
 	if err := (ScheduleRequest{Schema: SchemaVersion, NodeID: "node-a", InstanceID: "instance-a"}).Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := (ScheduleRequest{Schema: SchemaVersion, NodeID: "", InstanceID: "instance-a"}).Validate(); err == nil {
-		t.Fatal("schedule request without node identity must fail")
+	if err := (ScheduleRequest{Schema: SchemaVersion, NodeID: "", InstanceID: "instance-a"}).Validate(); err != nil {
+		t.Fatalf("single-node schedule request must allow an empty node ID: %v", err)
+	}
+	if err := (ScheduleRequest{Schema: SchemaVersion, NodeID: "", InstanceID: ""}).Validate(); err == nil {
+		t.Fatal("schedule request without an instance identity must fail")
 	}
 }

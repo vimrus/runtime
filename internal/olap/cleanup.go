@@ -1,4 +1,4 @@
-package bi
+package olap
 
 import (
 	"errors"
@@ -10,12 +10,12 @@ import (
 	"time"
 )
 
-// BI staging is produced by the PHP exporter before the publish request. The
+// OLAP staging is produced by the PHP exporter before the publish request. The
 // cron timeout is two hours, so staging retention must exceed that even when
 // the caller keeps a shorter grace period for replaced Parquet parts.
 const minimumStagingGrace = 3 * time.Hour
 
-// CleanupResult summarizes unreferenced BI files removed by one cleanup pass.
+// CleanupResult summarizes unreferenced OLAP files removed by one cleanup pass.
 type CleanupResult struct {
 	RemovedParts   int
 	RemovedTemp    int
@@ -30,7 +30,7 @@ func (p *Publisher) Cleanup(now time.Time, grace time.Duration) (CleanupResult, 
 		now = time.Now()
 	}
 	if grace < 0 {
-		return CleanupResult{}, errors.New("BI cleanup grace period must not be negative")
+		return CleanupResult{}, errors.New("OLAP cleanup grace period must not be negative")
 	}
 
 	manifests, err := LoadManifests(p.config.DatasetRoot)
@@ -82,7 +82,7 @@ func (p *Publisher) Cleanup(now time.Time, grace time.Duration) (CleanupResult, 
 				return nil
 			}
 			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("remove unreferenced BI part: %w", err)
+				return fmt.Errorf("remove unreferenced OLAP part: %w", err)
 			}
 			result.RemovedParts++
 			result.RemovedBytes += info.Size()
@@ -90,7 +90,7 @@ func (p *Publisher) Cleanup(now time.Time, grace time.Duration) (CleanupResult, 
 		}
 		if strings.HasSuffix(strings.ToLower(path), ".parquet.tmp") {
 			if err := os.Remove(path); err != nil {
-				return fmt.Errorf("remove stale BI temporary part: %w", err)
+				return fmt.Errorf("remove stale OLAP temporary part: %w", err)
 			}
 			result.RemovedTemp++
 			result.RemovedBytes += info.Size()
@@ -116,7 +116,7 @@ func (p *Publisher) Cleanup(now time.Time, grace time.Duration) (CleanupResult, 
 		}
 		if newest.Before(stagingCutoff) {
 			if err := os.RemoveAll(path); err != nil {
-				return result, fmt.Errorf("remove stale BI staging: %w", err)
+				return result, fmt.Errorf("remove stale OLAP staging: %w", err)
 			}
 			result.RemovedStaging++
 			result.RemovedBytes += size

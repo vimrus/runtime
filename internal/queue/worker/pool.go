@@ -59,8 +59,8 @@ func NewPool(queueBridge Bridge, leases *lease.Manager, config Config, logger *s
 	if queueBridge == nil || leases == nil {
 		return nil, fmt.Errorf("bridge and lease manager are required")
 	}
-	if config.NodeID == "" || config.InstanceID == "" || config.WorkerID == "" {
-		return nil, fmt.Errorf("nodeID, instanceID and workerID are required")
+	if config.InstanceID == "" || config.WorkerID == "" {
+		return nil, fmt.Errorf("instanceID and workerID are required")
 	}
 	if config.ClaimBatch <= 0 || config.ClaimBatch > bridge.MaxBatchSize {
 		config.ClaimBatch = 8

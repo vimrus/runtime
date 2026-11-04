@@ -1,4 +1,4 @@
-package bi
+package olap
 
 import (
 	"encoding/json"
@@ -27,7 +27,7 @@ type Part struct {
 	SHA256 string `json:"sha256"`
 }
 
-// Manifest atomically selects the visible parts for one logical BI table.
+// Manifest atomically selects the visible parts for one logical OLAP table.
 type Manifest struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	Table         string            `json:"table"`
@@ -44,29 +44,29 @@ type Manifest struct {
 // Validate checks all fields required by the query and retention components.
 func (m Manifest) Validate() error {
 	if m.SchemaVersion != ManifestSchemaVersion {
-		return fmt.Errorf("unsupported BI manifest schema version %d", m.SchemaVersion)
+		return fmt.Errorf("unsupported OLAP manifest schema version %d", m.SchemaVersion)
 	}
 	if !tableNamePattern.MatchString(m.Table) {
-		return fmt.Errorf("invalid BI table name %q", m.Table)
+		return fmt.Errorf("invalid OLAP table name %q", m.Table)
 	}
 	if m.Generation == 0 {
-		return errors.New("BI manifest generation must be positive")
+		return errors.New("OLAP manifest generation must be positive")
 	}
 	if m.PublishedAt.IsZero() {
-		return errors.New("BI manifest publishedAt is required")
+		return errors.New("OLAP manifest publishedAt is required")
 	}
 	if len(m.Buckets) == 0 {
-		return errors.New("BI manifest must contain at least one bucket")
+		return errors.New("OLAP manifest must contain at least one bucket")
 	}
 
 	var totalRows uint64
 	seen := make(map[string]struct{})
 	for bucket, parts := range m.Buckets {
 		if !bucketNamePattern.MatchString(bucket) {
-			return fmt.Errorf("invalid BI bucket name %q", bucket)
+			return fmt.Errorf("invalid OLAP bucket name %q", bucket)
 		}
 		if len(parts) == 0 {
-			return fmt.Errorf("BI bucket %q has no parts", bucket)
+			return fmt.Errorf("OLAP bucket %q has no parts", bucket)
 		}
 		for _, part := range parts {
 			if err := validatePartPath(part.Path); err != nil {
@@ -76,28 +76,28 @@ func (m Manifest) Validate() error {
 				return fmt.Errorf("part %q has invalid sha256", part.Path)
 			}
 			if _, exists := seen[part.Path]; exists {
-				return fmt.Errorf("duplicate BI part %q", part.Path)
+				return fmt.Errorf("duplicate OLAP part %q", part.Path)
 			}
 			seen[part.Path] = struct{}{}
 			totalRows += part.Rows
 		}
 	}
 	if m.RowCount != totalRows {
-		return fmt.Errorf("BI manifest rowCount %d does not match part rows %d", m.RowCount, totalRows)
+		return fmt.Errorf("OLAP manifest rowCount %d does not match part rows %d", m.RowCount, totalRows)
 	}
 	return nil
 }
 
 func validatePartPath(path string) error {
 	if path == "" || filepath.IsAbs(path) {
-		return errors.New("BI part path must be relative")
+		return errors.New("OLAP part path must be relative")
 	}
 	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(path)))
 	if clean == "." || strings.HasPrefix(clean, "../") || clean == ".." {
-		return fmt.Errorf("BI part path must not escape the dataset: %q", path)
+		return fmt.Errorf("OLAP part path must not escape the dataset: %q", path)
 	}
 	if !strings.HasSuffix(clean, ".parquet") {
-		return fmt.Errorf("BI part must be a .parquet file: %q", path)
+		return fmt.Errorf("OLAP part must be a .parquet file: %q", path)
 	}
 	return nil
 }
@@ -110,10 +110,10 @@ func ReadManifest(path string) (Manifest, error) {
 	}
 	var manifest Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return Manifest{}, fmt.Errorf("decode BI manifest: %w", err)
+		return Manifest{}, fmt.Errorf("decode OLAP manifest: %w", err)
 	}
 	if err := manifest.Validate(); err != nil {
-		return Manifest{}, fmt.Errorf("validate BI manifest: %w", err)
+		return Manifest{}, fmt.Errorf("validate OLAP manifest: %w", err)
 	}
 	return manifest, nil
 }
@@ -125,41 +125,41 @@ func WriteManifestAtomic(path string, manifest Manifest) error {
 		return err
 	}
 	if filepath.Ext(path) != ".json" {
-		return errors.New("BI manifest target must end with .json")
+		return errors.New("OLAP manifest target must end with .json")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return fmt.Errorf("create BI manifest directory: %w", err)
+		return fmt.Errorf("create OLAP manifest directory: %w", err)
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return fmt.Errorf("encode BI manifest: %w", err)
+		return fmt.Errorf("encode OLAP manifest: %w", err)
 	}
 	data = append(data, '\n')
 
 	temp, err := os.CreateTemp(filepath.Dir(path), ".manifest-*.json.tmp")
 	if err != nil {
-		return fmt.Errorf("create BI manifest temp file: %w", err)
+		return fmt.Errorf("create OLAP manifest temp file: %w", err)
 	}
 	tempPath := temp.Name()
 	defer os.Remove(tempPath)
 
 	if err := temp.Chmod(0o640); err != nil {
 		temp.Close()
-		return fmt.Errorf("set BI manifest permissions: %w", err)
+		return fmt.Errorf("set OLAP manifest permissions: %w", err)
 	}
 	if _, err := temp.Write(data); err != nil {
 		temp.Close()
-		return fmt.Errorf("write BI manifest: %w", err)
+		return fmt.Errorf("write OLAP manifest: %w", err)
 	}
 	if err := temp.Sync(); err != nil {
 		temp.Close()
-		return fmt.Errorf("sync BI manifest: %w", err)
+		return fmt.Errorf("sync OLAP manifest: %w", err)
 	}
 	if err := temp.Close(); err != nil {
-		return fmt.Errorf("close BI manifest: %w", err)
+		return fmt.Errorf("close OLAP manifest: %w", err)
 	}
 	if err := os.Rename(tempPath, path); err != nil {
-		return fmt.Errorf("publish BI manifest: %w", err)
+		return fmt.Errorf("publish OLAP manifest: %w", err)
 	}
 	return nil
 }

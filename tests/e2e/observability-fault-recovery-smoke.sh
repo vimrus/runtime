@@ -50,7 +50,6 @@ pidFile = "/tmp/zentao.pid"
 drainTimeout = "10s"
 logPath = "/shared/logs/runtime.log"
 nodeID = "node-fault"
-clusterID = "cluster-fault-recovery"
 
 [web]
 listen = "127.0.0.1:8080"

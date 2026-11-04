@@ -20,7 +20,7 @@ docker run --detach --name "${container}" \
     --volume "${REPO_ROOT}/tests/fixtures/php:/app:ro" \
     --volume "${REPO_ROOT}/tests/fixtures/runtime:/runtime-config:ro" \
     "${RUNTIME_IMAGE}" \
-    -c 'cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve' >/dev/null
+    -c 'mkdir -p /tmp/zentao-observability /tmp/zentao-spool && cp /runtime-config/runtime.toml /opt/zentao/config/runtime.toml && exec zentao serve' >/dev/null
 
 for _ in $(seq 1 30); do
     if docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/healthz >/dev/null; then
@@ -69,16 +69,16 @@ docker exec "${container}" zentao php-cli -- -r 'echo PHP_VERSION;' \
     | grep -E '^8\.4\.' >/dev/null
 docker exec "${container}" zentao php-cli -- -r 'exit(extension_loaded("ionCube Loader") ? 0 : 1);'
 docker exec "${container}" zentao flush-observability --control-socket /tmp/zentao-runtime.sock \
-    | jq --exit-status '.dropped == 0' >/dev/null
+    | jq --exit-status '[.stats[].dropped] | add == 0' >/dev/null
 docker exec "${container}" zentao logs --since 5m --control-socket /tmp/zentao-runtime.sock \
-    | jq --exit-status 'length >= 1 and .[0].message == "runtime started"' >/dev/null
+    | jq --exit-status 'length >= 1 and any(.[]; .message == "runtime started")' >/dev/null
 docker exec "${container}" zentao clean-observability --control-socket /tmp/zentao-runtime.sock \
-    | jq --exit-status '.removedFiles >= 0 and .deletedDirs >= 0' >/dev/null
+    | jq --exit-status '[to_entries[].value.removedFiles] | add >= 0' >/dev/null
 docker exec "${container}" zentao collect-logs --control-socket /tmp/zentao-runtime.sock \
     | jq -r '.path' > /tmp/collect-path.txt
 docker exec "${container}" sh -c "tar -tzf $(cat /tmp/collect-path.txt) | grep -F 'summary.json'" >/dev/null
 
-docker exec "${container}" php --ri 'ionCube Loader' | grep -F 'ionCube Loader'
+docker exec "${container}" zentao php-cli -- --ri 'ionCube Loader' | grep -F 'ionCube Loader'
 
 for removed in \
     /opt/zentao/php/bin/phpdbg \
@@ -91,6 +91,8 @@ for removed in \
         exit 1
     fi
 done
+
+tests/e2e/cluster-diagnostics-smoke.sh
 
 if [[ -n "${ZENTAO_APP_DIR:-${ZENTAO_POC_APP_DIR:-}}" ]]; then
     runtime_app_dir="${ZENTAO_APP_DIR:-${ZENTAO_POC_APP_DIR}}"

@@ -17,13 +17,23 @@ const (
 	SchemaVersion                  = 1
 	DefaultQueueBridgePort         = 8081
 	DefaultObservabilityBridgePort = 8082
-	DefaultBIBridgePort            = 8083
+	DefaultOLAPBridgePort          = 8083
 	loopbackBridgeHost             = "127.0.0.1"
 )
 
 // LoopbackBridgeAddress returns the fixed local address for a private bridge.
 func LoopbackBridgeAddress(port int) string {
 	return net.JoinHostPort(loopbackBridgeHost, strconv.Itoa(port))
+}
+
+// LoopbackWebAddress returns the loopback address for the configured web
+// listener while preserving its port.
+func LoopbackWebAddress(listen string) (string, error) {
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(loopbackBridgeHost, port), nil
 }
 
 type Config struct {
@@ -33,7 +43,8 @@ type Config struct {
 	Apps          []App         `json:"apps,omitempty" toml:"apps,omitempty"`
 	Queue         Queue         `json:"queue,omitempty" toml:"queue,omitempty"`
 	Observability Observability `json:"observability,omitempty" toml:"observability,omitempty"`
-	BI            BI            `json:"bi,omitempty" toml:"bi,omitempty"`
+	OLAP          OLAP          `json:"olap,omitempty" toml:"olap,omitempty"`
+	Cluster       Cluster       `json:"cluster,omitempty" toml:"cluster,omitempty"`
 
 	// installRoot remembers the Runtime installation directory so that
 	// application defaults can be materialized without re-reading the
@@ -63,7 +74,6 @@ type Runtime struct {
 	AuditLogMaxBackups int    `json:"auditLogMaxBackups,omitempty" toml:"auditLogMaxBackups,omitempty"`
 	AuditLogKeepDays   int    `json:"auditLogKeepDays,omitempty" toml:"auditLogKeepDays,omitempty"`
 	NodeID             string `json:"nodeID,omitempty" toml:"nodeID,omitempty"`
-	ClusterID          string `json:"clusterID,omitempty" toml:"clusterID,omitempty"`
 }
 
 type Web struct {
@@ -165,7 +175,7 @@ type Observability struct {
 	JSONLDeleteAfterConvert bool          `json:"jsonlDeleteAfterConvert,omitempty" toml:"jsonlDeleteAfterConvert,omitempty"`
 }
 
-type BI struct {
+type OLAP struct {
 	Enabled              bool          `json:"enabled" toml:"enabled"`
 	BridgePort           int           `json:"bridgePort" toml:"bridgePort"`
 	QueryThreads         int           `json:"queryThreads" toml:"queryThreads"`
@@ -175,35 +185,53 @@ type BI struct {
 	MaxConcurrentQueries int           `json:"maxConcurrentQueries" toml:"maxConcurrentQueries"`
 }
 
+// Cluster controls optional profile comparison tuning. Nodes are discovered and
+// compared automatically without an enable switch or bootstrap phase.
+type Cluster struct {
+	ReleaseID           string        `json:"releaseID,omitempty" toml:"releaseID,omitempty"`
+	SecretKey           string        `json:"-" toml:"secretKey,omitempty"`
+	RegistrationTimeout time.Duration `json:"registrationTimeout,omitempty" toml:"registrationTimeout,omitempty"`
+	HeartbeatInterval   time.Duration `json:"heartbeatInterval,omitempty" toml:"heartbeatInterval,omitempty"`
+	ProfileInterval     time.Duration `json:"profileInterval,omitempty" toml:"profileInterval,omitempty"`
+	StaleTimeout        time.Duration `json:"staleTimeout,omitempty" toml:"staleTimeout,omitempty"`
+	RequireSharedData   bool          `json:"requireSharedData,omitempty" toml:"requireSharedData,omitempty"`
+}
+
 type Overrides struct {
-	Listen                  *string
-	Threads                 *int
-	ControlSocket           *string
-	PIDFile                 *string
-	DrainTimeout            *time.Duration
-	ReadHeaderTimeout       *time.Duration
-	IdleTimeout             *time.Duration
-	MaxHeaderBytes          *int
-	AccessLog               *string
-	AuditLog                *string
-	LogPath                 *string
-	LogMaxBytes             *int64
-	LogMaxBackups           *int
-	NodeID                  *string
-	ClusterID               *string
-	QueueEnabled            *bool
-	QueueBridgePort         *int
-	ObservabilityEnabled    *bool
-	ObservabilityBridgePort *int
-	ObservabilityRoot       *string
-	ObservabilitySpool      *string
-	BIEnabled               *bool
-	BIBridgePort            *int
-	BIQueryThreads          *int
-	BIQueryMemoryLimit      *string
-	BIQueryTimeout          *time.Duration
-	BIMaxRows               *int
-	BIMaxConcurrentQueries  *int
+	Listen                   *string
+	Threads                  *int
+	ControlSocket            *string
+	PIDFile                  *string
+	DrainTimeout             *time.Duration
+	ReadHeaderTimeout        *time.Duration
+	IdleTimeout              *time.Duration
+	MaxHeaderBytes           *int
+	AccessLog                *string
+	AuditLog                 *string
+	LogPath                  *string
+	LogMaxBytes              *int64
+	LogMaxBackups            *int
+	NodeID                   *string
+	QueueEnabled             *bool
+	QueueBridgePort          *int
+	ObservabilityEnabled     *bool
+	ObservabilityBridgePort  *int
+	ObservabilityRoot        *string
+	ObservabilitySpool       *string
+	OLAPEnabled              *bool
+	OLAPBridgePort           *int
+	OLAPQueryThreads         *int
+	OLAPQueryMemoryLimit     *string
+	OLAPQueryTimeout         *time.Duration
+	OLAPMaxRows              *int
+	OLAPMaxConcurrentQueries *int
+	ClusterReleaseID         *string
+	ClusterSecretKey         *string
+	ClusterRegistration      *time.Duration
+	ClusterHeartbeat         *time.Duration
+	ClusterProfileInterval   *time.Duration
+	ClusterStaleTimeout      *time.Duration
+	ClusterRequireShared     *bool
 }
 
 func Default() Config {
@@ -264,14 +292,21 @@ func Default() Config {
 			JSONLKeepDays:           7,
 			JSONLDeleteAfterConvert: true,
 		},
-		BI: BI{
-			Enabled:              false,
-			BridgePort:           DefaultBIBridgePort,
+		OLAP: OLAP{
+			Enabled:              true,
+			BridgePort:           DefaultOLAPBridgePort,
 			QueryThreads:         4,
 			QueryMemoryLimit:     "1GB",
 			QueryTimeout:         30 * time.Second,
 			MaxRows:              10000,
 			MaxConcurrentQueries: 4,
+		},
+		Cluster: Cluster{
+			RegistrationTimeout: 10 * time.Second,
+			HeartbeatInterval:   time.Minute,
+			ProfileInterval:     5 * time.Minute,
+			StaleTimeout:        10 * time.Minute,
+			RequireSharedData:   true,
 		},
 	}
 }
@@ -391,7 +426,6 @@ func decode(data []byte, config Config) (Config, error) {
 		AuditLogMaxBackups    *int    `toml:"auditLogMaxBackups"`
 		AuditLogKeepDays      *int    `toml:"auditLogKeepDays"`
 		NodeID                *string `toml:"nodeID"`
-		ClusterID             *string `toml:"clusterID"`
 	}
 	type rawWeb struct {
 		Listen            *string `toml:"listen"`
@@ -438,7 +472,7 @@ func decode(data []byte, config Config) (Config, error) {
 		JSONLKeepDays           *int     `toml:"jsonlKeepDays"`
 		JSONLDeleteAfterConvert *bool    `toml:"jsonlDeleteAfterConvert"`
 	}
-	type rawBI struct {
+	type rawOLAP struct {
 		Enabled              *bool   `toml:"enabled"`
 		BridgePort           *int    `toml:"bridgePort"`
 		QueryThreads         *int    `toml:"queryThreads"`
@@ -446,6 +480,15 @@ func decode(data []byte, config Config) (Config, error) {
 		QueryTimeout         *string `toml:"queryTimeout"`
 		MaxRows              *int    `toml:"maxRows"`
 		MaxConcurrentQueries *int    `toml:"maxConcurrentQueries"`
+	}
+	type rawCluster struct {
+		ReleaseID           *string `toml:"releaseID"`
+		SecretKey           *string `toml:"secretKey"`
+		RegistrationTimeout *string `toml:"registrationTimeout"`
+		HeartbeatInterval   *string `toml:"heartbeatInterval"`
+		ProfileInterval     *string `toml:"profileInterval"`
+		StaleTimeout        *string `toml:"staleTimeout"`
+		RequireSharedData   *bool   `toml:"requireSharedData"`
 	}
 	type rawAppQueue struct {
 		Enabled           *bool   `toml:"enabled"`
@@ -470,7 +513,8 @@ func decode(data []byte, config Config) (Config, error) {
 		Apps          *[]rawApp         `toml:"apps"`
 		Queue         *rawQueue         `toml:"queue"`
 		Observability *rawObservability `toml:"observability"`
-		BI            *rawBI            `toml:"bi"`
+		OLAP          *rawOLAP          `toml:"olap"`
+		Cluster       *rawCluster       `toml:"cluster"`
 	}
 
 	var raw rawConfig
@@ -528,9 +572,6 @@ func decode(data []byte, config Config) (Config, error) {
 		}
 		if raw.Runtime.NodeID != nil {
 			config.Runtime.NodeID = *raw.Runtime.NodeID
-		}
-		if raw.Runtime.ClusterID != nil {
-			config.Runtime.ClusterID = *raw.Runtime.ClusterID
 		}
 	}
 	if raw.Web != nil {
@@ -744,31 +785,70 @@ func decode(data []byte, config Config) (Config, error) {
 			config.Observability.JSONLDeleteAfterConvert = *raw.Observability.JSONLDeleteAfterConvert
 		}
 	}
-	if raw.BI != nil {
-		if raw.BI.Enabled != nil {
-			config.BI.Enabled = *raw.BI.Enabled
+	if raw.OLAP != nil {
+		if raw.OLAP.Enabled != nil {
+			config.OLAP.Enabled = *raw.OLAP.Enabled
 		}
-		if raw.BI.BridgePort != nil {
-			config.BI.BridgePort = *raw.BI.BridgePort
+		if raw.OLAP.BridgePort != nil {
+			config.OLAP.BridgePort = *raw.OLAP.BridgePort
 		}
-		if raw.BI.QueryThreads != nil {
-			config.BI.QueryThreads = *raw.BI.QueryThreads
+		if raw.OLAP.QueryThreads != nil {
+			config.OLAP.QueryThreads = *raw.OLAP.QueryThreads
 		}
-		if raw.BI.QueryMemoryLimit != nil {
-			config.BI.QueryMemoryLimit = *raw.BI.QueryMemoryLimit
+		if raw.OLAP.QueryMemoryLimit != nil {
+			config.OLAP.QueryMemoryLimit = *raw.OLAP.QueryMemoryLimit
 		}
-		if raw.BI.QueryTimeout != nil {
-			value, err := time.ParseDuration(*raw.BI.QueryTimeout)
+		if raw.OLAP.QueryTimeout != nil {
+			value, err := time.ParseDuration(*raw.OLAP.QueryTimeout)
 			if err != nil {
-				return Config{}, fmt.Errorf("parse bi.queryTimeout: %w", err)
+				return Config{}, fmt.Errorf("parse olap.queryTimeout: %w", err)
 			}
-			config.BI.QueryTimeout = value
+			config.OLAP.QueryTimeout = value
 		}
-		if raw.BI.MaxRows != nil {
-			config.BI.MaxRows = *raw.BI.MaxRows
+		if raw.OLAP.MaxRows != nil {
+			config.OLAP.MaxRows = *raw.OLAP.MaxRows
 		}
-		if raw.BI.MaxConcurrentQueries != nil {
-			config.BI.MaxConcurrentQueries = *raw.BI.MaxConcurrentQueries
+		if raw.OLAP.MaxConcurrentQueries != nil {
+			config.OLAP.MaxConcurrentQueries = *raw.OLAP.MaxConcurrentQueries
+		}
+	}
+	if raw.Cluster != nil {
+		if raw.Cluster.ReleaseID != nil {
+			config.Cluster.ReleaseID = *raw.Cluster.ReleaseID
+		}
+		if raw.Cluster.SecretKey != nil {
+			config.Cluster.SecretKey = *raw.Cluster.SecretKey
+		}
+		if raw.Cluster.RegistrationTimeout != nil {
+			value, err := time.ParseDuration(*raw.Cluster.RegistrationTimeout)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse cluster.registrationTimeout: %w", err)
+			}
+			config.Cluster.RegistrationTimeout = value
+		}
+		if raw.Cluster.HeartbeatInterval != nil {
+			value, err := time.ParseDuration(*raw.Cluster.HeartbeatInterval)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse cluster.heartbeatInterval: %w", err)
+			}
+			config.Cluster.HeartbeatInterval = value
+		}
+		if raw.Cluster.ProfileInterval != nil {
+			value, err := time.ParseDuration(*raw.Cluster.ProfileInterval)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse cluster.profileInterval: %w", err)
+			}
+			config.Cluster.ProfileInterval = value
+		}
+		if raw.Cluster.StaleTimeout != nil {
+			value, err := time.ParseDuration(*raw.Cluster.StaleTimeout)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse cluster.staleTimeout: %w", err)
+			}
+			config.Cluster.StaleTimeout = value
+		}
+		if raw.Cluster.RequireSharedData != nil {
+			config.Cluster.RequireSharedData = *raw.Cluster.RequireSharedData
 		}
 	}
 	return config, nil
@@ -817,9 +897,6 @@ func (c Config) Apply(overrides Overrides) (Config, error) {
 	if overrides.NodeID != nil {
 		c.Runtime.NodeID = *overrides.NodeID
 	}
-	if overrides.ClusterID != nil {
-		c.Runtime.ClusterID = *overrides.ClusterID
-	}
 	if overrides.QueueEnabled != nil {
 		c.Queue.Enabled = *overrides.QueueEnabled
 	}
@@ -838,26 +915,47 @@ func (c Config) Apply(overrides Overrides) (Config, error) {
 	if overrides.ObservabilitySpool != nil {
 		c.Observability.SpoolPath = *overrides.ObservabilitySpool
 	}
-	if overrides.BIEnabled != nil {
-		c.BI.Enabled = *overrides.BIEnabled
+	if overrides.OLAPEnabled != nil {
+		c.OLAP.Enabled = *overrides.OLAPEnabled
 	}
-	if overrides.BIBridgePort != nil {
-		c.BI.BridgePort = *overrides.BIBridgePort
+	if overrides.OLAPBridgePort != nil {
+		c.OLAP.BridgePort = *overrides.OLAPBridgePort
 	}
-	if overrides.BIQueryThreads != nil {
-		c.BI.QueryThreads = *overrides.BIQueryThreads
+	if overrides.OLAPQueryThreads != nil {
+		c.OLAP.QueryThreads = *overrides.OLAPQueryThreads
 	}
-	if overrides.BIQueryMemoryLimit != nil {
-		c.BI.QueryMemoryLimit = *overrides.BIQueryMemoryLimit
+	if overrides.OLAPQueryMemoryLimit != nil {
+		c.OLAP.QueryMemoryLimit = *overrides.OLAPQueryMemoryLimit
 	}
-	if overrides.BIQueryTimeout != nil {
-		c.BI.QueryTimeout = *overrides.BIQueryTimeout
+	if overrides.OLAPQueryTimeout != nil {
+		c.OLAP.QueryTimeout = *overrides.OLAPQueryTimeout
 	}
-	if overrides.BIMaxRows != nil {
-		c.BI.MaxRows = *overrides.BIMaxRows
+	if overrides.OLAPMaxRows != nil {
+		c.OLAP.MaxRows = *overrides.OLAPMaxRows
 	}
-	if overrides.BIMaxConcurrentQueries != nil {
-		c.BI.MaxConcurrentQueries = *overrides.BIMaxConcurrentQueries
+	if overrides.OLAPMaxConcurrentQueries != nil {
+		c.OLAP.MaxConcurrentQueries = *overrides.OLAPMaxConcurrentQueries
+	}
+	if overrides.ClusterReleaseID != nil {
+		c.Cluster.ReleaseID = *overrides.ClusterReleaseID
+	}
+	if overrides.ClusterSecretKey != nil {
+		c.Cluster.SecretKey = *overrides.ClusterSecretKey
+	}
+	if overrides.ClusterRegistration != nil {
+		c.Cluster.RegistrationTimeout = *overrides.ClusterRegistration
+	}
+	if overrides.ClusterHeartbeat != nil {
+		c.Cluster.HeartbeatInterval = *overrides.ClusterHeartbeat
+	}
+	if overrides.ClusterProfileInterval != nil {
+		c.Cluster.ProfileInterval = *overrides.ClusterProfileInterval
+	}
+	if overrides.ClusterStaleTimeout != nil {
+		c.Cluster.StaleTimeout = *overrides.ClusterStaleTimeout
+	}
+	if overrides.ClusterRequireShared != nil {
+		c.Cluster.RequireSharedData = *overrides.ClusterRequireShared
 	}
 	if err := c.normalizeApps(); err != nil {
 		return Config{}, err
@@ -924,9 +1022,6 @@ func ApplyEnvironment(config Config, environ []string) (Config, error) {
 	if value, ok := values["ZENTAO_RUNTIME_NODE_ID"]; ok {
 		overrides.NodeID = &value
 	}
-	if value, ok := values["ZENTAO_RUNTIME_CLUSTER_ID"]; ok {
-		overrides.ClusterID = &value
-	}
 	if value, ok := values["ZENTAO_RUNTIME_ACCESS_LOG"]; ok {
 		overrides.AccessLog = &value
 	}
@@ -964,50 +1059,91 @@ func ApplyEnvironment(config Config, environ []string) (Config, error) {
 	if value, ok := values["ZENTAO_OBSERVABILITY_SPOOL_PATH"]; ok {
 		overrides.ObservabilitySpool = &value
 	}
-	if value, ok := values["ZENTAO_BI_ENABLED"]; ok {
+	if value, ok := values["ZENTAO_OLAP_ENABLED"]; ok {
 		parsed, err := strconv.ParseBool(value)
 		if err != nil {
-			return Config{}, fmt.Errorf("parse ZENTAO_BI_ENABLED: %w", err)
+			return Config{}, fmt.Errorf("parse ZENTAO_OLAP_ENABLED: %w", err)
 		}
-		overrides.BIEnabled = &parsed
+		overrides.OLAPEnabled = &parsed
 	}
-	if value, ok := values["ZENTAO_BI_BRIDGE_PORT"]; ok {
+	if value, ok := values["ZENTAO_OLAP_BRIDGE_PORT"]; ok {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
-			return Config{}, fmt.Errorf("parse ZENTAO_BI_BRIDGE_PORT: %w", err)
+			return Config{}, fmt.Errorf("parse ZENTAO_OLAP_BRIDGE_PORT: %w", err)
 		}
-		overrides.BIBridgePort = &parsed
+		overrides.OLAPBridgePort = &parsed
 	}
-	if value, ok := values["ZENTAO_BI_QUERY_THREADS"]; ok {
+	if value, ok := values["ZENTAO_OLAP_QUERY_THREADS"]; ok {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
-			return Config{}, fmt.Errorf("parse ZENTAO_BI_QUERY_THREADS: %w", err)
+			return Config{}, fmt.Errorf("parse ZENTAO_OLAP_QUERY_THREADS: %w", err)
 		}
-		overrides.BIQueryThreads = &parsed
+		overrides.OLAPQueryThreads = &parsed
 	}
-	if value, ok := values["ZENTAO_BI_QUERY_MEMORY_LIMIT"]; ok {
-		overrides.BIQueryMemoryLimit = &value
+	if value, ok := values["ZENTAO_OLAP_QUERY_MEMORY_LIMIT"]; ok {
+		overrides.OLAPQueryMemoryLimit = &value
 	}
-	if value, ok := values["ZENTAO_BI_QUERY_TIMEOUT"]; ok {
+	if value, ok := values["ZENTAO_OLAP_QUERY_TIMEOUT"]; ok {
 		parsed, err := time.ParseDuration(value)
 		if err != nil {
-			return Config{}, fmt.Errorf("parse ZENTAO_BI_QUERY_TIMEOUT: %w", err)
+			return Config{}, fmt.Errorf("parse ZENTAO_OLAP_QUERY_TIMEOUT: %w", err)
 		}
-		overrides.BIQueryTimeout = &parsed
+		overrides.OLAPQueryTimeout = &parsed
 	}
-	if value, ok := values["ZENTAO_BI_MAX_ROWS"]; ok {
+	if value, ok := values["ZENTAO_OLAP_MAX_ROWS"]; ok {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
-			return Config{}, fmt.Errorf("parse ZENTAO_BI_MAX_ROWS: %w", err)
+			return Config{}, fmt.Errorf("parse ZENTAO_OLAP_MAX_ROWS: %w", err)
 		}
-		overrides.BIMaxRows = &parsed
+		overrides.OLAPMaxRows = &parsed
 	}
-	if value, ok := values["ZENTAO_BI_MAX_CONCURRENT_QUERIES"]; ok {
+	if value, ok := values["ZENTAO_OLAP_MAX_CONCURRENT_QUERIES"]; ok {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
-			return Config{}, fmt.Errorf("parse ZENTAO_BI_MAX_CONCURRENT_QUERIES: %w", err)
+			return Config{}, fmt.Errorf("parse ZENTAO_OLAP_MAX_CONCURRENT_QUERIES: %w", err)
 		}
-		overrides.BIMaxConcurrentQueries = &parsed
+		overrides.OLAPMaxConcurrentQueries = &parsed
+	}
+	if value, ok := values["ZENTAO_CLUSTER_RELEASE_ID"]; ok {
+		overrides.ClusterReleaseID = &value
+	}
+	if value, ok := values["ZENTAO_CLUSTER_SECRET_KEY"]; ok {
+		overrides.ClusterSecretKey = &value
+	}
+	if value, ok := values["ZENTAO_CLUSTER_REGISTRATION_TIMEOUT"]; ok {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_CLUSTER_REGISTRATION_TIMEOUT: %w", err)
+		}
+		overrides.ClusterRegistration = &parsed
+	}
+	if value, ok := values["ZENTAO_CLUSTER_HEARTBEAT_INTERVAL"]; ok {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_CLUSTER_HEARTBEAT_INTERVAL: %w", err)
+		}
+		overrides.ClusterHeartbeat = &parsed
+	}
+	if value, ok := values["ZENTAO_CLUSTER_PROFILE_INTERVAL"]; ok {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_CLUSTER_PROFILE_INTERVAL: %w", err)
+		}
+		overrides.ClusterProfileInterval = &parsed
+	}
+	if value, ok := values["ZENTAO_CLUSTER_STALE_TIMEOUT"]; ok {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_CLUSTER_STALE_TIMEOUT: %w", err)
+		}
+		overrides.ClusterStaleTimeout = &parsed
+	}
+	if value, ok := values["ZENTAO_CLUSTER_REQUIRE_SHARED_DATA"]; ok {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse ZENTAO_CLUSTER_REQUIRE_SHARED_DATA: %w", err)
+		}
+		overrides.ClusterRequireShared = &parsed
 	}
 	return config.Apply(overrides)
 }
@@ -1064,10 +1200,8 @@ func (c Config) Validate() error {
 	if c.Runtime.AuditLogMaxBytes < 0 || c.Runtime.AuditLogMaxBackups < 0 || c.Runtime.AuditLogKeepDays < 0 {
 		return fmt.Errorf("runtime audit log limits must not be negative")
 	}
-	for name, value := range map[string]string{"nodeID": c.Runtime.NodeID, "clusterID": c.Runtime.ClusterID} {
-		if value != "" && !validIdentity(value) {
-			return fmt.Errorf("runtime.%s contains unsupported characters", name)
-		}
+	if c.Runtime.NodeID != "" && !validIdentity(c.Runtime.NodeID) {
+		return fmt.Errorf("runtime.nodeID contains unsupported characters")
 	}
 	if c.Queue.Enabled {
 		if !validPort(c.Queue.BridgePort) {
@@ -1133,28 +1267,40 @@ func (c Config) Validate() error {
 	if c.Queue.Enabled && c.Observability.Enabled && c.Queue.BridgePort == c.Observability.BridgePort {
 		return fmt.Errorf("queue.bridgePort and observability.bridgePort must be different")
 	}
-	if c.BI.Enabled {
-		if !validPort(c.BI.BridgePort) {
-			return fmt.Errorf("bi.bridgePort must be between 1 and 65535")
+	if c.OLAP.Enabled {
+		if !validPort(c.OLAP.BridgePort) {
+			return fmt.Errorf("olap.bridgePort must be between 1 and 65535")
 		}
-		if c.BI.BridgePort == webPort {
-			return fmt.Errorf("bi.bridgePort must differ from web.listen port")
+		if c.OLAP.BridgePort == webPort {
+			return fmt.Errorf("olap.bridgePort must differ from web.listen port")
 		}
-		if c.Queue.Enabled && c.BI.BridgePort == c.Queue.BridgePort {
-			return fmt.Errorf("bi.bridgePort must differ from queue.bridgePort")
+		if c.Queue.Enabled && c.OLAP.BridgePort == c.Queue.BridgePort {
+			return fmt.Errorf("olap.bridgePort must differ from queue.bridgePort")
 		}
-		if c.Observability.Enabled && c.BI.BridgePort == c.Observability.BridgePort {
-			return fmt.Errorf("bi.bridgePort must differ from observability.bridgePort")
+		if c.Observability.Enabled && c.OLAP.BridgePort == c.Observability.BridgePort {
+			return fmt.Errorf("olap.bridgePort must differ from observability.bridgePort")
 		}
-		if c.BI.QueryTimeout <= 0 {
-			return fmt.Errorf("BI query timeout must be positive")
+		if c.OLAP.QueryTimeout <= 0 {
+			return fmt.Errorf("OLAP query timeout must be positive")
 		}
-		if c.BI.QueryThreads <= 0 || c.BI.MaxRows <= 0 || c.BI.MaxConcurrentQueries <= 0 {
-			return fmt.Errorf("BI query limits must be positive")
+		if c.OLAP.QueryThreads <= 0 || c.OLAP.MaxRows <= 0 || c.OLAP.MaxConcurrentQueries <= 0 {
+			return fmt.Errorf("OLAP query limits must be positive")
 		}
-		if c.BI.QueryMemoryLimit == "" {
-			return fmt.Errorf("bi.queryMemoryLimit is required when BI is enabled")
+		if c.OLAP.QueryMemoryLimit == "" {
+			return fmt.Errorf("olap.queryMemoryLimit is required when OLAP is enabled")
 		}
+	}
+	if c.Cluster.ReleaseID != "" && !validIdentity(c.Cluster.ReleaseID) {
+		return fmt.Errorf("cluster.releaseID must contain supported characters")
+	}
+	if c.Cluster.SecretKey != "" && len(c.Cluster.SecretKey) < 16 {
+		return fmt.Errorf("cluster.secretKey must contain at least 16 characters when configured")
+	}
+	if c.Cluster.RegistrationTimeout <= 0 || c.Cluster.HeartbeatInterval <= 0 || c.Cluster.ProfileInterval <= 0 || c.Cluster.StaleTimeout <= 0 {
+		return fmt.Errorf("cluster timeouts must be positive")
+	}
+	if c.Cluster.StaleTimeout <= 2*c.Cluster.HeartbeatInterval {
+		return fmt.Errorf("cluster.staleTimeout must be greater than twice cluster.heartbeatInterval")
 	}
 	return nil
 }
@@ -1164,7 +1310,7 @@ func validPort(port int) bool {
 }
 
 func validIdentity(value string) bool {
-	if len(value) > 128 {
+	if len(value) > 64 {
 		return false
 	}
 	for _, r := range value {
@@ -1330,9 +1476,7 @@ func equalApps(left, right []App) bool {
 }
 
 func RestartRequired(current, candidate Config) bool {
-	if candidate.Runtime.NodeID == "" {
-		candidate.Runtime.NodeID = current.Runtime.NodeID
-	}
+	candidate = PreserveRuntimeIdentity(current, candidate)
 	return current.Runtime.DrainTimeout != candidate.Runtime.DrainTimeout ||
 		current.Web.Listen != candidate.Web.Listen ||
 		current.Web.Threads != candidate.Web.Threads ||
@@ -1350,7 +1494,6 @@ func RestartRequired(current, candidate Config) bool {
 		current.Runtime.AuditLogMaxBackups != candidate.Runtime.AuditLogMaxBackups ||
 		current.Runtime.AuditLogKeepDays != candidate.Runtime.AuditLogKeepDays ||
 		current.Runtime.NodeID != candidate.Runtime.NodeID ||
-		current.Runtime.ClusterID != candidate.Runtime.ClusterID ||
 		current.Queue.Enabled != candidate.Queue.Enabled ||
 		current.Queue.BridgePort != candidate.Queue.BridgePort ||
 		current.Queue.RequestTimeout != candidate.Queue.RequestTimeout ||
@@ -1378,13 +1521,20 @@ func RestartRequired(current, candidate Config) bool {
 		current.Observability.JSONLKeepDays != candidate.Observability.JSONLKeepDays ||
 		current.Observability.JSONLDeleteAfterConvert != candidate.Observability.JSONLDeleteAfterConvert ||
 		!equalStrings(current.Observability.JSONLConvertSources, candidate.Observability.JSONLConvertSources) ||
-		current.BI.Enabled != candidate.BI.Enabled ||
-		current.BI.BridgePort != candidate.BI.BridgePort ||
-		current.BI.QueryThreads != candidate.BI.QueryThreads ||
-		current.BI.QueryMemoryLimit != candidate.BI.QueryMemoryLimit ||
-		current.BI.QueryTimeout != candidate.BI.QueryTimeout ||
-		current.BI.MaxRows != candidate.BI.MaxRows ||
-		current.BI.MaxConcurrentQueries != candidate.BI.MaxConcurrentQueries
+		current.OLAP.Enabled != candidate.OLAP.Enabled ||
+		current.OLAP.BridgePort != candidate.OLAP.BridgePort ||
+		current.OLAP.QueryThreads != candidate.OLAP.QueryThreads ||
+		current.OLAP.QueryMemoryLimit != candidate.OLAP.QueryMemoryLimit ||
+		current.OLAP.QueryTimeout != candidate.OLAP.QueryTimeout ||
+		current.OLAP.MaxRows != candidate.OLAP.MaxRows ||
+		current.OLAP.MaxConcurrentQueries != candidate.OLAP.MaxConcurrentQueries ||
+		current.Cluster.ReleaseID != candidate.Cluster.ReleaseID ||
+		current.Cluster.SecretKey != candidate.Cluster.SecretKey ||
+		current.Cluster.RegistrationTimeout != candidate.Cluster.RegistrationTimeout ||
+		current.Cluster.HeartbeatInterval != candidate.Cluster.HeartbeatInterval ||
+		current.Cluster.ProfileInterval != candidate.Cluster.ProfileInterval ||
+		current.Cluster.StaleTimeout != candidate.Cluster.StaleTimeout ||
+		current.Cluster.RequireSharedData != candidate.Cluster.RequireSharedData
 }
 
 func equalWorkers(left, right []QueueWorker) bool {

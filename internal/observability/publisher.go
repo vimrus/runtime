@@ -27,7 +27,6 @@ type Config struct {
 	DatasetRoot      string
 	SpoolPath        string
 	NodeID           string
-	ClusterID        string
 	BootID           string
 	MaxSpoolBytes    int64
 	MaxBatchRows     int
@@ -74,8 +73,8 @@ type Stats struct {
 }
 
 func NewPublisher(config Config, writer ParquetWriter) (*Publisher, error) {
-	if config.DatasetRoot == "" || config.SpoolPath == "" || config.NodeID == "" || config.ClusterID == "" || config.BootID == "" {
-		return nil, errors.New("datasetRoot, spoolPath, nodeID, clusterID and bootID are required")
+	if config.DatasetRoot == "" || config.SpoolPath == "" || config.BootID == "" {
+		return nil, errors.New("datasetRoot, spoolPath and bootID are required")
 	}
 	if writer == nil {
 		return nil, errors.New("parquet writer is required")
@@ -248,7 +247,6 @@ func (p *Publisher) SelfMetricEvents(now time.Time) []Event {
 	base := Event{
 		SchemaVersion: SchemaVersion,
 		EventTime:     now,
-		ClusterID:     p.config.ClusterID,
 		NodeID:        p.config.NodeID,
 		BootID:        p.config.BootID,
 		Source:        "runtime",
@@ -562,7 +560,7 @@ func (p *Publisher) Recover(ctx context.Context) error {
 }
 
 func validPartition(partition Partition) bool {
-	if len(partition.Date) != len("2006-01-02") || len(partition.Hour) != 2 || partition.NodeID == "" || strings.ContainsAny(partition.NodeID, `/\\`) {
+	if len(partition.Date) != len("2006-01-02") || len(partition.Hour) != 2 || strings.ContainsAny(partition.NodeID, `/\\`) {
 		return false
 	}
 	if _, err := time.Parse("2006-01-02", partition.Date); err != nil {

@@ -37,8 +37,8 @@ type Cleaner struct {
 }
 
 func New(config Config) (*Cleaner, error) {
-	if config.DatasetRoot == "" || config.NodeID == "" {
-		return nil, errors.New("datasetRoot and nodeID are required")
+	if config.DatasetRoot == "" {
+		return nil, errors.New("datasetRoot is required")
 	}
 	if config.MetricsDays <= 0 || config.LogDays <= 0 {
 		return nil, errors.New("retention days must be positive")

@@ -31,7 +31,6 @@ schemaVersion = 1
 
 [runtime]
 nodeID = "node-a"
-clusterID = "cluster-demo"
 drainTimeout = "30s"
 
 [web]

@@ -3,7 +3,7 @@ $url   = getenv('ZENTAO_OBSERVABILITY_URL');
 $token = getenv('ZENTAO_OBSERVABILITY_TOKEN');
 $node  = getenv('ZENTAO_NODE_ID');
 $boot  = getenv('ZENTAO_BOOT_ID');
-if(!$url || !$token || !$node || !$boot)
+if(!$url || !$token || $node === false || !$boot)
 {
     http_response_code(503);
     echo '{"error":{"code":"unavailable","message":"observability environment missing"}}';
@@ -13,7 +13,6 @@ if(!$url || !$token || !$node || !$boot)
 $payload = json_encode(array(
     'schemaVersion' => 1,
     'events' => array(array(
-        'clusterID' => 'cluster-smoke',
         'nodeID'    => $node,
         'bootID'    => $boot,
         'eventID'   => 'e2e-' . bin2hex(random_bytes(4)),
@@ -22,7 +21,6 @@ $payload = json_encode(array(
         'level'     => 'info',
         'message'   => 'observability bridge smoke',
     ), array(
-        'clusterID'  => 'cluster-smoke',
         'nodeID'     => $node,
         'bootID'     => $boot,
         'eventID'    => 'e2e-metric-' . bin2hex(random_bytes(4)),

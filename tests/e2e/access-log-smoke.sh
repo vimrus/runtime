@@ -76,17 +76,28 @@ for _ in $(seq 1 30); do
     sleep 1
 done
 [[ "${ready}" == "1" ]]
+docker exec "${container}" test ! -e /shared/run/node-id \
+    || { echo "single-node runtime must not generate run/node-id" >&2; exit 1; }
 
 docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/index.php?x=1"
 docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/not-found.php"
 docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/index.php?fatal=1"
 docker exec "${container}" curl --silent -o /dev/null "http://127.0.0.1:8080/index.php?token=supersecret"
+docker exec "${container}" curl --silent -o /dev/null \
+    -H "X-Zentao-Runtime-Profile-Token: profile-super-secret" \
+    "http://127.0.0.1:8080/index.php?header=1"
 sleep 1
 
-node_id="$(docker exec "${container}" cat /shared/run/node-id)"
-access_log="/shared/logs/access-${node_id}.jsonl"
+access_log="/shared/logs/access.jsonl"
 docker exec "${container}" sh -c "grep -c 'http.log.access' '${access_log}' >/dev/null" \
     || { echo "no access log entries found" >&2; exit 1; }
+for _ in $(seq 1 10); do
+    if docker exec "${container}" cat "${access_log}" \
+        | jq -e 'select(.logger | contains("http.log.access")) | select(.request.uri == "/index.php?fatal=1") | .status == 500' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+done
 docker exec "${container}" cat "${access_log}" \
     | jq -e 'select(.logger | contains("http.log.access")) | (.request.uri != null) and (.status != null) and (.duration != null)' >/dev/null \
     || { echo "access log entries missing uri/status/duration" >&2; exit 1; }
@@ -96,6 +107,9 @@ docker exec "${container}" cat "${access_log}" \
 docker exec "${container}" cat "${access_log}" \
     | jq -e 'select(.logger | contains("http.log.access")) | select(.request.uri | contains("token=")) | (.request.uri | contains("supersecret") | not) and (.request.uri | ascii_downcase | contains("redacted"))' >/dev/null \
     || { echo "sensitive query parameter leaked in access log" >&2; exit 1; }
+docker exec "${container}" cat "${access_log}" \
+    | jq -e 'select(.logger | contains("http.log.access")) | select(.request.uri == "/index.php?header=1") | (.request.headers["X-Zentao-Runtime-Profile-Token"] == null)' >/dev/null \
+    || { echo "sensitive request header leaked in access log" >&2; exit 1; }
 docker exec "${container}" cat /shared/logs/php-error.log 2>/dev/null \
     | grep -q "synthetic fatal" \
     || { echo "PHP error message missing from php-error.log" >&2; exit 1; }

@@ -21,6 +21,11 @@ case "$(basename "${staging}")" in
     *-amd64) dm8_arch="amd64" ;;
 esac
 readonly dm8_lock_key="linux_${dm8_arch}"
+readonly dm8_enabled="$(jq -r '.dm8.packaging_enabled // false' "${lock}")"
+php_patch_applied=false
+case "$(basename "${staging}")" in
+    *-amd64) php_patch_applied=true ;;
+esac
 
 if [[ ! -d "${staging}" ]]; then
     echo "staging directory does not exist: ${staging}" >&2
@@ -38,6 +43,9 @@ manifest="$(
     jq -n \
         --arg schema "$(jq -r '.schema' "${lock}")" \
         --arg phpVersion "$(jq -r '.php.version' "${lock}")" \
+        --arg phpApi "$(jq -r '.php.api' "${lock}")" \
+        --arg phpPatchPath "$(jq -r '.php.patch.path' "${lock}")" \
+        --arg phpPatchSha256 "$(jq -r '.php.patch.sha256' "${lock}")" \
         --arg phpSha256 "$(jq -r '.php.sha256' "${lock}")" \
         --arg frankenphpVersion "$(jq -r '.frankenphp.version' "${lock}")" \
         --arg frankenphpCommit "$(jq -r '.frankenphp.commit' "${lock}")" \
@@ -50,6 +58,8 @@ manifest="$(
         --arg dm8DpiSha256 "$(jq -r ".dm8.${dm8_lock_key}.dpi_sha256" "${lock}")" \
         --argjson dm8Components "$(jq -r ".dm8.${dm8_lock_key}.client_components" "${lock}")" \
         --arg dm8Arch "${dm8_arch}" \
+        --argjson dm8Enabled "${dm8_enabled}" \
+        --argjson phpPatchApplied "${php_patch_applied}" \
         --arg goVersion "$(jq -r '.go.version' "${lock}")" \
         --arg gitCommit "${git_commit}" \
         --arg gitRef "${git_ref}" \
@@ -58,24 +68,30 @@ manifest="$(
             schema: ($schema | tonumber),
             git: {commit: $gitCommit, ref: $gitRef},
             builtAt: $builtAt,
-            components: {
-                php: {version: $phpVersion, sha256: $phpSha256},
+            components: ({
+                php: ({version: $phpVersion, api: $phpApi, sha256: $phpSha256}
+                    + (if $phpPatchApplied then {
+                        patch: {path: $phpPatchPath, sha256: $phpPatchSha256}
+                    } else {} end)),
                 frankenphp: {version: $frankenphpVersion, commit: $frankenphpCommit},
                 caddy: {version: $caddyVersion},
                 duckdb: {goBinding: $duckdbVersion},
                 ioncube: {version: $ioncubeVersion},
-                dm8: {version: $dm8Version, arch: $dm8Arch, package: $dm8Package, pdoDriverSha256: $dm8DriverSha256, dpiSha256: $dm8DpiSha256, clientComponents: $dm8Components},
                 go: {version: $goVersion}
-            },
-            licenses: {
+            } + (if $dm8Enabled then {
+                dm8: {version: $dm8Version, arch: $dm8Arch, package: $dm8Package, pdoDriverSha256: $dm8DriverSha256, dpiSha256: $dm8DpiSha256, clientComponents: $dm8Components}
+            } else {} end)),
+            licenses: ({
                 php: "PHP License 3.01",
                 frankenphp: "MIT",
                 caddy: "Apache-2.0",
                 duckdb: "MIT",
                 ioncube: "proprietary-redistribution-approval-required",
-                dm8: "proprietary-redistribution-approval-required",
                 mysql: "GPL-2.0-with-linking-exception"
-            }
+            } + (if $dm8Enabled then {dm8: "proprietary-redistribution-approval-required"} else {} end)),
+            limitations: (if $dm8Enabled then [] else [
+                {component: "dm8", reason: "No vendor PDO driver matching target PHP ZTS module API"}
+            ] end)
         }'
 )"
 

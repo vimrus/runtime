@@ -401,7 +401,6 @@ Linux/Docker 多节点正式支持 NFS。Windows 的 NFS Client、服务账号�
 
 ### 12.2 必须一致的配置
 
-- Cluster ID。
 - 禅道应用、插件、Runtime、PHP 和 ionCube 版本。
 - 数据库地址、数据库名、Schema 和表前缀。
 - Session Handler 类型、Cookie 名称、Domain、Secure 和 SameSite。
@@ -414,19 +413,23 @@ Linux/Docker 多节点正式支持 NFS。Windows 的 NFS Client、服务账号�
 
 业务配置优先保存在禅道数据库中，由所有节点共享。节点本地文件只保存 Runtime 和平台配置。
 
-节点 ID 虽然允许不同，但在同一 Cluster 内必须唯一。Parquet 节点目录通过不可变 owner marker 绑定节点安装身份；发现两个在线节点使用相同 nodeID 时，冲突节点停止 Parquet 发布并进入可观测性 degraded，不能覆盖 marker 或继续清理该目录。
+节点 ID 虽然允许不同，但在共享同一业务数据库和表前缀的部署内必须唯一。Parquet 节点目录通过不可变 owner marker 绑定节点安装身份；发现两个在线节点使用相同 nodeID 时，冲突节点停止 Parquet 发布并进入可观测性 degraded，不能覆盖 marker 或继续清理该目录。
 
 ### 12.3 配置指纹
 
 Runtime 对必须一致的配置进行规范化并计算 `clusterConfigDigest`：
 
 - 不把 Secret 明文放入摘要输入或健康响应；使用 Secret ID/版本或单向摘要。
-- Readiness 和诊断输出 Cluster ID、Release ID、Schema 代数和配置指纹。
+- Readiness 和诊断输出 Release ID、Schema 代数和配置指纹。
 - 节点加入负载均衡前比较两个节点的指纹。
 - 指纹不一致时允许管理员查看差异字段类别，但不能泄露值。
 - 安全配置、应用版本或 Schema 不一致时节点不能进入 Ready。
 
 该机制用于发现漂移，不是配置中心，也不自动覆盖节点配置。
+
+节点注册、`zt_servernode` 统一模型、配置域划分、首节点基线、注册前 Cluster
+Gate 和后台差异页面的详细设计见
+[Runtime 多节点配置自动诊断](./12-cluster-config-consistency.md)。
 
 ## 13. TLS 设计
 
@@ -482,7 +485,7 @@ Keepalived 建议使用非抢占策略，升级完成后不强制让 VIP 回到�
 - 当前 VIP owner、Keepalived 状态变化和漂移次数。
 - Gateway 后端健康、摘除原因和恢复时间。
 - 每个后端连接数、请求量、延迟和状态码。
-- 节点 Release ID、Cluster ID、配置指纹和 Schema 代数。
+- 节点 Release ID、配置指纹和 Schema 代数。
 - 按 Handler 分类的 Session 读写失败、锁等待、过期和 GC；不记录 Session ID。
 - NFS 挂载身份、延迟、错误、剩余容量和只读状态。
 - 数据库、NFS 或 Redis 故障导致的降级状态。
@@ -532,13 +535,13 @@ Keepalived 建议使用非抢占策略，升级完成后不强制让 VIP 回到�
 - 数据库与 NFS 快照配对恢复。
 - 服务账号 UID/GID 和权限一致。
 - 两节点同时向不同 node 分区发布 Parquet，不发生覆盖或锁竞争。
-- 重复 nodeID、错误 Cluster ID 和目录 owner marker 不匹配时拒绝发布。
+- 重复 nodeID 和目录 owner marker 不匹配时拒绝发布。
 - 临时 Parquet 不可见、原子 rename、Batch ID 幂等和崩溃补发。
 - Parquet NFS 中断期间本地 spool 有界增长，恢复后无重复补发。
 
 ### 18.4 配置与升级测试
 
-- Cluster ID、版本、Schema 和安全配置漂移检测。
+- 版本、Schema 和安全配置漂移检测。
 - 兼容版本滚动升级和节点排空。
 - 不兼容 Schema 升级自动拒绝滚动模式。
 - Keepalived 非抢占和升级后的稳定性。

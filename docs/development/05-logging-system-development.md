@@ -100,7 +100,6 @@ logPath = "logs/runtime.log"
 logMaxBytes = 16777216
 logMaxBackups = 5
 nodeID = "node-a"
-clusterID = "cluster-prod-1"
 auditLog = ""
 
 [observability]
@@ -135,7 +134,9 @@ PHP       = <install-root>/logs/php-error.log
 应用日志  = <dataDir>/observability/raw-logs/<topic>-<nodeID>-<date>.jsonl（file 模式，ZENTAO_LOG_DIR）
 ```
 
-因此不要假设 `runtime.logPath` 的 basename 会成为最终 Runtime 日志文件名。`nodeID` 为空时由 Runtime 从 `run/node-id` 持久化生成；多节点部署必须显式使用稳定且唯一的节点标识。
+因此不要假设 `runtime.logPath` 的 basename 会成为最终 Runtime 日志文件名。
+`nodeID` 为空表示单节点，Runtime 使用 `runtime.jsonl`、`access.jsonl` 和
+`audit.jsonl`，不生成隐藏节点标识。多节点部署必须显式使用稳定且唯一的节点标识。
 
 ### 4.3 文件权限
 
@@ -554,7 +555,7 @@ runtime/tests/e2e/observability-fault-recovery-smoke.sh [app-package|app-dir]
 
 - [x] `schemaVersion`、事件字段和跨仓契约版本一致。
 - [x] Runtime、Caddy、Audit、PHP 四类日志目录和权限已检查。
-- [x] `nodeID` 在每个节点稳定且唯一，`clusterID` 一致。
+- [x] `nodeID` 在每个节点稳定且唯一。
 - [x] 日志脱敏测试覆盖新增字段和 query 参数策略。
 - [x] active/rotated JSONL 文件名符合转换器正则。
 - [x] `jsonlConvertSources` 只使用受支持的 `access`/`runtime`。

@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 已实施（Linux amd64/arm64 与 Windows x64 构建通过） |
-| 日期 | 2026-08-18 |
+| 状态 | 已实施（PHP 8.4.27 Linux amd64 验证通过；arm64/Windows 回归待完成） |
+| 日期 | 2026-10-27 |
 | PHP 基线 | PHP 8.4 ZTS |
 | Web Runtime | 自研 Go Host + Caddy Library + FrankenPHP Library（Classic mode） |
 | 数据库 | MySQL，兼容外部 PostgreSQL |
@@ -28,7 +28,8 @@
 
 ## 3. 核心结论
 
-方案可行，但 Linux Runtime 不能直接使用未修改的 PHP 8.4 ZTS 解释器。
+PHP 8.4 ZTS 的 Linux arm64 Runtime 不需要 `zend_signal` ABI Shim；
+Linux amd64 仍需要针对当前 ionCube Loader 的最小 Shim。
 
 FrankenPHP 要求 PHP 使用 ZTS，并推荐以如下参数编译：
 
@@ -39,7 +40,9 @@ FrankenPHP 要求 PHP 使用 ZTS，并推荐以如下参数编译：
 --enable-zend-max-execution-timers
 ```
 
-`--disable-zend-signals` 可以避免 PHP 的 Zend Signals 与 Go runtime 的信号处理发生冲突，但 ionCube Linux x86_64 PHP 8.4 TS Loader 会引用被移除的三个符号：
+`--disable-zend-signals` 用于避免 PHP 的 Zend Signals 与 Go runtime 的
+信号处理发生冲突。经检查，ionCube Loader 15.5.1 的 Linux amd64 PHP 8.4 TS
+Loader 仍引用以下符号：
 
 ```text
 zend_signal_globals_id
@@ -47,15 +50,10 @@ zend_signal_globals_offset
 zend_signal_handler_unblock
 ```
 
-解决方式是在保持 `ZEND_SIGNALS` 关闭的前提下，为 PHP 增加一个最小 ABI 兼容层：
-
-- `zend_signal_globals_id` 始终为 `0`。
-- `zend_signal_globals_offset` 始终为 `0`。
-- `zend_signal_handler_unblock()` 为空函数。
-- 不注册、不接管、不转发任何操作系统信号。
-- 不恢复 Zend Signals 的结构、队列和请求生命周期逻辑。
-
-ionCube Loader 在访问 TSRM offset 前会判断 `zend_signal_globals_id != 0`。保持该值为 `0` 后，Loader 中的信号中断保护逻辑会整体短路，不会读取无效的 TSRM 内存。
+Linux arm64 和 Windows x86_64 的 PHP 8.4 Loader 不引用这些符号。因此仅
+Linux amd64 构建保持 `ZEND_SIGNALS` 关闭并应用最小 Shim；arm64 与 Windows
+不导出这些符号。每次升级 PHP 或 ionCube 时仍须重新执行未定义符号检查；
+出现新依赖时构建直接失败，不得自动增加兼容空实现。
 
 ## 4. 交付物矩阵
 
@@ -65,9 +63,9 @@ ionCube Loader 在访问 TSRM offset 前会判断 `zend_signal_globals_id != 0`�
 |---|---|---|---|
 | Windows Runtime | `zentao-runtime` + Caddy + FrankenPHP + DuckDB + PHP 8.4 TS | 外部 MySQL/PostgreSQL | x86_64 |
 | Windows Full | 同上 | 内置 MySQL 8.4 LTS | x86_64 |
-| Linux Runtime | `zentao-runtime` + Caddy + FrankenPHP + DuckDB + patched PHP 8.4 ZTS | 外部 MySQL/PostgreSQL | amd64、arm64 |
+| Linux Runtime | `zentao-runtime` + Caddy + FrankenPHP + DuckDB + PHP 8.4 ZTS | 外部 MySQL/PostgreSQL | amd64、arm64 |
 | Linux Full | 同上 | 内置 MySQL 8.4 LTS | amd64、arm64 |
-| Docker | Debian + `zentao-runtime` + DuckDB + patched PHP 8.4 ZTS | 独立 MySQL 容器或外部数据库 | amd64、arm64 |
+| Docker | Debian + `zentao-runtime` + DuckDB + PHP 8.4 ZTS | 独立 MySQL 容器或外部数据库 | amd64、arm64 |
 
 Docker 中 FrankenPHP 与 MySQL 必须使用不同容器。默认 Compose 可以启动 MySQL，也应允许禁用 MySQL 服务并连接外部 MySQL 或 PostgreSQL。
 
@@ -104,68 +102,31 @@ Classic mode 表示每次 HTTP 请求都重新初始化和释放禅道 PHP 请�
 
 Runtime Host 的详细架构参见 [Caddy + FrankenPHP Library Runtime Host 设计](./01-runtime-host.md)。
 
-## 6. PHP ionCube ABI 补丁
+## 6. PHP ionCube ABI 兼容性
 
-### 6.1 最小补丁
+### 6.1 按架构应用 Shim
 
-建议仅修改 PHP 8.4 的 `Zend/zend_signal.c`，将文件末尾原有的
-`#endif /* ZEND_SIGNALS */` 替换为以下内容：
-
-```c
-#else /* !ZEND_SIGNALS */
-
-#if defined(ZTS) && !defined(PHP_WIN32)
-
-ZEND_API int zend_signal_globals_id = 0;
-ZEND_API size_t zend_signal_globals_offset = 0;
-
-ZEND_API void zend_signal_handler_unblock(void);
-
-ZEND_API void zend_signal_handler_unblock(void)
-{
-}
-
-#endif
-#endif /* ZEND_SIGNALS */
-```
-
-### 6.2 不采用完整空实现的原因
-
-不建议在 `zend_signal.h` 中恢复完整的结构、宏和函数声明，也不建议提供下列空实现：
-
-```text
-zend_signal_startup
-zend_signal_activate
-zend_signal_deactivate
-zend_signal_handler
-zend_signal_globals_ctor
-zend_signal_globals_dtor
-zend_signal_handler_defer
-zend_sigaction
-zend_signal
-zend_signal_init
-```
-
-原因如下：
-
-1. 当前 ionCube PHP 8.4 TS Loader 没有引用这些符号。
-2. PHP 8.4 中部分函数的签名和可见性已经变化，例如 `zend_signal_startup()` 返回 `void`。
-3. 完整复制 `siginfo_t`、`struct sigaction`、队列和 globals 结构会增加 Windows、Linux libc 和 PHP 小版本之间的兼容风险。
-4. 最小 ABI shim 不会创建假的 TSRM 槽，也不会让其他代码误以为 Zend Signals 已启用。
-
-### 6.3 平台差异
-
-截至 2026-08-17，对当前 ionCube PHP 8.4 Loader 的检查结果如下：
+截至 2026-10-27，ionCube Loader 15.5.1 的 PHP 8.4 TS Loader 检查结果如下：
 
 | 平台 Loader | `zend_signal_*` 未定义符号 |
 |---|---|
 | Linux x86_64 TS | 上述三个符号 |
-| Linux ARM64 TS | 当前未发现 |
-| Windows x86_64 TS | 当前未发现，Loader 依赖 `php8ts.dll` |
+| Linux ARM64 TS | 无 |
+| Windows x86_64 TS | 无 |
 
-为了保持 Linux Runtime 一致，Linux amd64 和 arm64 可以使用同一份 PHP 补丁。Windows 不应用该补丁。
+因此仅 Linux amd64 保持 Zend Signals 关闭并应用 PHP 8.4 最小 Shim，只
+导出 `zend_signal_globals_id`、`zend_signal_globals_offset` 和
+`zend_signal_handler_unblock`，其中 globals 保持 `0`。Linux arm64 和
+Windows 保持 Zend Signals 关闭，但不应用 Shim、也不导出这些符号。
 
-每次升级 PHP 或 ionCube Loader 时，必须重新检查 Loader 的未定义符号。如果出现新的 `zend_signal_*` 依赖，构建流水线应直接失败，不允许自动增加未经评审的空实现。
+### 6.2 升级检查
+
+每次升级 PHP、ionCube Loader 或目标架构时，CI 必须重新检查 Loader 的
+`zend_signal_*` 未定义符号。预期集合为 amd64 的三个已评审符号、arm64 的
+空集合；任何新依赖都必须阻断构建并单独评审，不允许扩大 amd64 的符号集合。
+
+Loader 仍须与 PHP 8.4 ZTS 的模块 API `20240924` 匹配，并通过 Web、CLI
+和 OPcache 组合的 ionCube 探针。
 
 ## 7. Runtime 构建方案
 
@@ -176,7 +137,7 @@ zend_signal_init
 ```text
 下载固定版本 PHP 8.4 源码
   -> 校验源码 SHA256
-  -> 应用 ionCube ABI patch
+  -> Linux amd64 应用最小 ionCube ABI patch（arm64 不应用）
   -> 运行 configure
   -> 编译并安装 libphp.so 和 PHP 扩展
   -> 以 Go modules 链接固定版本 Caddy 和 FrankenPHP
@@ -267,6 +228,10 @@ session.use_strict_mode=1
 session.lazy_write=1
 opcache.enable=1
 ```
+
+Runtime 关闭 `opcache.validate_timestamps`，避免生产请求在热路径反复检查应用
+文件。应用目录中的 PHP 文件发生变化后必须完整重启 Runtime；`reload` 只更新
+Caddy 配置，不能清空当前 PHP 进程的 OPcache。
 
 具体数值应在性能和大附件测试后确定，并允许管理员通过独立覆盖文件修改。
 
@@ -403,7 +368,7 @@ CI 必须分别执行 MySQL 和 PostgreSQL 的以下测试：
 - 文件 Session 必须尊重显式 `session.save_path`，API `apisession` 也不能在多节点下回退本地目录。
 - 附件由所有应用节点挂载同一个 NFSv4.1 文件系统。
 - DuckDB 不共享 `.duckdb` 文件；两个节点在 NFS 上共享指标/日志 Parquet 数据集，并只向各自的节点分区发布不可变 part 文件。
-- 节点 Runtime 配置分别维护，通过 Cluster ID、Release ID、Schema 代数和配置指纹发现漂移。
+- 节点 Runtime 配置分别维护，通过共享业务数据库/表前缀、Release ID、Schema 代数和配置指纹发现漂移。
 - 客户已有云、硬件或托管负载均衡时优先接入。
 - 只有两个 Linux 节点且没有外部负载均衡时，使用 Keepalived 浮动 VIP 和内嵌 Caddy Gateway。
 - 使用共享 NFS 或 Redis Session 时，Caddy Gateway 使用 `least_conn`，不依赖 Session Sticky，也不自动重试非幂等请求。
@@ -476,7 +441,7 @@ PHP 源码版本、PHP API 和 SHA256
 Caddy/FrankenPHP Go module 版本、commit 和校验
 Runtime Host version/commit
 ionCube Loader 版本和 SHA256
-PHP ABI patch SHA256
+PHP ABI patch SHA256（仅 Linux amd64）
 configure 参数
 编译器和链接器版本
 PHP 扩展版本
@@ -499,10 +464,10 @@ readelf -Ws libphp.so | grep zend_signal
 
 要求：
 
-- `libphp.so` 导出三个兼容符号。
-- ionCube Loader 不存在其他未满足的 `zend_signal_*` 依赖。
+- Linux amd64 Loader 的 `zend_signal_*` 未定义符号精确等于上述三个符号。
+- Linux arm64 Loader 不存在 `zend_signal_*` 未定义符号。
+- Linux amd64 `libphp.so` 只导出上述三个兼容符号；arm64 不导出。
 - Runtime 仍报告 Zend Signal Handling 为 disabled。
-- `zend_signal_globals_id` 在进程生命周期内保持为 `0`。
 
 ### 16.2 功能与稳定性检查
 
@@ -537,9 +502,10 @@ readelf -Ws libphp.so | grep zend_signal
 | 风险 | 影响 | 对策 |
 |---|---|---|
 | ionCube 新版本增加信号符号依赖 | Loader 无法加载或发生运行时错误 | CI 检查未定义符号，Loader 升级必须重新评审 |
-| PHP 8.4 小版本修改 Zend ABI | 补丁失败或扩展不兼容 | 固定版本，patch apply check，完整回归后升级 |
+| PHP 8.4 小版本修改 Zend ABI | 扩展不兼容 | 固定版本，完整 ABI 与扩展回归后升级 |
 | 用户单独替换 PHP/Loader | 破坏已验证的 Runtime 组合 | Runtime 整体升级，启动时校验组件版本和哈希 |
-| Zend Signals shim 被误认为已启用 | 第三方扩展访问无效 TSRM 数据 | `id` 固定为 0，不恢复头文件宏和 globals 结构 |
+| 信号 ABI Shim 被扩大或误用于 arm64 | 第三方扩展访问无效 TSRM 数据 | 仅 amd64 应用，构建时精确检查三个导出符号 |
+| 达梦驱动与 PHP 8.4 小版本 ABI 漂移 | 信创数据库无法连接 | 固定驱动和 PHP 版本，加载与真实 DM8 契约测试通过后发布 |
 | Linux 发行版共享库差异 | Runtime 无法启动 | 统一 glibc 基线，检查依赖，提供支持矩阵 |
 | Windows Defender 误报 | 安装包被拦截 | 代码签名、稳定下载地址、发布前多引擎扫描 |
 | 内置 MySQL 数据损坏或升级失败 | 用户数据不可用 | 独立数据目录、升级前备份、恢复演练 |
@@ -551,9 +517,8 @@ readelf -Ws libphp.so | grep zend_signal
 
 ### 阶段一：Linux amd64 PoC
 
-- 建立 PHP 8.4 最小 ABI patch。
 - 构建动态 `libphp.so` 和最小 Caddy + FrankenPHP Library Runtime Host。
-- 加载 ionCube PHP 8.4 TS Loader。
+- 检查 ionCube PHP 8.4 TS Loader 的未定义符号；仅 amd64 应用最小 Shim。
 - 验证付费版、Classic mode、并发和信号行为。
 
 ### 阶段二：统一 Runtime
@@ -599,7 +564,9 @@ readelf -Ws libphp.so | grep zend_signal
 - DuckDB Go API：<https://github.com/duckdb/duckdb-go>
 - DuckDB Parquet 文档：<https://duckdb.org/docs/stable/data/parquet/overview>
 
-## 22. 实施状态（2026-08-19）
+## 22. 实施状态
+
+### 历史状态（2026-08-19）
 
 - Linux amd64：PHP 8.4.24 ZTS + ionCube Loader + DuckDB 构建与 PoC 全链路
   验证通过。
@@ -607,5 +574,18 @@ readelf -Ws libphp.so | grep zend_signal
   组装，ionCube arm64 Loader 校验通过。
 - Windows x86_64：在 `windows-2025` 原生 Runner 上完成构建、ionCube
   Loader 加载验证与 Full 包组装。
-- ionCube 符号检查与 `zend_signal` ABI Shim 保持最小范围；Loader 升级时
-  仍需重新执行未定义符号 diff。
+- ionCube 符号检查与 `zend_signal` ABI Shim 保持最小范围；该 Shim 仅适用
+  于当时的 PHP 8.4 组合。
+
+### PHP 8.4.27 升级（2026-10-27）
+
+- PHP 源码锁定为 8.4.27，PHP ZTS 模块 API 为 `20240924`。
+- ionCube Loader 保持 15.5.1，目标 Loader 为
+  `ioncube_loader_lin_8.4_ts.so` / `ioncube_loader_win_8.4.dll`。
+- amd64 Loader 仍依赖三个 `zend_signal_*` 符号，仅该架构应用最小 Shim；
+  arm64 与 Windows 不依赖这些符号，也不应用 Shim。
+- 达梦厂商驱动提供 PHP 8.4 ZTS/API `20240924` 的
+  `php84ts_pdo_dm.so`，与本次运行时基线匹配。
+- Linux amd64 已完成 PHP 8.4.27 ZTS、ionCube、phpredis、APCu、OPcache、
+  DM8、CGO Runtime、artifact 与 synthetic application smoke。
+- Linux arm64 与 Windows 的 8.4.27 原生回归在发布前重新执行。

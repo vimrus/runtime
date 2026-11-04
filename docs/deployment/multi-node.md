@@ -13,7 +13,7 @@
        -> 节点 B Runtime
 
 节点 A/B 共同使用：数据库、共享 data 根（附件与备份、观测数据集；Session 为 NFS 或 Redis）
-节点 A/B 分别保存：Runtime 配置、PID、日志、缓存、观测 spool、node-id（存于本地 `run/node-id`）
+节点 A/B 分别保存：Runtime 配置、PID、日志、缓存和观测 spool
 ```
 
 数据库、NFS、Redis 和负载均衡的高可用由部署环境负责。Runtime 不提供配置中心，也不直接连接业务数据库或 Redis。
@@ -24,7 +24,6 @@
 
 ### 两台机器保持一致
 
-- `runtime.clusterID`
 - 应用、PHP、Runtime 和扩展版本
 - `[[apps]]` 应用清单（id、path、webRoot）和各应用的目录布局、监听端口和线程策略
 - 数据库、Session、附件、Queue Bridge 和安全相关配置
@@ -32,7 +31,7 @@
 
 ### 每台机器分别设置
 
-- `runtime.nodeID`：同一集群内唯一，例如 `node-a`、`node-b`
+- `runtime.nodeID`：多节点部署必须配置，且同一部署内唯一，例如 `node-a`、`node-b`
 - `runtime.controlSocket` 和 `runtime.pidFile`：默认使用各自 Runtime 根目录下的 `run/`，只有需要特殊目录时才覆盖
 - `runtime.logPath`、`runtime.auditLog`：建议写入各自本地日志目录
 - `observability.spoolPath`：每台机器使用自己的本地 spool
@@ -42,7 +41,6 @@
 ```toml
 [runtime]
 nodeID = "node-a"
-clusterID = "cluster-prod-1"
 controlSocket = "run/runtime.sock"
 pidFile = "run/runtime.pid"
 logPath = "logs/runtime.log"
@@ -74,7 +72,7 @@ Session 和附件不由 Runtime 配置管理：
 - 两台机器必须使用同一个规范化 Session 路径、Cookie 参数和锁策略。
 - 附件目录必须挂载同一份 NFSv4.1 共享存储，并在禅道应用配置中使用相同逻辑路径。
 - 不要在多节点模式下让两台机器各自写本地 Session 或附件目录。
-- NFS/Redis 不可用时不能静默回退到本地目录；使用对应后端的节点应进入 Not Ready。
+- NFS/Redis 不可用时不能静默回退到本地目录；节点应在运行诊断中显示对应错误。
 
 切换 Session 后端不迁移旧 Session，已有用户重新登录是预期行为。
 
@@ -105,7 +103,7 @@ Session 和附件不由 Runtime 配置管理：
 
 ## 上线步骤
 
-1. 检查两个节点的 `clusterID`、应用版本、数据库和共享存储配置一致。
+1. 检查两个节点的应用版本、数据库和共享存储配置一致。
 2. 确认两个 `nodeID` 唯一，且 Session、附件和 Parquet 挂载路径可写并具有正确权限。
 3. 分别执行 `zentao health --deep`，确认 PHP Session、附件、数据库和观测检查通过。
 4. 先只将节点 A 加入负载均衡，验证登录、上传、下载和 Queue，再加入节点 B。

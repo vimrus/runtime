@@ -9,18 +9,23 @@
     "runtime": "mcr.microsoft.com/mirror/docker/library/debian:bookworm-slim@sha256:b4aa902587c2e61ce789849cb54c332b0400fe27b1ee33af4669e1f7e7c3e22f"
   },
   "php": {
-    "version": "8.4.24",
-    "url": "https://www.php.net/distributions/php-8.4.24.tar.xz",
-    "sha256": "e127be09a8506f4327c5cfa78a614b00d210714484ec215ce0011b4a03c00731",
+    "version": "8.4.27",
+    "api": "20240924",
+    "patch": {
+      "path": "patches/php/8.4/0001-ioncube-zend-signal-abi-shim.patch",
+      "sha256": "d12896c5026ac58f2bdc3198001e1eae40dd2a79c666937bb4543ce538633a77"
+    },
+    "url": "https://www.php.net/distributions/php-8.4.27.tar.xz",
+    "sha256": "dcf93923b0e38e0d5252b25b796520b5a47761a08b3488b6d0b5d1115764d3f0",
     "license": "PHP License 3.01",
     "windows": {
       "runtime": {
-        "url": "https://downloads.php.net/~windows/releases/archives/php-8.4.24-Win32-vs17-x64.zip",
-        "sha256": "7b57fc9840273ab153834d0e2bd06e0bcf4fead36e381182b4b8fe9cedff3174"
+        "url": "https://downloads.php.net/~windows/releases/archives/php-8.4.27-1-Win32-vs17-x64.zip",
+        "sha256": "53db2047139bdfb8e6c7c7d5860a0a6a2a4f1dcac49fcf18ae610a14d8ccdf5b"
       },
       "development": {
-        "url": "https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.4.24-Win32-vs17-x64.zip",
-        "sha256": "893f5b8ffe515eb07c080e1bdba8cbb0ddf935c76fc1088ddbe46d46f528236c"
+        "url": "https://downloads.php.net/~windows/releases/archives/php-devel-pack-8.4.27-1-Win32-vs17-x64.zip",
+        "sha256": "f712946909d85eac71f50de8fd78462df9c78174a3b4d79c613f5090aa342c9f"
       }
     },
     "configure": [
@@ -123,6 +128,9 @@
     "version": "20260710",
     "php": "8.4",
     "api": "20240924",
+    "required_php": "8.4",
+    "required_api": "20240924",
+    "packaging_enabled": true,
     "thread_safety": "zts",
     "license": "proprietary-redistribution-approval-required",
     "vendor": "packaging/runtime/third-party/dm8",
@@ -172,7 +180,7 @@
     "locked": true
   },
   "ioncube": {
-    "version": "15.5",
+    "version": "15.5.1",
     "php": "8.4",
     "license": "proprietary-redistribution-approval-required",
     "linux_amd64": {
@@ -183,15 +191,15 @@
     },
     "linux_arm64": {
       "url": "https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_aarch64.tar.gz",
-      "archive_sha256": "4cdc3dcbc75aa6335d34a756d05a58ea91c1aeaee8a922b5028e68aa1cb776fb",
+      "archive_sha256": "b091974aa80a76bd798d71fd5209797d93749b0be13eaff978a3dbe0106b9e1f",
       "loader": "ioncube_loader_lin_8.4_ts.so",
-      "loader_sha256": "82db73f1a7d48e924050d7fd406775e9554e2cdd5581d93b93cd720d4b17b7e7"
+      "loader_sha256": "48a515afc60a8e02267d4960e48b16925b9f5b8642db1bcb68b074f6c3e7ed88"
     },
     "windows_x64": {
       "url": "https://downloads.ioncube.com/loader_downloads/ioncube_loaders_win_vc17_x86-64.zip",
-      "archive_sha256": "2899bdfaf9d3201ff5dee04dc2dae505938ce9316b3d1b2d13f8aadd4dd0881e",
+      "archive_sha256": "783b4d7a0946aadfa284f8d085531a2ab7ac6f0f3964db51a1771849f24af566",
       "loader": "ioncube_loader_win_8.4.dll",
-      "loader_sha256": "560f80d7daf554dea88fd0042ae634014b487b9a2d9f0c9bfab7e2fdbf947abd"
+      "loader_sha256": "b65d17855a91aa6138f744ef15cb6f50c78f18aa8694cc896a4dbd07843b6b84"
     }
   }
 }

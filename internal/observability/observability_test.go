@@ -47,13 +47,12 @@ func (w *flakyWriter) WriteParquet(ctx context.Context, kind Kind, targetPath st
 
 func TestNormalizeFillsEnvelopeAndRedacts(t *testing.T) {
 	event, err := Normalize(Event{
-		ClusterID: "cluster-a",
-		NodeID:    "node-a",
-		BootID:    "boot-a",
-		Source:    "php",
-		Kind:      KindLogs,
-		Message:   strings.Repeat("x", 20000),
-		Fields:    map[string]string{"db_password": "hunter2", "user": "zentao"},
+		NodeID:  "node-a",
+		BootID:  "boot-a",
+		Source:  "php",
+		Kind:    KindLogs,
+		Message: strings.Repeat("x", 20000),
+		Fields:  map[string]string{"db_password": "hunter2", "user": "zentao"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +69,7 @@ func TestNormalizeFillsEnvelopeAndRedacts(t *testing.T) {
 }
 
 func TestNormalizeRedactsCredentialsInMessage(t *testing.T) {
-	event, err := Normalize(Event{ClusterID: "c", NodeID: "n", BootID: "b", Source: "php", Kind: KindLogs, Message: "Authorization Bearer abc123"})
+	event, err := Normalize(Event{NodeID: "n", BootID: "b", Source: "php", Kind: KindLogs, Message: "Authorization Bearer abc123"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,9 +78,30 @@ func TestNormalizeRedactsCredentialsInMessage(t *testing.T) {
 	}
 }
 
+func TestNormalizeAllowsEmptyNodeID(t *testing.T) {
+	event, err := Normalize(Event{BootID: "b", Source: "php", Kind: KindLogs, Message: "single node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.NodeID != "" {
+		t.Fatalf("nodeID = %q, want empty", event.NodeID)
+	}
+}
+
+func TestEmptyNodeUsesEmptyPartitionName(t *testing.T) {
+	now := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	partition := PartitionFor(now, "")
+	if got := partition.Directory("/data", KindLogs); !strings.HasSuffix(got, "/node=") {
+		t.Fatalf("partition directory = %q, want empty node partition", got)
+	}
+	if got := BatchID("", "boot-a", 42); got != "boot-a-00000000000000000042" {
+		t.Fatalf("batch ID = %q", got)
+	}
+}
+
 func TestNormalizeRejectsUnregisteredMetricName(t *testing.T) {
 	_, err := Normalize(Event{
-		ClusterID: "c", NodeID: "n", BootID: "b", Source: "php",
+		NodeID: "n", BootID: "b", Source: "php",
 		Kind: KindMetrics, MetricName: "user.supplied.name", MetricKind: "counter",
 	})
 	if err == nil {
@@ -91,7 +111,7 @@ func TestNormalizeRejectsUnregisteredMetricName(t *testing.T) {
 
 func TestNormalizeRejectsInvalidMetricKind(t *testing.T) {
 	_, err := Normalize(Event{
-		ClusterID: "c", NodeID: "n", BootID: "b", Source: "php",
+		NodeID: "n", BootID: "b", Source: "php",
 		Kind: KindMetrics, MetricName: "observability_events_received_total", MetricKind: "histogram",
 	})
 	if err == nil {
@@ -119,7 +139,7 @@ func TestMetricRegistryIsStableAndRejectsUnknownNames(t *testing.T) {
 
 func TestPublisherRejectsNilWriter(t *testing.T) {
 	root := t.TempDir()
-	_, err := NewPublisher(Config{DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"), NodeID: "n", ClusterID: "c", BootID: "b"}, nil)
+	_, err := NewPublisher(Config{DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"), NodeID: "n", BootID: "b"}, nil)
 	if err == nil {
 		t.Fatal("publisher must reject a nil parquet writer")
 	}
@@ -135,7 +155,6 @@ func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 		DatasetRoot:   filepath.Join(root, "dataset"),
 		SpoolPath:     filepath.Join(root, "spool"),
 		NodeID:        "node-a",
-		ClusterID:     "cluster-a",
 		BootID:        "boot-a",
 		MaxBatchRows:  2,
 		MaxBatchBytes: 1 << 20,
@@ -146,7 +165,7 @@ func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	for i := 0; i < 3; i++ {
-		if err := publisher.Add(ctx, Event{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindLogs, EventTime: now, Message: "m"}); err != nil {
+		if err := publisher.Add(ctx, Event{NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindLogs, EventTime: now, Message: "m"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -178,7 +197,7 @@ func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 	// final file does not exist.
 	spoolData, _ := json.Marshal(spoolFile{
 		Record: BatchRecord{BatchID: "node-a-boot-a-00000000000000000042", Kind: KindLogs, Partition: PartitionFor(now, "node-a"), Rows: 1, FinalPath: filepath.Join(root, "dataset", "logs", "schema=v1", "date="+now.Format("2006-01-02"), "hour="+now.Format("15"), "node=node-a", "part-node-a-boot-a-00000000000000000042.parquet"), SpoolPath: filepath.Join(root, "spool", "logs-node-a-boot-a-00000000000000000042.json")},
-		Events: []Event{{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindLogs, EventTime: now, Message: "recovered"}},
+		Events: []Event{{NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindLogs, EventTime: now, Message: "recovered"}},
 	})
 	spoolPath := filepath.Join(root, "spool", "logs-node-a-boot-a-00000000000000000042.json")
 	if err := os.WriteFile(spoolPath, spoolData, 0o600); err != nil {
@@ -188,7 +207,6 @@ func TestPublisherWritesImmutablePartFilesAndRecovers(t *testing.T) {
 		DatasetRoot:   filepath.Join(root, "dataset"),
 		SpoolPath:     filepath.Join(root, "spool"),
 		NodeID:        "node-a",
-		ClusterID:     "cluster-a",
 		BootID:        "boot-a",
 		MaxBatchRows:  2,
 		MaxBatchBytes: 1 << 20,
@@ -217,7 +235,6 @@ func TestPublisherAddBatchRejectsPartialAcceptance(t *testing.T) {
 		DatasetRoot:   filepath.Join(root, "dataset"),
 		SpoolPath:     filepath.Join(root, "spool"),
 		NodeID:        "node-a",
-		ClusterID:     "cluster-a",
 		BootID:        "boot-a",
 		MaxBatchRows:  100,
 		MaxBatchBytes: 1 << 20,
@@ -227,9 +244,9 @@ func TestPublisherAddBatchRejectsPartialAcceptance(t *testing.T) {
 	}
 	ctx := context.Background()
 	now := time.Now().UTC()
-	valid := Event{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "php", Kind: KindLogs, EventTime: now, Message: "ok"}
+	valid := Event{NodeID: "node-a", BootID: "boot-a", Source: "php", Kind: KindLogs, EventTime: now, Message: "ok"}
 	invalid := valid
-	invalid.ClusterID = ""
+	invalid.BootID = ""
 
 	if _, err := publisher.AddBatch(ctx, []Event{valid, invalid}); err == nil {
 		t.Fatal("batch containing an invalid event must be rejected")
@@ -264,13 +281,13 @@ func TestPublisherDoesNotExposeTempFilesAsParquet(t *testing.T) {
 	writer := &recordingWriter{}
 	publisher, err := NewPublisher(Config{
 		DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"),
-		NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		NodeID: "node-a", BootID: "boot-a",
 		MaxBatchRows: 1, MaxBatchBytes: 1 << 20,
 	}, writer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.Add(context.Background(), Event{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindMetrics, EventTime: time.Now().UTC(), MetricName: "observability_events_received_total", MetricKind: "counter"}); err != nil {
+	if err := publisher.Add(context.Background(), Event{NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindMetrics, EventTime: time.Now().UTC(), MetricName: "observability_events_received_total", MetricKind: "counter"}); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a crash before rename: the temp file must not match *.parquet.
@@ -291,14 +308,14 @@ func TestPublisherRepublishesSpoolAfterRecovery(t *testing.T) {
 	flaky := &flakyWriter{failures: 1, delegate: delegate}
 	publisher, err := NewPublisher(Config{
 		DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"),
-		NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		NodeID: "node-a", BootID: "boot-a",
 		MaxBatchRows: 2, MaxBatchBytes: 1 << 20,
 	}, flaky)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if err := publisher.Add(ctx, Event{ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindLogs, EventTime: time.Now().UTC(), Message: "m"}); err != nil {
+	if err := publisher.Add(ctx, Event{NodeID: "node-a", BootID: "boot-a", Source: "runtime", Kind: KindLogs, EventTime: time.Now().UTC(), Message: "m"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := publisher.Flush(ctx, KindLogs); err == nil {
@@ -323,14 +340,14 @@ func TestPublisherRepublishesSpoolAfterRecovery(t *testing.T) {
 func TestPublisherDoesNotCreateMissingDatasetRoot(t *testing.T) {
 	root := t.TempDir()
 	dataset := filepath.Join(root, "dataset")
-	publisher, err := NewPublisher(Config{DatasetRoot: dataset, SpoolPath: filepath.Join(root, "spool"), NodeID: "n", ClusterID: "c", BootID: "b"}, &recordingWriter{})
+	publisher, err := NewPublisher(Config{DatasetRoot: dataset, SpoolPath: filepath.Join(root, "spool"), NodeID: "n", BootID: "b"}, &recordingWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(dataset); !os.IsNotExist(err) {
 		t.Fatalf("dataset root was created: %v", err)
 	}
-	if err := publisher.Add(context.Background(), Event{ClusterID: "c", NodeID: "n", BootID: "b", Source: "runtime", Kind: KindLogs, Message: "m"}); err != nil {
+	if err := publisher.Add(context.Background(), Event{NodeID: "n", BootID: "b", Source: "runtime", Kind: KindLogs, Message: "m"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := publisher.Flush(context.Background(), KindLogs); err == nil {
@@ -351,7 +368,6 @@ func TestPublisherDropsBatchWhenSpoolQuotaExceeded(t *testing.T) {
 		DatasetRoot:   dataset,
 		SpoolPath:     filepath.Join(root, "spool"),
 		NodeID:        "node-a",
-		ClusterID:     "cluster-a",
 		BootID:        "boot-a",
 		MaxSpoolBytes: 1,
 		MaxBatchRows:  1,
@@ -361,7 +377,7 @@ func TestPublisherDropsBatchWhenSpoolQuotaExceeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = publisher.Add(context.Background(), Event{
-		ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+		NodeID: "node-a", BootID: "boot-a",
 		Source: "runtime", Kind: KindLogs, Message: "quota test",
 	})
 	if err == nil {
@@ -389,7 +405,6 @@ func TestPublisherSelfMetricEventsAreRegisteredAndDeltaBased(t *testing.T) {
 		DatasetRoot:   dataset,
 		SpoolPath:     filepath.Join(root, "spool"),
 		NodeID:        "node-a",
-		ClusterID:     "cluster-a",
 		BootID:        "boot-a",
 		MaxBatchRows:  100,
 		MaxBatchBytes: 1 << 20,
@@ -399,7 +414,7 @@ func TestPublisherSelfMetricEventsAreRegisteredAndDeltaBased(t *testing.T) {
 	}
 	ctx := context.Background()
 	if err := publisher.Add(ctx, Event{
-		ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+		NodeID: "node-a", BootID: "boot-a",
 		Source: "runtime", Kind: KindLogs, Message: "self metric test",
 	}); err != nil {
 		t.Fatal(err)
@@ -446,7 +461,6 @@ func TestPublisherShouldFlushBatchingPolicy(t *testing.T) {
 		DatasetRoot:      dataset,
 		SpoolPath:        filepath.Join(root, "spool"),
 		NodeID:           "node-a",
-		ClusterID:        "cluster-a",
 		BootID:           "boot-a",
 		MaxBatchRows:     100,
 		MaxBatchBytes:    1 << 20,
@@ -462,7 +476,7 @@ func TestPublisherShouldFlushBatchingPolicy(t *testing.T) {
 		t.Fatal("empty buffer must not flush")
 	}
 	event := Event{
-		ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+		NodeID: "node-a", BootID: "boot-a",
 		Source: "runtime", Kind: KindLogs, Message: "batch policy",
 	}
 	publisher.mu.Lock()
@@ -501,7 +515,7 @@ func TestPublisherQuarantinesCorruptSpool(t *testing.T) {
 	if err := os.WriteFile(bad, []byte("not-json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	publisher, err := NewPublisher(Config{DatasetRoot: dataset, SpoolPath: spool, NodeID: "n", ClusterID: "c", BootID: "b"}, &recordingWriter{})
+	publisher, err := NewPublisher(Config{DatasetRoot: dataset, SpoolPath: spool, NodeID: "n", BootID: "b"}, &recordingWriter{})
 	if err != nil {
 		t.Fatal(err)
 	}

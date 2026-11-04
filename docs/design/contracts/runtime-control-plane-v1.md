@@ -2,7 +2,7 @@
 
 ## 1. 范围
 
-本文定义 Runtime Alpha 已实现的基础契约：版本化配置、生命周期状态、健康检查和本地 Control Plane。它不定义 PHP Queue Bridge、Scheduler、MySQL 管理、BI/日志查询协议或禅道业务健康检查协议；这些能力只通过对应 Private Bridge 和设计文档约束。
+本文定义 Runtime Alpha 已实现的基础契约：版本化配置、生命周期状态、健康检查和本地 Control Plane。它不定义 PHP Queue Bridge、Scheduler、MySQL 管理、OLAP/日志查询协议或禅道业务健康检查协议；这些能力只通过对应 Private Bridge 和设计文档约束。
 
 Windows 使用相同 JSON 请求响应模型，传输层为 Named Pipe（`run-service` 已接入 Windows Service）；Linux 和 Docker 使用 Unix domain socket。
 
@@ -21,7 +21,6 @@ logPath = "logs/runtime.log"
 logMaxBytes = 16777216
 logMaxBackups = 5
 nodeID = "node-a"
-clusterID = "cluster-prod-1"
 
 [web]
 listen = "0.0.0.0:8080"
@@ -37,8 +36,8 @@ dir = "apps/zentao"
 webRoot = "www"
 enabled = true
 
-[bi]
-enabled = false
+[olap]
+enabled = true
 bridgePort = 8083
 
 [observability]
@@ -67,7 +66,6 @@ jsonlKeepDays = 7
 - `ZENTAO_RUNTIME_LOG_MAX_BYTES`
 - `ZENTAO_RUNTIME_LOG_MAX_BACKUPS`
 - `ZENTAO_RUNTIME_NODE_ID`
-- `ZENTAO_RUNTIME_CLUSTER_ID`
 - `ZENTAO_RUNTIME_ACCESS_LOG`
 - `ZENTAO_QUEUE_ENABLED`
 - `ZENTAO_QUEUE_BRIDGE_PORT`
@@ -75,20 +73,20 @@ jsonlKeepDays = 7
 - `ZENTAO_OBSERVABILITY_BRIDGE_PORT`
 - `ZENTAO_OBSERVABILITY_DATASET_ROOT`
 - `ZENTAO_OBSERVABILITY_SPOOL_PATH`
-- `ZENTAO_BI_ENABLED`
-- `ZENTAO_BI_BRIDGE_PORT`
-- `ZENTAO_BI_QUERY_THREADS`
-- `ZENTAO_BI_QUERY_MEMORY_LIMIT`
-- `ZENTAO_BI_QUERY_TIMEOUT`
-- `ZENTAO_BI_MAX_ROWS`
-- `ZENTAO_BI_MAX_CONCURRENT_QUERIES`
+- `ZENTAO_OLAP_ENABLED`
+- `ZENTAO_OLAP_BRIDGE_PORT`
+- `ZENTAO_OLAP_QUERY_THREADS`
+- `ZENTAO_OLAP_QUERY_MEMORY_LIMIT`
+- `ZENTAO_OLAP_QUERY_TIMEOUT`
+- `ZENTAO_OLAP_MAX_ROWS`
+- `ZENTAO_OLAP_MAX_CONCURRENT_QUERIES`
 
 CLI 的 `serve --listen/--threads/--control-socket/--pid-file` 优先级高于配置文件。配置文件是必需文件；应用只能通过 `[[apps]]` 声明，允许配置零个应用。
 
-`bi` 段当前默认关闭。启用后 Runtime 提供应用隔离的 Parquet 发布和 DuckDB
+`olap` 段默认开启。Runtime 提供应用隔离的 OLAP Parquet 发布和 DuckDB
 查询 Bridge；同步调度、表级水位和周期配置属于 PHP 应用，不在 Runtime
 Control Plane 中配置。完整条件见
-[BI Parquet 同步与 DuckDB 查询方案](../11-bi-parquet-query-plan.md)。
+[OLAP Parquet 同步与 DuckDB 查询方案](../11-bi-parquet-query-plan.md)。
 
 ## 3. 生命周期和健康
 
@@ -158,7 +156,8 @@ effective user 或 root，Socket 权限固定为 `0600`。Windows Named Pipe 使
 仅 SYSTEM 和管理员可访问的 ACL。每次控制操作写入审计日志（JSON Lines），
 审计记录包含操作、调用者身份、结果和时间，不包含凭据或配置明文。
 未配置 `runtime.auditLog` 时，审计日志默认写入
-`<logs_dir>/audit-<nodeID>.jsonl`，与 Runtime/访问日志一样按节点区分。
+`<logs_dir>/audit[-<nodeID>].jsonl`。配置 `nodeID` 时按节点区分；单节点
+省略节点后缀。
 
 健康探针由 Runtime Host 动态提供：
 
@@ -226,16 +225,16 @@ Runtime 启动后自动记录每次请求（无需额外配置路径）：
 - `logger`：`http.log.access.access` 表示访问日志；
   `http.log.error.*` 表示 Caddy 处理器错误（含 `error` 字段）。
 
-日志为 JSON Lines，写入 `<runtime.logPath 目录>/access-<nodeID>.jsonl`；
+日志为 JSON Lines，写入 `<runtime.logPath 目录>/access[-<nodeID>].jsonl`；
 每个节点独立文件，适合 NFS 多节点共享日志目录。Caddy 每小时整点
 （`roll_minutes: [0]`）把追加文件轮转为
-`access-<nodeID>-<时间戳>-time.jsonl`（大小触发时为
+`access[-<nodeID>]-<时间戳>-time.jsonl`（大小触发时为
 `-size.jsonl`），按 `jsonlKeepDays` 保留。
 默认不记录 Cookie、Authorization 等凭据头。PHP 侧错误消息由 `php.ini`
 的 `error_log` 写入 `logs/php-error.log`，与访问日志按时间戳关联。
 
-Runtime 自身结构化日志写入 `runtime-<nodeID>.jsonl`，按
-`jsonlConvertInterval` 轮转为 `runtime-<nodeID>.jsonl-<时间戳>.log`。
+Runtime 自身结构化日志写入 `runtime[-<nodeID>].jsonl`，按
+`jsonlConvertInterval` 轮转为 `runtime[-<nodeID>].jsonl-<时间戳>.log`。
 两者均通过 `convert-jsonl` 或自动调度转换为 Parquet（见第 7 节）。
 
 ## 9. Reload 边界
@@ -253,7 +252,6 @@ Runtime 自身结构化日志写入 `runtime-<nodeID>.jsonl`，按
 - `runtime.logMaxBytes`
 - `runtime.logMaxBackups`
 - `runtime.nodeID`
-- `runtime.clusterID`
 - `[[apps]]`
 - `observability.jsonlConvertInterval`
 - `observability.jsonlConvertSources`

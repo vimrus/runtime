@@ -463,8 +463,8 @@ func validateIdentity(schema int, nodeID, instanceID string) error {
 	if schema != SchemaVersion {
 		return fmt.Errorf("unsupported queue bridge schema %d", schema)
 	}
-	if !validIdentifier(nodeID) || !validIdentifier(instanceID) {
-		return fmt.Errorf("nodeID and instanceID are required")
+	if (nodeID != "" && !validIdentifier(nodeID)) || !validIdentifier(instanceID) {
+		return fmt.Errorf("instanceID is required and nodeID must be valid when configured")
 	}
 	return nil
 }

@@ -16,13 +16,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vimrus/runtime/internal/logging"
 	"github.com/vimrus/runtime/internal/observability"
 )
 
 type Config struct {
 	LogsDir   string
 	NodeID    string
-	ClusterID string
 	BootID    string
 	Sources   []string
 	Publisher *observability.Publisher
@@ -53,13 +53,13 @@ type Converter struct {
 }
 
 var (
-	accessSegmentPattern  = regexp.MustCompile(`^access-(.+)-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3})-(time|size)\.jsonl$`)
-	runtimeSegmentPattern = regexp.MustCompile(`^runtime-(.+)\.jsonl-\d{8}T\d{6}\.\d{9}Z\.log$`)
+	accessSegmentPattern  = regexp.MustCompile(`^access(?:-(.+))?-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3})-(time|size)\.jsonl$`)
+	runtimeSegmentPattern = regexp.MustCompile(`^runtime(?:-(.+))?\.jsonl-\d{8}T\d{6}\.\d{9}Z\.log$`)
 )
 
 func New(config Config) (*Converter, error) {
-	if config.LogsDir == "" || config.NodeID == "" || config.ClusterID == "" || config.BootID == "" || config.Publisher == nil {
-		return nil, errors.New("logsDir, nodeID, clusterID, bootID and publisher are required")
+	if config.LogsDir == "" || config.BootID == "" || config.Publisher == nil {
+		return nil, errors.New("logsDir, bootID and publisher are required")
 	}
 	if len(config.Sources) == 0 {
 		config.Sources = []string{"access", "runtime"}
@@ -67,7 +67,11 @@ func New(config Config) (*Converter, error) {
 	if config.Interval <= 0 {
 		config.Interval = time.Hour
 	}
-	state := filepath.Join(config.LogsDir, ".jsonl-state-"+config.NodeID+".json")
+	stateName := ".jsonl-state.json"
+	if config.NodeID != "" {
+		stateName = ".jsonl-state-" + config.NodeID + ".json"
+	}
+	state := filepath.Join(config.LogsDir, stateName)
 	return &Converter{config: config, statePath: state}, nil
 }
 
@@ -157,21 +161,8 @@ func (c *Converter) scanSegments() ([]string, error) {
 		}
 		name := entry.Name()
 		for _, source := range c.config.Sources {
-			var node string
-			switch source {
-			case "access":
-				matches := accessSegmentPattern.FindStringSubmatch(name)
-				if matches == nil {
-					continue
-				}
-				node = matches[1]
-			case "runtime":
-				matches := runtimeSegmentPattern.FindStringSubmatch(name)
-				if matches == nil {
-					continue
-				}
-				node = matches[1]
-			default:
+			node, matched := segmentNodeID(name, source)
+			if !matched {
 				continue
 			}
 			if node == c.config.NodeID {
@@ -184,11 +175,27 @@ func (c *Converter) scanSegments() ([]string, error) {
 	return segments, nil
 }
 
-func (c *Converter) parseSegment(path string) ([]observability.Event, int, error) {
-	return parseJSONLFile(path, c.config.ClusterID, c.config.NodeID, c.config.BootID)
+func segmentNodeID(name, source string) (string, bool) {
+	var matches []string
+	switch source {
+	case "access":
+		matches = accessSegmentPattern.FindStringSubmatch(name)
+	case "runtime":
+		matches = runtimeSegmentPattern.FindStringSubmatch(name)
+	default:
+		return "", false
+	}
+	if matches == nil {
+		return "", false
+	}
+	return matches[1], true
 }
 
-func parseJSONLFile(path, clusterID, nodeID, bootID string) ([]observability.Event, int, error) {
+func (c *Converter) parseSegment(path string) ([]observability.Event, int, error) {
+	return parseJSONLFile(path, c.config.NodeID, c.config.BootID)
+}
+
+func parseJSONLFile(path, nodeID, bootID string) ([]observability.Event, int, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, 0, err
@@ -196,7 +203,7 @@ func parseJSONLFile(path, clusterID, nodeID, bootID string) ([]observability.Eve
 	defer file.Close()
 	source := "caddy.access"
 	base := filepath.Base(path)
-	if strings.HasPrefix(base, "runtime-") {
+	if base == "runtime.jsonl" || strings.HasPrefix(base, "runtime.jsonl-") || strings.HasPrefix(base, "runtime-") {
 		source = "runtime"
 	}
 	var events []observability.Event
@@ -208,7 +215,7 @@ func parseJSONLFile(path, clusterID, nodeID, bootID string) ([]observability.Eve
 		if line == "" {
 			continue
 		}
-		event, ok, err := parseLine(line, source, clusterID, nodeID, bootID)
+		event, ok, err := parseLine(line, source, nodeID, bootID)
 		if err != nil {
 			malformed++
 			continue
@@ -228,8 +235,8 @@ func parseJSONLFile(path, clusterID, nodeID, bootID string) ([]observability.Eve
 // Because ConvertOnce deletes segments after successful conversion, files
 // found here are guaranteed not to overlap with the Parquet dataset.
 func ReadRecent(config Config) ([]observability.Event, int, error) {
-	if config.LogsDir == "" || config.NodeID == "" {
-		return nil, 0, errors.New("logsDir and nodeID are required")
+	if config.LogsDir == "" {
+		return nil, 0, errors.New("logsDir is required")
 	}
 	entries, err := os.ReadDir(config.LogsDir)
 	if err != nil {
@@ -246,11 +253,13 @@ func ReadRecent(config Config) ([]observability.Event, int, error) {
 		for _, source := range config.Sources {
 			switch source {
 			case "access":
-				if name == "access-"+config.NodeID+".jsonl" || accessSegmentPattern.MatchString(name) {
+				node, segment := segmentNodeID(name, source)
+				if name == logging.JSONLFileName("access", config.NodeID) || (segment && node == config.NodeID) {
 					matched = true
 				}
 			case "runtime":
-				if name == "runtime-"+config.NodeID+".jsonl" || runtimeSegmentPattern.MatchString(name) {
+				node, segment := segmentNodeID(name, source)
+				if name == logging.JSONLFileName("runtime", config.NodeID) || (segment && node == config.NodeID) {
 					matched = true
 				}
 			}
@@ -261,7 +270,7 @@ func ReadRecent(config Config) ([]observability.Event, int, error) {
 		if !matched {
 			continue
 		}
-		parsed, bad, err := parseJSONLFile(filepath.Join(config.LogsDir, name), config.ClusterID, config.NodeID, config.BootID)
+		parsed, bad, err := parseJSONLFile(filepath.Join(config.LogsDir, name), config.NodeID, config.BootID)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -271,14 +280,13 @@ func ReadRecent(config Config) ([]observability.Event, int, error) {
 	return events, malformed, nil
 }
 
-func parseLine(line, source, clusterID, nodeID, bootID string) (observability.Event, bool, error) {
+func parseLine(line, source, nodeID, bootID string) (observability.Event, bool, error) {
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		return observability.Event{}, false, err
 	}
 	event := observability.Event{
 		SchemaVersion: observability.SchemaVersion,
-		ClusterID:     clusterID,
 		NodeID:        nodeID,
 		BootID:        bootID,
 		Source:        source,

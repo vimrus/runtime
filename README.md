@@ -81,7 +81,7 @@ docker compose -f packaging/docker/compose.yaml --profile full up -d
   config/runtime.toml      Runtime 固定配置
   data/observability/      Runtime 自身遥测数据集：访问/运行日志与自监控指标
   logs/                    Runtime、访问和 PHP 日志
-  run/                     PID、控制 socket、node-id（节点本地）
+  run/                     PID、控制 socket（节点本地）
   spool/observability/     观测发布失败时的本地 spool（节点本地）
 ```
 

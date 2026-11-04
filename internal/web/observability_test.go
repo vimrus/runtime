@@ -70,7 +70,7 @@ func TestObservabilityIngestAcceptsValidBatch(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"schemaVersion": observability.SchemaVersion,
 		"events": []observability.Event{{
-			ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+			NodeID: "node-a", BootID: "boot-a",
 			Source: "php", Kind: observability.KindLogs, Message: "hello",
 		}},
 	})
@@ -131,7 +131,7 @@ func TestObservabilityIngestFallsBackToRegisteredSink(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"schemaVersion": observability.SchemaVersion,
 		"events": []observability.Event{{
-			ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+			NodeID: "node-a", BootID: "boot-a",
 			Source: "php", Kind: observability.KindLogs, Message: "hello",
 		}},
 	})
@@ -157,7 +157,7 @@ func TestObservabilityIngestSelectsSinkByToken(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"schemaVersion": observability.SchemaVersion,
 		"events": []observability.Event{{
-			ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a",
+			NodeID: "node-a", BootID: "boot-a",
 			Source: "php", Kind: observability.KindLogs, Message: "hello",
 		}},
 	})
@@ -209,5 +209,26 @@ func TestAccessLogEncoderRedactsSensitiveQueryParams(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("token query action missing: %#v", query.Actions)
+	}
+
+	for _, header := range []string{
+		"X-Zentao-Runtime-Profile-Token",
+		"X-Zentao-Queue-Token",
+		"X-Zentao-Observability-Token",
+		"X-Zentao-OLAP-Token",
+	} {
+		field, ok := encoder.Fields["request>headers>"+header]
+		if !ok {
+			t.Fatalf("%s header filter is missing", header)
+		}
+		var action struct {
+			Filter string `json:"filter"`
+		}
+		if err := json.Unmarshal(field, &action); err != nil {
+			t.Fatalf("decode %s header filter: %v", header, err)
+		}
+		if action.Filter != "delete" {
+			t.Fatalf("%s header filter = %q, want delete", header, action.Filter)
+		}
 	}
 }

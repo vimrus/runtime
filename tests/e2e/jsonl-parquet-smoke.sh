@@ -110,22 +110,18 @@ if ! docker wait "${container}" >/dev/null 2>&1; then
     exit 1
 fi
 
-node_id="$(docker run --rm --entrypoint cat --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" /shared/run/node-id)"
-if [[ -z "${node_id}" ]]; then
-    echo "node id was not persisted" >&2
-    exit 1
-fi
-
 for source in access runtime; do
     if [[ "${source}" == "access" ]]; then
         stamp="$(date -u +%Y-%m-%dT%H-%M-%S.000)"
-        segment="${source}-${node_id}-${stamp}-time.jsonl"
+        active="${source}.jsonl"
+        segment="${source}-${stamp}-time.jsonl"
     else
         stamp="$(date -u +%Y%m%dT%H%M%S.000000000Z)"
-        segment="${source}-${node_id}.jsonl-${stamp}.log"
+        active="${source}.jsonl"
+        segment="${source}.jsonl-${stamp}.log"
     fi
     docker run --rm --entrypoint sh --volume "${work}/app:/shared:rw" "${RUNTIME_IMAGE}" \
-        -c "if [ -s '/shared/logs/${source}-${node_id}.jsonl' ]; then mv '/shared/logs/${source}-${node_id}.jsonl' '/shared/logs/${segment}'; fi"
+        -c "if [ -s '/shared/logs/${active}' ]; then mv '/shared/logs/${active}' '/shared/logs/${segment}'; fi"
 done
 
 if ! docker start "${container}" >/dev/null; then
@@ -139,9 +135,9 @@ echo "first conversion: ${first}"
 echo "${first}" | jq -e '.events > 0 and .segments >= 1 and .malformed == 0' >/dev/null \
     || { echo "expected converted events from access/runtime JSONL" >&2; exit 1; }
 
-docker exec "${container}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=${node_id}/*' | grep -q ." \
-    || { echo "no Parquet published for node ${node_id}" >&2; exit 1; }
-docker exec "${container}" test -f "/shared/logs/.jsonl-state-${node_id}.json" \
+docker exec "${container}" sh -c "find /shared/observability/logs/schema=v1 -type f -name '*.parquet' -path '*/node=/*' | grep -q ." \
+    || { echo "no Parquet published for the single-node deployment" >&2; exit 1; }
+docker exec "${container}" test -f "/shared/logs/.jsonl-state.json" \
     || { echo "converter state file missing" >&2; exit 1; }
 
 second="$(docker exec "${container}" zentao convert-jsonl --control-socket /tmp/zentao.sock)"

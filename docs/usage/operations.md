@@ -243,6 +243,7 @@ Runtime 会先重新读取并严格校验配置文件，再尝试加载 Caddy �
 - Queue Worker、租约和 Bridge 参数。
 - Observability 监听、数据集和发布参数。
 - 日志、审计和保留期设置。
+- 应用 PHP 代码或扩展代码变更；`reload` 不会清除 Runtime 内的 OPcache。
 
 候选配置不合法或 Caddy 拒绝新配置时，Runtime 保留旧配置并进入 degraded。修复配置后可以再次执行 `reload`。
 

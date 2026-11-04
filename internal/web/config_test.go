@@ -89,22 +89,30 @@ func TestConfigRoutesPerApplicationQueueBridge(t *testing.T) {
 	}
 }
 
-func TestConfigRoutesBIBridge(t *testing.T) {
+func TestConfigRoutesOLAPBridge(t *testing.T) {
 	options := testOptions()
-	options.BIBridge = BIBridgeOptions{
+	options.OLAPBridge = OLAPBridgeOptions{
 		Enabled: true,
 		Listen:  "127.0.0.1:8083",
-		Tokens:  []string{"bi-token"},
+		Tokens:  []string{"olap-token"},
 	}
 	rendered := renderConfig(t, options)
 	for _, want := range []string{
 		`"listen":["127.0.0.1:8083"]`,
-		`"/internal/runtime/bi/v1/publish"`,
-		`"/internal/runtime/bi/v1/query"`,
-		`"tokens":["bi-token"]`,
+		`"/internal/runtime/olap/v1/publish"`,
+		`"/internal/runtime/olap/v1/query"`,
+		`"tokens":["olap-token"]`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered configuration is missing %s\n%s", want, rendered)
 		}
+	}
+}
+
+func TestConfigDoesNotRouteClusterGate(t *testing.T) {
+	options := testOptions()
+	rendered := renderConfig(t, options)
+	if strings.Contains(rendered, "zentao_cluster_gate") {
+		t.Fatalf("rendered configuration must not include the cluster gate\n%s", rendered)
 	}
 }

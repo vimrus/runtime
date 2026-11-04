@@ -1,6 +1,6 @@
 //go:build duckdb
 
-package bi
+package olap
 
 import (
 	"context"
@@ -49,9 +49,9 @@ func NewDuckDBQueryEngine(threads int, memoryLimit string, queryTimeout time.Dur
 
 func (e *DuckDBQueryEngine) Query(ctx context.Context, datasetRoot string, request QueryRequest) (QueryResult, error) {
 	if request.SchemaVersion != QuerySchemaVersion {
-		return QueryResult{}, fmt.Errorf("unsupported BI query schema version %d", request.SchemaVersion)
+		return QueryResult{}, fmt.Errorf("unsupported OLAP query schema version %d", request.SchemaVersion)
 	}
-	if err := ValidateBIQuery(request.SQL, 256*1024); err != nil {
+	if err := ValidateOLAPQuery(request.SQL, 256*1024); err != nil {
 		return QueryResult{}, err
 	}
 	offset := request.Offset
@@ -59,7 +59,7 @@ func (e *DuckDBQueryEngine) Query(ctx context.Context, datasetRoot string, reque
 		offset = 0
 	}
 	if offset > MaxQueryOffset {
-		return QueryResult{}, fmt.Errorf("BI query offset exceeds %d", MaxQueryOffset)
+		return QueryResult{}, fmt.Errorf("OLAP query offset exceeds %d", MaxQueryOffset)
 	}
 	select {
 	case e.querySlots <- struct{}{}:
@@ -90,9 +90,9 @@ func (e *DuckDBQueryEngine) Query(ctx context.Context, datasetRoot string, reque
 		return QueryResult{}, err
 	}
 	if _, err := db.ExecContext(queryCtx, DuckDBCompatibilitySQL()); err != nil {
-		return QueryResult{}, fmt.Errorf("load BI DuckDB compatibility macros: %w", err)
+		return QueryResult{}, fmt.Errorf("load OLAP DuckDB compatibility macros: %w", err)
 	}
-	if err := createBIViews(queryCtx, db, datasetRoot, manifests); err != nil {
+	if err := createOLAPViews(queryCtx, db, datasetRoot, manifests); err != nil {
 		return QueryResult{}, err
 	}
 
@@ -101,10 +101,10 @@ func (e *DuckDBQueryEngine) Query(ctx context.Context, datasetRoot string, reque
 	if maxRows <= 0 || maxRows > e.maxRows {
 		maxRows = e.maxRows
 	}
-	limitedSQL := fmt.Sprintf("SELECT * FROM (%s) AS bi_query LIMIT %d OFFSET %d", sqlText, maxRows+1, offset)
+	limitedSQL := fmt.Sprintf("SELECT * FROM (%s) AS olap_query LIMIT %d OFFSET %d", sqlText, maxRows+1, offset)
 	rows, err := db.QueryContext(queryCtx, limitedSQL, request.Params...)
 	if err != nil {
-		return QueryResult{}, fmt.Errorf("execute BI query: %w", err)
+		return QueryResult{}, fmt.Errorf("execute OLAP query: %w", err)
 	}
 	defer rows.Close()
 	columns, err := rows.Columns()
@@ -151,9 +151,9 @@ func (e *DuckDBQueryEngine) Query(ctx context.Context, datasetRoot string, reque
 	if request.SkipCount {
 		total = int64(offset + len(resultRows))
 	} else {
-		countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS bi_count", sqlText)
+		countSQL := fmt.Sprintf("SELECT COUNT(*) FROM (%s) AS olap_count", sqlText)
 		if err := db.QueryRowContext(queryCtx, countSQL, request.Params...).Scan(&total); err != nil {
-			return QueryResult{}, fmt.Errorf("count BI query rows: %w", err)
+			return QueryResult{}, fmt.Errorf("count OLAP query rows: %w", err)
 		}
 	}
 	generations := make(map[string]uint64, len(manifests))
@@ -173,7 +173,7 @@ func (e *DuckDBQueryEngine) Query(ctx context.Context, datasetRoot string, reque
 }
 
 // restrictDuckDBFilesystem limits external file access to the application's
-// immutable BI dataset. Parquet views remain readable from allowed paths while
+// immutable OLAP dataset. Parquet views remain readable from allowed paths while
 // user SQL cannot read arbitrary local files even if its syntax passes the
 // conservative read-only validator.
 func restrictDuckDBFilesystem(ctx context.Context, db *sql.DB, directories []string) error {
@@ -182,7 +182,7 @@ func restrictDuckDBFilesystem(ctx context.Context, db *sql.DB, directories []str
 	for _, directory := range directories {
 		absolute, err := filepath.Abs(directory)
 		if err != nil {
-			return fmt.Errorf("resolve BI filesystem directory: %w", err)
+			return fmt.Errorf("resolve OLAP filesystem directory: %w", err)
 		}
 		if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
 			absolute = resolved
@@ -194,7 +194,7 @@ func restrictDuckDBFilesystem(ctx context.Context, db *sql.DB, directories []str
 		allowed = append(allowed, quoteSQLLiteral(absolute))
 	}
 	if len(allowed) == 0 {
-		return errors.New("BI filesystem restrictions require at least one directory")
+		return errors.New("OLAP filesystem restrictions require at least one directory")
 	}
 	for _, statement := range []string{
 		"SET allowed_directories=[" + strings.Join(allowed, ",") + "]",
@@ -202,13 +202,13 @@ func restrictDuckDBFilesystem(ctx context.Context, db *sql.DB, directories []str
 		"SET lock_configuration=true",
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("restrict BI DuckDB filesystem: %w", err)
+			return fmt.Errorf("restrict OLAP DuckDB filesystem: %w", err)
 		}
 	}
 	return nil
 }
 
-func createBIViews(ctx context.Context, db *sql.DB, datasetRoot string, manifests map[string]Manifest) error {
+func createOLAPViews(ctx context.Context, db *sql.DB, datasetRoot string, manifests map[string]Manifest) error {
 	for table, manifest := range manifests {
 		paths := make([]string, 0)
 		for _, parts := range manifest.Buckets {
@@ -218,7 +218,7 @@ func createBIViews(ctx context.Context, db *sql.DB, datasetRoot string, manifest
 			}
 		}
 		if len(paths) == 0 {
-			return fmt.Errorf("%w: BI table %s has no visible parts", ErrDatasetUnavailable, table)
+			return fmt.Errorf("%w: OLAP table %s has no visible parts", ErrDatasetUnavailable, table)
 		}
 		statement := fmt.Sprintf(
 			"CREATE VIEW %s AS SELECT * FROM read_parquet([%s], union_by_name=true)",
@@ -226,13 +226,13 @@ func createBIViews(ctx context.Context, db *sql.DB, datasetRoot string, manifest
 			strings.Join(paths, ","),
 		)
 		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("create BI view %s: %w", table, err)
+			return fmt.Errorf("create OLAP view %s: %w", table, err)
 		}
 	}
-	return createBISyntheticViews(ctx, db, manifests)
+	return createOLAPSyntheticViews(ctx, db, manifests)
 }
 
-func createBISyntheticViews(ctx context.Context, db *sql.DB, manifests map[string]Manifest) error {
+func createOLAPSyntheticViews(ctx context.Context, db *sql.DB, manifests map[string]Manifest) error {
 	type view struct {
 		name      string
 		dependsOn []string
@@ -404,7 +404,7 @@ func createBISyntheticViews(ctx context.Context, db *sql.DB, manifests map[strin
 			continue
 		}
 		if _, err := db.ExecContext(ctx, item.statement); err != nil {
-			return fmt.Errorf("create BI view %s: %w", item.name, err)
+			return fmt.Errorf("create OLAP view %s: %w", item.name, err)
 		}
 	}
 	return nil

@@ -1,4 +1,4 @@
-package bi
+package olap
 
 import (
 	"context"
@@ -34,7 +34,7 @@ var (
 	syncIDPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
-// Column describes one staged BI column using a restricted DuckDB type.
+// Column describes one staged OLAP column using a restricted DuckDB type.
 type Column struct {
 	Name     string `json:"name"`
 	Type     string `json:"type"`
@@ -52,26 +52,26 @@ type Schema struct {
 // Validate checks table, primary key, column names and SQL types.
 func (s Schema) Validate() error {
 	if s.Version != DatasetSchemaVersion {
-		return fmt.Errorf("unsupported BI schema version %d", s.Version)
+		return fmt.Errorf("unsupported OLAP schema version %d", s.Version)
 	}
 	if !tableNamePattern.MatchString(s.Table) {
-		return fmt.Errorf("invalid BI table %q", s.Table)
+		return fmt.Errorf("invalid OLAP table %q", s.Table)
 	}
 	if !columnNamePattern.MatchString(s.PrimaryKey) {
-		return fmt.Errorf("invalid BI primary key %q", s.PrimaryKey)
+		return fmt.Errorf("invalid OLAP primary key %q", s.PrimaryKey)
 	}
 	if len(s.Columns) == 0 {
-		return errors.New("BI schema must define at least one column")
+		return errors.New("OLAP schema must define at least one column")
 	}
 
 	seen := make(map[string]struct{})
 	hasPrimaryKey := false
 	for _, column := range s.Columns {
 		if !columnNamePattern.MatchString(column.Name) {
-			return fmt.Errorf("invalid BI column name %q", column.Name)
+			return fmt.Errorf("invalid OLAP column name %q", column.Name)
 		}
 		if _, exists := seen[column.Name]; exists {
-			return fmt.Errorf("duplicate BI column %q", column.Name)
+			return fmt.Errorf("duplicate OLAP column %q", column.Name)
 		}
 		seen[column.Name] = struct{}{}
 		if column.Name == s.PrimaryKey {
@@ -82,7 +82,7 @@ func (s Schema) Validate() error {
 		}
 	}
 	if !hasPrimaryKey {
-		return fmt.Errorf("BI primary key %q is not present in columns", s.PrimaryKey)
+		return fmt.Errorf("OLAP primary key %q is not present in columns", s.PrimaryKey)
 	}
 	return nil
 }
@@ -100,7 +100,7 @@ func normalizeColumnType(value string) (string, error) {
 			return upper, nil
 		}
 	}
-	return "", fmt.Errorf("unsupported BI column type %q", value)
+	return "", fmt.Errorf("unsupported OLAP column type %q", value)
 }
 
 // PublishRequest describes one immutable staging publish.
@@ -143,20 +143,20 @@ type Publisher struct {
 
 func NewPublisher(config PublisherConfig, writer ParquetWriter) (*Publisher, error) {
 	if config.DatasetRoot == "" || config.StagingRoot == "" {
-		return nil, errors.New("BI dataset and staging roots are required")
+		return nil, errors.New("OLAP dataset and staging roots are required")
 	}
 	if !filepath.IsAbs(config.DatasetRoot) || !filepath.IsAbs(config.StagingRoot) {
-		return nil, errors.New("BI dataset and staging roots must be absolute")
+		return nil, errors.New("OLAP dataset and staging roots must be absolute")
 	}
 	if writer == nil {
-		return nil, errors.New("BI Parquet writer is required")
+		return nil, errors.New("OLAP Parquet writer is required")
 	}
 	if config.MaxStagingBytes <= 0 {
 		config.MaxStagingBytes = 8 * 1024 * 1024 * 1024
 	}
 	for _, dir := range []string{filepath.Join(config.DatasetRoot, "manifests"), config.StagingRoot} {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return nil, fmt.Errorf("create BI publisher directory: %w", err)
+			return nil, fmt.Errorf("create OLAP publisher directory: %w", err)
 		}
 	}
 	return &Publisher{config: config, writer: writer, now: time.Now}, nil
@@ -166,22 +166,22 @@ func NewPublisher(config PublisherConfig, writer ParquetWriter) (*Publisher, err
 // Manifest. Retrying the same SyncID with the expected generation is idempotent.
 func (p *Publisher) Publish(ctx context.Context, request PublishRequest) (PublishResult, error) {
 	if request.SchemaVersion != DatasetSchemaVersion {
-		return PublishResult{}, fmt.Errorf("unsupported BI publish schema version %d", request.SchemaVersion)
+		return PublishResult{}, fmt.Errorf("unsupported OLAP publish schema version %d", request.SchemaVersion)
 	}
 	if request.Table != request.Schema.Table {
-		return PublishResult{}, errors.New("BI publish table and schema table differ")
+		return PublishResult{}, errors.New("OLAP publish table and schema table differ")
 	}
 	if err := request.Schema.Validate(); err != nil {
 		return PublishResult{}, err
 	}
 	if !syncIDPattern.MatchString(request.SyncID) {
-		return PublishResult{}, fmt.Errorf("invalid BI syncID %q", request.SyncID)
+		return PublishResult{}, fmt.Errorf("invalid OLAP syncID %q", request.SyncID)
 	}
 	if request.Mode != ModeSnapshot && request.Mode != ModeAppend && request.Mode != ModeRewrite {
-		return PublishResult{}, fmt.Errorf("unsupported BI sync mode %q", request.Mode)
+		return PublishResult{}, fmt.Errorf("unsupported OLAP sync mode %q", request.Mode)
 	}
 	if request.Mode == ModeRewrite && request.Bucket < 0 {
-		return PublishResult{}, errors.New("BI rewrite bucket must not be negative")
+		return PublishResult{}, errors.New("OLAP rewrite bucket must not be negative")
 	}
 
 	lockValue, _ := p.locks.LoadOrStore(request.Table, &sync.Mutex{})
@@ -195,10 +195,10 @@ func (p *Publisher) Publish(ctx context.Context, request PublishRequest) (Publis
 	defer cancelLock()
 	locked, err := fileLock.TryLockContext(lockContext, 50*time.Millisecond)
 	if err != nil {
-		return PublishResult{}, fmt.Errorf("lock BI table: %w", err)
+		return PublishResult{}, fmt.Errorf("lock OLAP table: %w", err)
 	}
 	if !locked {
-		return PublishResult{}, errors.New("BI table publish lock is busy")
+		return PublishResult{}, errors.New("OLAP table publish lock is busy")
 	}
 	defer fileLock.Unlock()
 
@@ -210,10 +210,10 @@ func (p *Publisher) Publish(ctx context.Context, request PublishRequest) (Publis
 		return PublishResult{Manifest: current, Rows: current.RowCount}, nil
 	}
 	if exists && current.Generation != request.ExpectedGeneration {
-		return PublishResult{}, fmt.Errorf("BI generation conflict for %s: expected %d, current %d", request.Table, request.ExpectedGeneration, current.Generation)
+		return PublishResult{}, fmt.Errorf("OLAP generation conflict for %s: expected %d, current %d", request.Table, request.ExpectedGeneration, current.Generation)
 	}
 	if !exists && request.ExpectedGeneration != 0 {
-		return PublishResult{}, fmt.Errorf("BI manifest for %s does not exist", request.Table)
+		return PublishResult{}, fmt.Errorf("OLAP manifest for %s does not exist", request.Table)
 	}
 
 	stagingDir := filepath.Join(p.config.StagingRoot, request.SyncID)
@@ -230,14 +230,14 @@ func (p *Publisher) Publish(ctx context.Context, request PublishRequest) (Publis
 	relativeDir := filepath.Join("tables", request.Table, fmt.Sprintf("schema=v%d", DatasetSchemaVersion), "bucket="+bucket)
 	finalDir := filepath.Join(p.config.DatasetRoot, relativeDir)
 	if err := os.MkdirAll(finalDir, 0o750); err != nil {
-		return PublishResult{}, fmt.Errorf("create BI part directory: %w", err)
+		return PublishResult{}, fmt.Errorf("create OLAP part directory: %w", err)
 	}
 	tempPath := filepath.Join(finalDir, fmt.Sprintf(".part-g%d-%s.parquet.tmp", nextGeneration, request.SyncID))
 	_ = os.Remove(tempPath)
 
 	rows, err := p.writer.WriteParquet(ctx, request.Schema, files, tempPath)
 	if err != nil {
-		return PublishResult{}, fmt.Errorf("write BI Parquet: %w", err)
+		return PublishResult{}, fmt.Errorf("write OLAP Parquet: %w", err)
 	}
 	checksum, err := fileSHA256(tempPath)
 	if err != nil {
@@ -247,13 +247,13 @@ func (p *Publisher) Publish(ctx context.Context, request PublishRequest) (Publis
 	finalPath := filepath.Join(p.config.DatasetRoot, filepath.FromSlash(relativePath))
 	if existingChecksum, statErr := fileSHA256(finalPath); statErr == nil {
 		if existingChecksum != checksum {
-			return PublishResult{}, errors.New("BI part already exists with a different checksum")
+			return PublishResult{}, errors.New("OLAP part already exists with a different checksum")
 		}
 		_ = os.Remove(tempPath)
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return PublishResult{}, statErr
 	} else if err := os.Rename(tempPath, finalPath); err != nil {
-		return PublishResult{}, fmt.Errorf("publish BI Parquet part: %w", err)
+		return PublishResult{}, fmt.Errorf("publish OLAP Parquet part: %w", err)
 	}
 	_ = os.Remove(tempPath)
 
@@ -313,11 +313,11 @@ func stagingFiles(root, directory string, maxBytes int64) ([]string, error) {
 		return nil, err
 	}
 	if filepath.Dir(dirAbs) != rootAbs {
-		return nil, errors.New("BI staging directory escapes staging root")
+		return nil, errors.New("OLAP staging directory escapes staging root")
 	}
 	entries, err := os.ReadDir(dirAbs)
 	if err != nil {
-		return nil, fmt.Errorf("read BI staging directory: %w", err)
+		return nil, fmt.Errorf("read OLAP staging directory: %w", err)
 	}
 	files := make([]string, 0)
 	var total int64
@@ -335,12 +335,12 @@ func stagingFiles(root, directory string, maxBytes int64) ([]string, error) {
 		}
 		total += info.Size()
 		if total > maxBytes {
-			return nil, fmt.Errorf("BI staging exceeds %d bytes", maxBytes)
+			return nil, fmt.Errorf("OLAP staging exceeds %d bytes", maxBytes)
 		}
 		files = append(files, filepath.Join(dirAbs, entry.Name()))
 	}
 	if len(files) == 0 {
-		return nil, errors.New("BI staging contains no JSONL files")
+		return nil, errors.New("OLAP staging contains no JSONL files")
 	}
 	sort.Strings(files)
 	return files, nil

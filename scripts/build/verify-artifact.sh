@@ -44,8 +44,19 @@ for app_dir in "${artifact_root}/app" "${artifact_root}/apps"; do
     fi
 done
 
-expected=$(printf '%s\n' zend_signal_globals_id zend_signal_globals_offset zend_signal_handler_unblock)
 actual=$(nm -D "${libphp}" | awk '$3 ~ /^zend_signal_(globals_id|globals_offset|handler_unblock)$/ {print $3}' | sort -u)
+case "${RUNTIME_ARCH:-$(basename "${artifact_root}")}" in
+    amd64|*-amd64|*-amd64.*)
+        expected=$(printf '%s\n' zend_signal_globals_id zend_signal_globals_offset zend_signal_handler_unblock)
+        ;;
+    arm64|*-arm64|*-arm64.*)
+        expected=""
+        ;;
+    *)
+        echo "cannot determine target architecture from artifact root: ${artifact_root}" >&2
+        exit 1
+        ;;
+esac
 if [[ "${actual}" != "${expected}" ]]; then
     echo "libphp zend_signal ABI symbols do not match the ionCube contract" >&2
     diff -u <(printf '%s\n' "${expected}") <(printf '%s\n' "${actual}") || true

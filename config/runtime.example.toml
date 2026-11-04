@@ -25,17 +25,15 @@ logMaxBackups = 5
 # retention reuses observability.jsonlKeepDays.
 phpErrorLogMaxBytes = 16777216
 phpErrorLogMaxBackups = 5
-# Audit log path; empty uses logs/audit-<nodeID>.jsonl.
+# Audit log path; empty uses logs/audit[-<nodeID>].jsonl.
 # auditLog = ""
 # Built-in audit rotation: size threshold, rotated backups and day retention.
 # When auditLogKeepDays is positive it takes precedence over auditLogMaxBackups.
 auditLogMaxBytes = 16777216
 auditLogMaxBackups = 5
 auditLogKeepDays = 0
-# Stable node name used in log and observability records; empty enables auto-generation.
+# Stable node name used by multi-node deployments. Empty is valid for one node.
 nodeID = ""
-# Cluster identifier shared by nodes in the same deployment.
-clusterID = ""
 
 [web]
 # HTTP bind address and port. 0.0.0.0 listens on all IPv4 interfaces.
@@ -154,11 +152,11 @@ jsonlKeepDays = 7
 # Disable only when raw JSONL must be retained for compliance or debugging.
 jsonlDeleteAfterConvert = true
 
-[bi]
-# BI Parquet publication and private DuckDB query bridge. Synchronization is
+[olap]
+# OLAP Parquet publication and private DuckDB query bridge. Synchronization is
 # scheduled by the Zentao application; Runtime only stores and queries datasets.
-enabled = false
-# Private BI Bridge port. Runtime will always bind it to 127.0.0.1.
+enabled = true
+# Private OLAP Bridge port. Runtime will always bind it to 127.0.0.1.
 # It must differ from web.listen, queue.bridgePort and observability.bridgePort.
 bridgePort = 8083
 queryThreads = 4

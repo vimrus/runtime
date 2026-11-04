@@ -1,6 +1,6 @@
 //go:build duckdb
 
-package bi
+package olap
 
 import (
 	"context"

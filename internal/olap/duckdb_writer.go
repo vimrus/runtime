@@ -1,6 +1,6 @@
 //go:build duckdb
 
-package bi
+package olap
 
 import (
 	"context"
@@ -37,10 +37,10 @@ func (w *DuckDBWriter) WriteParquet(ctx context.Context, schema Schema, stagingF
 		return 0, err
 	}
 	if !strings.HasSuffix(targetPath, ".parquet.tmp") {
-		return 0, fmt.Errorf("BI DuckDB target must be a .parquet.tmp path")
+		return 0, fmt.Errorf("OLAP DuckDB target must be a .parquet.tmp path")
 	}
 	if len(stagingFiles) == 0 {
-		return 0, fmt.Errorf("BI staging files are required")
+		return 0, fmt.Errorf("OLAP staging files are required")
 	}
 
 	db, err := sql.Open("duckdb", ":memory:")
@@ -90,25 +90,25 @@ func (w *DuckDBWriter) WriteParquet(ctx context.Context, schema Schema, stagingF
 		strings.Join(paths, ","),
 		strings.Join(columnMap, ","),
 	)
-	if _, err := db.ExecContext(ctx, "CREATE TABLE bi_rows ("+strings.Join(columnDefs, ",")+")"); err != nil {
-		return 0, fmt.Errorf("create BI staging table: %w", err)
+	if _, err := db.ExecContext(ctx, "CREATE TABLE olap_rows ("+strings.Join(columnDefs, ",")+")"); err != nil {
+		return 0, fmt.Errorf("create OLAP staging table: %w", err)
 	}
 	if stagedBytes > 0 {
-		if _, err := db.ExecContext(ctx, "INSERT INTO bi_rows "+source); err != nil {
-			return 0, fmt.Errorf("load BI staging JSONL: %w", err)
+		if _, err := db.ExecContext(ctx, "INSERT INTO olap_rows "+source); err != nil {
+			return 0, fmt.Errorf("load OLAP staging JSONL: %w", err)
 		}
 	}
 
 	var rows, unique uint64
 	countSQL := fmt.Sprintf(
-		"SELECT COUNT(*), COUNT(DISTINCT %s) FROM bi_rows",
+		"SELECT COUNT(*), COUNT(DISTINCT %s) FROM olap_rows",
 		quoteSQLIdentifier(schema.PrimaryKey),
 	)
 	if err := db.QueryRowContext(ctx, countSQL).Scan(&rows, &unique); err != nil {
-		return 0, fmt.Errorf("count BI rows: %w", err)
+		return 0, fmt.Errorf("count OLAP rows: %w", err)
 	}
 	if rows != unique {
-		return 0, fmt.Errorf("BI staging has duplicate primary keys: rows=%d unique=%d", rows, unique)
+		return 0, fmt.Errorf("OLAP staging has duplicate primary keys: rows=%d unique=%d", rows, unique)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
@@ -116,18 +116,18 @@ func (w *DuckDBWriter) WriteParquet(ctx context.Context, schema Schema, stagingF
 	}
 	_ = os.Remove(targetPath)
 	copySQL := fmt.Sprintf(
-		"COPY (SELECT * FROM bi_rows ORDER BY %s) TO %s (FORMAT PARQUET, COMPRESSION ZSTD)",
+		"COPY (SELECT * FROM olap_rows ORDER BY %s) TO %s (FORMAT PARQUET, COMPRESSION ZSTD)",
 		quoteSQLIdentifier(schema.PrimaryKey),
 		quoteSQLLiteral(targetPath),
 	)
 	if _, err := db.ExecContext(ctx, copySQL); err != nil {
-		return 0, fmt.Errorf("write BI Parquet: %w", err)
+		return 0, fmt.Errorf("write OLAP Parquet: %w", err)
 	}
 	if info, err := os.Stat(targetPath); err != nil || info.Size() == 0 {
 		if err != nil {
 			return 0, err
 		}
-		return 0, fmt.Errorf("BI Parquet output is empty")
+		return 0, fmt.Errorf("OLAP Parquet output is empty")
 	}
 	return rows, nil
 }
@@ -140,7 +140,7 @@ func configureDuckDB(ctx context.Context, db *sql.DB, memoryLimit string, thread
 		"SET autoload_known_extensions=false",
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("configure BI DuckDB: %w", err)
+			return fmt.Errorf("configure OLAP DuckDB: %w", err)
 		}
 	}
 	return nil

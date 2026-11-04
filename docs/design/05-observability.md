@@ -124,9 +124,11 @@ observability/
 Runtime 默认开启观测（`enabled = true`），新装即进入 flush 模式；显式设置
 `enabled = false`（或 `ZENTAO_OBSERVABILITY_ENABLED=false`）可退回文件模式。
 
-指标与日志使用不同根目录和 Schema，不能混在同一个 Parquet 文件中。`nodeID` 必须是安装时生成并在 Cluster 内唯一的稳定 ID，不能使用可重复的主机短名作为唯一依据。
+指标与日志使用不同根目录和 Schema，不能混在同一个 Parquet 文件中。
+单节点可以省略 `nodeID`；多节点必须显式配置，并在共享同一业务数据库的部署内
+唯一。单节点的 Hive 分区名为空值形式 `node=`，不生成隐藏替代 ID。
 
-每个节点目录包含不匹配 Parquet 查询通配符的不可变 owner marker，记录 Cluster ID、nodeID 和节点安装身份摘要。节点首次创建目录时原子声明所有权；发现同一 nodeID 对应不同安装身份时拒绝发布并告警。节点重装或接管必须通过显式管理流程更新 marker，不能自动覆盖。
+每个节点目录包含不匹配 Parquet 查询通配符的不可变 owner marker，记录 nodeID 和节点安装身份摘要。共享数据集根目录另有 storage identity，记录 storageID 和用途。节点首次创建目录时原子声明所有权；发现同一 nodeID 对应不同安装身份或 storage identity 不匹配时拒绝发布并告警。节点重装或接管必须通过显式管理流程更新 marker，不能自动覆盖。
 
 ### 5.2 单机与多节点
 
@@ -142,11 +144,11 @@ Runtime 默认开启观测（`enabled = true`），新装即进入 flush 模式�
 ### 5.3 所有权规则
 
 - 节点只能发布、重试、清理自己的 `node=<nodeID>` 目录。
-- 发布前必须验证 owner marker；重复 nodeID 或 Cluster ID 不匹配时停止本节点 Parquet 写入。
+- 发布前必须验证 owner marker；重复 nodeID 或 storage identity 不匹配时停止本节点 Parquet 写入。
 - 任一节点可以只读查询所有节点已经发布的 `.parquet` 文件。
 - 节点不得删除、改名或压缩其他节点的分区。
 - 节点永久下线后的目录由显式管理命令接管，不能由普通保留任务自动认领。
-- Cluster ID 不直接作为 Parquet 用户数据列时，也必须位于配置的根目录边界中，禁止不同集群误用同一数据集。
+- 共享数据集根目录必须通过 storage identity 绑定用途，禁止不同部署误用同一数据集。
 
 ## 6. 事件与 Schema
 
@@ -159,8 +161,7 @@ Runtime 默认开启观测（`enabled = true`），新装即进入 flush 模式�
 | `schemaVersion` | integer | 文件内 Schema 版本 |
 | `eventTime` | timestamp(us), UTC | 事件发生时间 |
 | `ingestTime` | timestamp(us), UTC | Runtime 接收时间 |
-| `clusterID` | string | 集群标识，不包含 Secret |
-| `nodeID` | string | 节点标识 |
+| `nodeID` | string | 节点标识；单节点为空字符串 |
 | `bootID` | string | 本次 Runtime 启动标识 |
 | `eventID` | string | 节点内唯一事件 ID |
 | `source` | string | `runtime`、`caddy`、`php` 等受控来源 |
@@ -299,15 +300,15 @@ Runtime 不扫描或修复其他节点的临时文件，除非管理员明确执
    UNION 时字段一致。日志目录按 `runtime.logPath` 推断，缺省为
    `/opt/zentao/logs`。
 2. 每个文件只允许所属节点追加，多节点在 NFS 共享目录下各写自己的
-   `<source>-<nodeID>.jsonl` 文件；禁止多个节点追加同一个 JSONL 文件（NFS 的
+   `<source>[-<nodeID>].jsonl` 文件；禁止多个节点追加同一个 JSONL 文件（NFS 的
    `O_APPEND` 跨节点不提供原子性保证）。
 3. 每小时执行一次同步（`jsonlConvertInterval`，默认 `1h`）：Runtime
-   扫描本节点已封闭的 `access-<nodeID>-*.jsonl`（Caddy 轮转段）与
-   `runtime-<nodeID>.jsonl-*.log`（Runtime 轮转段），按行解析 JSON，
+   扫描本节点已封闭的 `access[-<nodeID>]-*.jsonl`（Caddy 轮转段）与
+   `runtime[-<nodeID>].jsonl-*.log`（Runtime 轮转段），按行解析 JSON，
    复用既有 Publisher 生成不可变 `part-<batchID>.parquet`，校验后在
    同一文件系统内原子 `rename` 发布到共享 Parquet 数据集。
 4. 同步以段文件的 `(size, mtime)` 水位线记录在
-   `<logs_dir>/.jsonl-state-<nodeID>.json`，重复同步不产生重复 Parquet；
+   `<logs_dir>/.jsonl-state[-<nodeID>].json`，重复同步不产生重复 Parquet；
    每个节点只处理自己的前缀，NFS 多节点互不干扰。
 5. 查询：历史与受控查询以 Parquet 为准；近期日志可直接
    读取 JSONL，或与历史 Parquet `UNION ALL`（列名与类型一致）。

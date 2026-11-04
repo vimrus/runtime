@@ -6,7 +6,7 @@
 > queue handler `bi.syncIncremental`）全部移除。业务库仍是事实来源；日志域
 > 继续由 Runtime DuckDB 处理，BI 的新同步链路通过 PHP DAO 导出后交给 Runtime。
 >
-> 新的 BI Parquet/DuckDB 方案已完成基础同步与查询链路，默认关闭，见
+> 新的 OLAP Parquet/DuckDB 方案已完成基础同步与查询链路，默认开启，见
 > [BI Parquet 同步与 DuckDB 查询方案](./11-bi-parquet-query-plan.md)。BI 与日志
 > 使用独立数据集、Token 和 Manifest，不共享 Event Schema。
 
@@ -75,7 +75,7 @@ Runtime/Caddy/PHP 日志
 
 维持现有方案：
 
-- 每个节点写 `runtime-<nodeID>.jsonl`、`access-<nodeID>.jsonl`。
+- 每个节点写 `runtime[-<nodeID>].jsonl`、`access[-<nodeID>].jsonl`。
 - JSONL 段封闭后由转换器解析，批量进入 Publisher。
 - Publisher 攒批（`minBatchRows/minBatchBytes/maxFlushInterval`）后生成
   `parquet/logs/schema=v1/date=YYYY-MM-DD/hour=HH/node=<nodeID>/part-*.parquet`。
@@ -143,7 +143,7 @@ zentao logs
 |---|---|---|
 | 实时运维/日志 | JSONL + 内存状态 | 秒级 |
 | 历史日志 | Parquet | 周期同步延迟 |
-| BI 分析查询 | BI Parquet + Runtime DuckDB | 增量同步周期 |
+| OLAP 分析查询 | OLAP Parquet + Runtime DuckDB | 增量同步周期 |
 | 实时度量 / 业务判断 | 业务库（PHP DAO） | 业务库实时 |
 
 对“必须实时”的业务判断，不从 Parquet 读取。
@@ -174,6 +174,6 @@ zentao logs
 - 日志域的 DuckDB/Parquet 实现全部在 `runtime/internal/observability/`，PHP 侧只通过 HTTP 桥交互。
 - PHP 侧旧度量/BI 分析副本：22.7 已按第 9 章移除；升级脚本负责清理遗留表、
   配置与 `driver` 数据。
-- 新 BI 数据集：PHP `service/bi` 负责业务库导出、租约和水位，
-  `runtime/internal/bi` 负责 Parquet、Manifest 与 DuckDB 查询，默认关闭。
+- 新 BI 数据集：PHP `service/olap` 负责业务库导出、租约和水位，
+  `runtime/internal/olap` 负责 OLAP Parquet、Manifest 与 DuckDB 查询，默认开启。
 - 待验证：PostgreSQL/DM/Gauss 环境下 BI/度量查询走业务库的端到端矩阵。

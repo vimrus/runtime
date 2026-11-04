@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | Runtime 侧已实施并通过三平台原生矩阵验证；正式发布与禅道联合测试待执行 |
+| 状态 | Runtime 侧已实施；PHP 8.4.27 Linux amd64 已验证，arm64/Windows 回归、正式发布与禅道联合测试待执行 |
 | 日期 | 2026-08-18 |
 | 责任仓库 | `vimrus/runtime` |
 | 产品名称 | `zentao` |
@@ -29,7 +29,9 @@
 1. Caddy 和 FrankenPHP 均作为 Go Library 嵌入 `zentao-runtime`。
 2. FrankenPHP 使用 Classic mode；PHP 应用状态不跨请求保留。
 3. PHP 基线为 PHP 8.4 ZTS，付费版必须通过 ionCube Loader 验证。
-4. Linux PHP 保持 `--disable-zend-signals`，通过最小 ABI Shim 导出 ionCube 所需符号；Windows 不应用该 Shim。
+4. Linux PHP 保持 `--disable-zend-signals`。ionCube 15.5.1 的 Linux amd64
+   PHP 8.4 Loader 仍需最小 `zend_signal` ABI Shim；arm64 和 Windows Loader
+   不依赖这些符号，且不得应用该 Shim。
 5. Go Runtime 不访问禅道业务数据库、不保存数据库凭据、不打包业务数据库 Driver。
 6. 队列数据操作由 PHP Queue Service 完成；Go 负责 Worker Pool、并发、超时、心跳和生命周期。
 7. Session 由 PHP `php.ini` 配置；Runtime 只校验并诊断，不实现 Session 存储。
@@ -82,7 +84,7 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
 | ID | 优先级 | 工作项 | 交付物 | 依赖 | 验收标准 |
 |---|---|---|---|---|---|
 | R-PHP-01 | P0 | 固化 PHP 8.4 ZTS 构建 | 可重复构建脚本、扩展清单、构建元数据 | R-ARCH-01 | CLI 与嵌入式 PHP 报告相同 ABI、扩展和配置目录 |
-| R-PHP-02 | P0 | 实现 Linux `zend_signal` ABI Shim | 最小源代码补丁、导出符号检查 | R-PHP-01 | Zend Signals 保持关闭；只导出已验证的最小符号集合 |
+| R-PHP-02 | P0 | 验证 Linux ionCube ABI | amd64 最小 Shim、双架构符号检查和兼容性回归 | R-PHP-01 | Zend Signals 保持关闭；amd64 仅导出 3 个已验证符号，arm64 不导出 |
 | R-PHP-03 | P0 | 验证 ionCube | Loader 装配、明文/加密探针和失败诊断 | R-PHP-02 | 付费版最小请求成功；Loader 不兼容时启动检查给出明确原因 |
 | R-HOST-01 | P0 | 建立最小 Go Host | 自研 `main` 链接 Caddy 和 FrankenPHP Module | R-PHP-01 | 不依赖上游 FrankenPHP CLI，能启动和优雅停止 |
 | R-HOST-02 | P0 | 跑通 Classic 请求 | 最小 Caddy JSON、静态文件和 PHP 路由 | R-HOST-01 | 连续请求不共享禅道请求状态；上传、PATH_INFO 和异常响应正确 |
@@ -179,7 +181,7 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
 1. Linux amd64。
 2. Caddy + FrankenPHP Library 最小 Host。
 3. PHP 8.4 ZTS Classic mode。
-4. Linux ionCube ABI Shim 和加密探针。
+4. Linux amd64 ionCube 最小 ABI Shim、未定义符号检查和加密探针。
 5. 禅道开源版最小安装/请求。
 6. Runtime 启动、状态和优雅停止。
 7. 可重复构建脚本和依赖清单。
@@ -231,6 +233,10 @@ Runtime 任务使用 `R-<领域>-<序号>` 编号。
   本地验证；release workflow 已接入签名、校验和 provenance attestation。
 - 故障验收：进程崩溃恢复、双节点滚动升级、Compose 冒烟、安装 dry-run、
   Parquet spool 运行中补发均已通过。
+- PHP 8.4.27 升级（2026-10-27）：基于厂商安装包确认 amd64 与 FT-2000
+  arm64 驱动最高提供 PHP 8.4 ZTS/API `20240924`，因此运行时固定到 PHP 8.4
+  最新 patch。Linux amd64 已完成构建、DM8 装载、artifact 和
+  synthetic application smoke；arm64/Windows 原生回归待执行。
 
 仍未完成且属于本计划最终交付范围的门槛：
 

@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 状态 | 同步、Parquet 发布、DuckDB 查询和源码级验收已实现，BI 功能默认关闭 |
+| 状态 | 同步、Parquet 发布、DuckDB 查询和源码级验收已实现，OLAP 功能默认开启 |
 | 日期 | 2026-10-26 |
 | 责任范围 | Runtime、禅道 BI、数据库兼容层 |
 | 目标数据源 | MySQL、PostgreSQL、DM、Gauss 等禅道业务数据库 |
@@ -16,7 +16,7 @@
 Runtime 侧的 Manifest、Parquet Publisher、DuckDB 查询桥、应用隔离 Token
 以及 PHP 侧的导出、状态租约、初始全量和增量运行器已经实现。三引擎结果
 比较、完整 IPD 合并制品、大屏引用闭包和 PHP 到 DuckDB 的联合测试均已通过。
-`[bi]` 仍默认关闭，以便按报表完成灰度与生产性能验收后再启用。
+`[olap]` 默认开启，Runtime 提供 OLAP Parquet 发布和 DuckDB 查询能力。
 
 22.7 移除的 [MySQL 到 Parquet 增量同步设计](./08-mysql-parquet-sync.md)
 仅作为历史参考；[统一 DuckDB 方案](./09-unified-duckdb-design.md)中的日志域
@@ -81,24 +81,24 @@ MySQL / PostgreSQL / DM / Gauss
               |
               | PHP DAO + 数据库方言适配
               v
-       PHP BI Sync Service
+       PHP OLAP Sync Service
               |
               | 按表、按变更分区、分批导出
               v
      本地 NDJSON staging
               |
-              | Runtime BI Sync Bridge
+              | Runtime OLAP Bridge
               v
-      Runtime BI Publisher
+      Runtime OLAP Publisher
               |
               | DuckDB: staging -> immutable Parquet
               | validate -> atomic rename -> Manifest
               v
-       BI Parquet Dataset
+       OLAP Parquet Dataset
               |
               | Manifest logical views
               v
-      Runtime BI Query Service
+      Runtime OLAP Query Service
               |
               | 受控 DuckDB SQL
               v
@@ -109,10 +109,10 @@ MySQL / PostgreSQL / DM / Gauss
 
 | 组件 | 负责 | 不负责 |
 | --- | --- | --- |
-| PHP BI Sync | 读取业务库、数据库方言、增量范围、水位、权限前置检查 | DuckDB/Parquet 文件格式和查询资源控制 |
-| Runtime BI Publisher | Schema 校验、Parquet 写入、原子发布、Manifest、回收 | 连接业务库、理解业务表关系 |
-| Runtime BI Query | SQL 只读校验、逻辑视图、DuckDB 查询、资源和超时限制 | 用户权限、业务事务、任意文件访问 |
-| BI SQL Compiler | MySQL 逻辑 SQL 到目标方言的转换 | 数据同步和查询执行 |
+| PHP OLAP Sync | 读取业务库、数据库方言、增量范围、水位、权限前置检查 | DuckDB/Parquet 文件格式和查询资源控制 |
+| Runtime OLAP Publisher | Schema 校验、Parquet 写入、原子发布、Manifest、回收 | 连接业务库、理解业务表关系 |
+| Runtime OLAP Query | SQL 只读校验、逻辑视图、DuckDB 查询、资源和超时限制 | 用户权限、业务事务、任意文件访问 |
+| OLAP SQL Compiler | MySQL 逻辑 SQL 到目标方言的转换 | 数据同步和查询执行 |
 | 业务数据库 | 唯一业务事实来源 | 不依赖 Parquet 才能保持正确性 |
 
 ## 5. BI SQL 三引擎兼容
@@ -456,7 +456,7 @@ deletionPolicy
 推荐 PHP 输出 NDJSON：
 
 ```text
-<app-data>/bi-staging/<syncID>/
+<app-data>/olap-staging/<syncID>/
   table=zt_bug/
     schema.json
     chunk-000001.ndjson
@@ -483,7 +483,7 @@ deletionPolicy
 
 ### 7.2 Runtime Publisher
 
-Runtime 新增独立 `internal/bi` 域：
+Runtime 新增独立 `internal/olap` 域：
 
 ```text
 validate schema
@@ -516,7 +516,7 @@ generation CAS。PHP 状态租约是第一层单写保护；文件锁用于覆�
 ### 7.3 数据集布局
 
 ```text
-data/apps/<app>/bi/
+data/apps/<app>/olap/
   tables/
     zt_bug/
       schema=v1/
@@ -609,7 +609,7 @@ ztv_daybugresolve
 私有本机 Bridge 草案：
 
 ```text
-POST /internal/runtime/bi/v1/query
+POST /internal/runtime/olap/v1/query
 ```
 
 请求必须包含：
@@ -686,17 +686,17 @@ driver = mysql | dm | pgsql | duckdb
 
 当前路由规则：
 
-1. `[bi] enabled = false` 或应用未收到 BI Bridge 环境变量时走业务库。
+1. `[olap] enabled = false` 或应用未收到 OLAP Bridge 环境变量时走业务库。
 2. `zt_bisync` 中所有白名单表至少完成过一次同步后，读查询自动走 DuckDB。
 3. 显式 `driver = duckdb` 不会回退业务库。
 4. 已经路由到 DuckDB 后出现查询失败时返回错误，不静默回退，避免掩盖
    Schema、权限或数据同步故障。
-5. 回滚时关闭 Runtime BI；应用会重新使用原业务库查询路径。
+5. 回滚时关闭 Runtime OLAP；应用会重新使用原业务库查询路径。
 
 ## 9. 配置建议
 
 ```toml
-[bi]
+[olap]
 enabled = true
 bridgePort = 8083
 queryThreads = 4
@@ -708,16 +708,16 @@ maxConcurrentQueries = 4
 
 Runtime 只负责接收发布和执行查询，不主动调度应用同步。表级
 `syncInterval`、`fullReconcileInterval`、水位字段和 bucket 大小位于
-禅道 `service/bi/config.php`，由 PHP cron 运行器执行。
+禅道 `service/olap/config.php`，由 PHP cron 运行器执行。
 
 以下路径按应用自动隔离：
 
 ```text
-<dataDir>/bi/
-<dataDir>/bi-staging/
+<dataDir>/olap/
+<dataDir>/olap-staging/
 ```
 
-首版不支持在 `[bi]` 中配置全局 dataset/staging root；路径按应用固定隔离，
+首版不支持在 `[olap]` 中配置全局 dataset/staging root；路径按应用固定隔离，
 避免多个应用误写同一数据集。
 
 `bridgePort` 必须与 Web、Queue、Observability 端口不同，并固定绑定 `127.0.0.1`。
@@ -726,7 +726,7 @@ Runtime 只负责接收发布和执行查询，不主动调度应用同步。表
 
 - BI 用户权限仍在 PHP 应用中判断。
 - Runtime 只执行已授权请求，不替代业务权限模型。
-- 每个应用独立 BI Token、数据集、Manifest 和查询桥命名空间。
+- 每个应用独立 OLAP Token、数据集、Manifest 和查询桥命名空间。
 - 同步字段必须使用白名单。
 - staging、Parquet 和 Manifest 不得位于应用 Web 根目录。
 - Runtime 诊断包不得包含 BI 数据内容。
@@ -805,7 +805,7 @@ Runtime 只负责接收发布和执行查询，不主动调度应用同步。表
 | BI-SYNC-01 | 定义 `zt_bisync` 状态模型和跨数据库 DDL |
 | BI-SYNC-02 | 定义表同步规格 Schema |
 | BI-SYNC-03 | 实现 staging NDJSON 协议 |
-| BI-SYNC-04 | 实现 Runtime BI Manifest 和 Publisher |
+| BI-SYNC-04 | 实现 Runtime OLAP Manifest 和 Publisher |
 | BI-SYNC-05 | 实现幂等、租约和失败恢复 |
 
 完成条件：
@@ -834,7 +834,7 @@ Runtime 只负责接收发布和执行查询，不主动调度应用同步。表
 
 | ID | 工作 |
 | --- | --- |
-| BI-QUERY-01 | 定义 Runtime BI Query Bridge v1 |
+| BI-QUERY-01 | 定义 Runtime OLAP Query Bridge v1 |
 | BI-QUERY-02 | 根据 Manifest 创建逻辑表和 `ztv_*` 视图 |
 | BI-QUERY-03 | 接入 BI 分页、列类型和错误模型 |
 | BI-QUERY-04 | 增加查询超时、内存、并发和取消 |
@@ -911,7 +911,7 @@ Runtime 只负责接收发布和执行查询，不主动调度应用同步。表
 - 多节点共享存储故障、租约过期竞争和跨节点 generation 一致性压测。
 - 客户规模数据量下的初始全量耗时、索引创建窗口和业务库 IO 压测。
 
-当前 `[bi]` 默认关闭。上述未完成项通过前，该能力只用于开发验证和受控灰度环境。
+当前 `[olap]` 默认开启。该能力在运行节点页面显示为 OLAP；未完成项仍按报表逐项验收。
 
 ## 14. 验收标准
 

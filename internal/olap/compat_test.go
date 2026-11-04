@@ -1,4 +1,4 @@
-package bi
+package olap
 
 import (
 	"strings"

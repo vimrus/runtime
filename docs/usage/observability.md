@@ -76,7 +76,6 @@ X-Zentao-Observability-Schema: 1
   "schemaVersion": 1,
   "events": [
     {
-      "clusterID": "cluster-prod",
       "nodeID": "node-a",
       "bootID": "boot-01",
       "eventID": "evt-0001",
@@ -107,7 +106,7 @@ X-Zentao-Observability-Schema: 1
 - 单请求最大 256 KiB。
 - 单批 1 至 100 个事件。
 - 任一事件不合法时，整批拒绝。
-- `clusterID`、`nodeID`、`bootID`、`source` 和 `kind` 必填。
+- `bootID`、`source` 和 `kind` 必填；单节点可以省略 `nodeID`。
 - `eventID` 缺失时由 Runtime 生成。
 - `eventTime` 缺失时使用 Runtime 接收时间。
 - `ingestTime` 由 Runtime 写入。
@@ -134,8 +133,7 @@ X-Zentao-Observability-Schema: 1
 | `schemaVersion` | integer | 当前为 `1` |
 | `eventTime` | timestamp | 事件发生时间，UTC |
 | `ingestTime` | timestamp | Runtime 接收时间 |
-| `clusterID` | string | 集群 ID |
-| `nodeID` | string | 节点 ID |
+| `nodeID` | string | 节点 ID；单节点为空 |
 | `bootID` | string | Runtime 启动实例 ID |
 | `eventID` | string | 事件 ID |
 | `source` | string | 事件来源 |
@@ -277,6 +275,8 @@ X-Zentao-Observability-Schema: 1
 <dataset>/logs/schema=v1/date=YYYY-MM-DD/hour=HH/node=<node-id>/part-*.parquet
 <dataset>/metrics/schema=v1/date=YYYY-MM-DD/hour=HH/node=<node-id>/part-*.parquet
 ```
+
+单节点未配置 `nodeID` 时，节点目录名为 `node=`，事件中的 `nodeID` 保持空字符串。
 
 NFS 或数据集目录暂时不可写时，事件进入本地有界 spool。Runtime 恢复后按原批次重试。spool 超过 `maxSpoolBytes` 后丢弃新事件，并增加丢弃计数。
 

@@ -300,7 +300,7 @@ Runtime 退出后没有任务被消费，但任务仍保留在数据库。Runtim
 - 已验证支持 `SKIP LOCKED` 的数据库可以由 PHP Driver Capability 启用快速路径。
 - 节点 A 崩溃后，节点 B 在 A 的任务租约过期后接管。
 - 定时任务 Scheduler 需要单独的数据库 Leader Lease，防止重复产生周期任务。
-- 每个节点使用稳定的 `nodeID` 和每次启动唯一的 `instanceID`。
+- 每个节点使用每次启动唯一的 `instanceID`；多节点还必须配置稳定且唯一的 `nodeID`，单节点可为空。
 - 多节点必须连接同一个外部或高可用数据库。
 
 Windows/Linux Full 包内置的单机 MySQL 只面向单机安装。多节点不能让每个节点各自
@@ -994,7 +994,7 @@ Queue 健康状态至少区分：
 ```yaml
 queue:
   enabled: true
-  nodeID: auto
+  nodeID: ""
   bridge:
     baseURL: internal
     requestTimeout: 5s

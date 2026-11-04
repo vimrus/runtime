@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 |---|---|
-| 状态 | 已实施（阶段一至四落地，三平台原生构建通过） |
+| 状态 | 已实施（阶段一至四落地；PHP 8.4.27 Linux amd64 验证通过，arm64/Windows 回归待完成） |
 | 日期 | 2026-08-18 |
 | Runtime Host | 自研 Go 程序 `zentao-runtime` |
 | HTTP Server | Caddy Go Library |

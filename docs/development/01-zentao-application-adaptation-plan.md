@@ -274,7 +274,7 @@ PHP 侧自行改名或绕过。
 PHP 发送给 Runtime 的日志/度量事件（`Z-OBS-01`）必须携带：
 
 ```text
-schemaVersion=1, eventTime, ingestTime, clusterID, nodeID, bootID,
+schemaVersion=1, eventTime, ingestTime, nodeID, bootID,
 eventID, source, kind(metrics|logs)
 ```
 
@@ -285,9 +285,9 @@ eventID, source, kind(metrics|logs)
 
 ### 17.4 配置指纹与节点身份
 
-- Runtime 配置包含 `clusterID` 和 `nodeID`；`nodeID` 在 Cluster 内必须唯一，
+- Runtime 配置使用 `nodeID` 标识节点；`nodeID` 在共享同一业务数据库的部署内必须唯一，
   PHP 健康检查、队列 Claim/Heartbeat 和可观测性事件必须透传同一值。
-- 多节点必须一致的配置（Cluster ID、应用/Runtime/PHP 版本、数据库 Schema、
+- 多节点必须一致的配置（应用/Runtime/PHP 版本、数据库 Schema、
   Session Handler、NFS 路径、Parquet 数据集根目录、队列/缓存 Schema）由
   节点管理员维护；Runtime 计算 `clusterConfigDigest`，PHP 侧不得静默修改
   这些配置或回退本地目录。
@@ -307,7 +307,6 @@ eventID, source, kind(metrics|logs)
 ```text
 ZENTAO_RUNTIME_LISTEN
 ZENTAO_RUNTIME_NODE_ID
-ZENTAO_RUNTIME_CLUSTER_ID
 ZENTAO_RUNTIME_DRAIN_TIMEOUT
 ZENTAO_RUNTIME_ACCESS_LOG
 ```

@@ -26,7 +26,7 @@ import (
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
 	"github.com/dunglas/frankenphp"
 	_ "github.com/dunglas/frankenphp/caddy"
-	runtimeBI "github.com/vimrus/runtime/internal/bi"
+	runtimeCluster "github.com/vimrus/runtime/internal/cluster"
 	"github.com/vimrus/runtime/internal/config"
 	"github.com/vimrus/runtime/internal/control"
 	"github.com/vimrus/runtime/internal/diagnostics"
@@ -38,6 +38,7 @@ import (
 	"github.com/vimrus/runtime/internal/observability/jsonl"
 	"github.com/vimrus/runtime/internal/observability/query"
 	"github.com/vimrus/runtime/internal/observability/retention"
+	runtimeOLAP "github.com/vimrus/runtime/internal/olap"
 	"github.com/vimrus/runtime/internal/queue/bridge"
 	queueclient "github.com/vimrus/runtime/internal/queue/client"
 	queueengine "github.com/vimrus/runtime/internal/queue/engine"
@@ -46,9 +47,11 @@ import (
 )
 
 var (
-	runtimeVersion    = "dev"
-	frankenPHPVersion = "unknown"
-	caddyVersion      = "unknown"
+	runtimeVersion      = "dev"
+	frankenPHPVersion   = "unknown"
+	caddyVersion        = "unknown"
+	processInstanceID   string
+	processInstanceOnce sync.Once
 )
 
 func main() {
@@ -313,19 +316,27 @@ func serve(args []string) error {
 		return err
 	}
 
-	nodeID, err := resolveNodeID(cfg, installRootPath)
+	nodeID := cfg.Runtime.NodeID
+	cfg.Runtime.NodeID = nodeID
+	if cfg.Cluster.ReleaseID == "" {
+		cfg.Cluster.ReleaseID = runtimeVersion
+	}
+
+	appIDs := make([]string, 0, len(cfg.ActiveApps()))
+	for _, app := range cfg.ActiveApps() {
+		appIDs = append(appIDs, app.ID)
+	}
+	if len(appIDs) == 0 {
+		return errors.New("at least one enabled application is required")
+	}
+	clusterGates := runtimeCluster.NewGates(appIDs)
+	clusterApps, clusterStorage, err := prepareClusterApps(&cfg, clusterGates)
 	if err != nil {
 		return err
 	}
-	cfg.Runtime.NodeID = nodeID
-	clusterID := cfg.Runtime.ClusterID
-	if clusterID == "" {
-		clusterID = "standalone"
-	}
 	identityEnv := map[string]string{
-		"ZENTAO_NODE_ID":    nodeID,
-		"ZENTAO_CLUSTER_ID": clusterID,
-		"ZENTAO_BOOT_ID":    instanceID(),
+		"ZENTAO_NODE_ID": nodeID,
+		"ZENTAO_BOOT_ID": instanceID(),
 	}
 	for name, value := range identityEnv {
 		if err := os.Setenv(name, value); err != nil {
@@ -336,12 +347,12 @@ func serve(args []string) error {
 	if cfg.Runtime.LogPath == "" {
 		logsDir = filepath.Join(installRootPath, "logs")
 	}
-	effectiveLogPath := filepath.Join(logsDir, "runtime-"+nodeID+".jsonl")
+	effectiveLogPath := filepath.Join(logsDir, logging.JSONLFileName("runtime", nodeID))
 	effectiveAuditLog := cfg.Runtime.AuditLog
 	if effectiveAuditLog == "" {
-		effectiveAuditLog = filepath.Join(logsDir, "audit-"+nodeID+".jsonl")
+		effectiveAuditLog = filepath.Join(logsDir, logging.JSONLFileName("audit", nodeID))
 	}
-	effectiveAccessLog := filepath.Join(logsDir, "access-"+nodeID+".jsonl")
+	effectiveAccessLog := filepath.Join(logsDir, logging.JSONLFileName("access", nodeID))
 
 	logger, err := logging.New(logging.Options{
 		Level:        parseLogLevel(cfg.Runtime.LogLevel),
@@ -366,6 +377,7 @@ func serve(args []string) error {
 	defer auditor.Close()
 
 	registry := newHealthRegistry(cfg)
+	registerClusterHealth(registry, clusterGates)
 	obsPublisher, err := newObservabilityPublisher(cfg, cfg.Observability.DatasetRoot, cfg.Observability.SpoolPath, nodeID)
 	if err != nil {
 		return err
@@ -382,32 +394,32 @@ func serve(args []string) error {
 	for _, app := range obsApps {
 		registerObservabilityHealth(registry, "observability:"+app.id, app.publisher)
 	}
-	var biQueryEngine runtimeBI.QueryEngine
-	var biApps []biApp
-	if cfg.BI.Enabled {
-		if !runtimeBI.DuckDBSupported() {
-			return errors.New("BI is enabled but DuckDB support is not compiled in")
+	var olapQueryEngine runtimeOLAP.QueryEngine
+	var olapApps []olapApp
+	if cfg.OLAP.Enabled {
+		if !runtimeOLAP.DuckDBSupported() {
+			return errors.New("OLAP is enabled but DuckDB support is not compiled in")
 		}
-		writer, err := runtimeBI.NewDuckDBWriter(cfg.BI.QueryThreads, cfg.BI.QueryMemoryLimit)
+		writer, err := runtimeOLAP.NewDuckDBWriter(cfg.OLAP.QueryThreads, cfg.OLAP.QueryMemoryLimit)
 		if err != nil {
-			return fmt.Errorf("initialize BI DuckDB writer: %w", err)
+			return fmt.Errorf("initialize OLAP DuckDB writer: %w", err)
 		}
-		biQueryEngine, err = runtimeBI.NewDuckDBQueryEngine(
-			cfg.BI.QueryThreads,
-			cfg.BI.QueryMemoryLimit,
-			cfg.BI.QueryTimeout,
-			cfg.BI.MaxRows,
-			cfg.BI.MaxConcurrentQueries,
+		olapQueryEngine, err = runtimeOLAP.NewDuckDBQueryEngine(
+			cfg.OLAP.QueryThreads,
+			cfg.OLAP.QueryMemoryLimit,
+			cfg.OLAP.QueryTimeout,
+			cfg.OLAP.MaxRows,
+			cfg.OLAP.MaxConcurrentQueries,
 		)
 		if err != nil {
-			return fmt.Errorf("initialize BI DuckDB query engine: %w", err)
+			return fmt.Errorf("initialize OLAP DuckDB query engine: %w", err)
 		}
-		biApps, err = prepareBIApps(&cfg, writer, biQueryEngine)
+		olapApps, err = prepareOLAPApps(&cfg, writer, olapQueryEngine)
 		if err != nil {
 			return err
 		}
-		for _, app := range biApps {
-			registerBIHealth(registry, "bi:"+app.id, app.datasetRoot, app.stagingRoot)
+		for _, app := range olapApps {
+			registerOLAPHealth(registry, "olap:"+app.id, app.datasetRoot, app.stagingRoot)
 		}
 	}
 	queueEngines, err := prepareQueueEngines(&cfg, logger, nodeID)
@@ -424,14 +436,9 @@ func serve(args []string) error {
 	}
 	var jsonlConverter *jsonl.Converter
 	if obsPublisher != nil {
-		clusterID := cfg.Runtime.ClusterID
-		if clusterID == "" {
-			clusterID = "standalone"
-		}
 		jsonlConverter, err = jsonl.New(jsonl.Config{
 			LogsDir:            logsDir,
 			NodeID:             nodeID,
-			ClusterID:          clusterID,
 			BootID:             instanceID(),
 			Sources:            cfg.Observability.JSONLConvertSources,
 			Publisher:          obsPublisher,
@@ -442,7 +449,7 @@ func serve(args []string) error {
 			return fmt.Errorf("initialize jsonl converter: %w", err)
 		}
 	}
-	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, obsApps, biApps, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
+	host := newHost(configPath, cfg, logger, registry, auditor, queryEngine, obsPublisher, obsApps, olapApps, clusterGates, jsonlConverter, effectiveAccessLog, cfg.Observability.JSONLKeepDays)
 	host.logsDir = logsDir
 	host.jsonlSources = cfg.Observability.JSONLConvertSources
 	host.collector = &diagnostics.Collector{
@@ -488,7 +495,7 @@ func serve(args []string) error {
 			Tokens:  tokens,
 		}
 	}
-	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge, biApps)); err != nil {
+	if err := caddy.Run(webConfig(cfg, effectiveAccessLog, cfg.Observability.JSONLKeepDays, observabilityBridge, olapApps)); err != nil {
 		host.machine.Fail("Caddy startup failed")
 		return fmt.Errorf("start Caddy: %w", err)
 	}
@@ -510,16 +517,34 @@ func serve(args []string) error {
 	logger.Info("runtime ready", slog.String("listen", cfg.Web.Listen), slog.Int("applications", len(cfg.ActiveApps())), slog.String("mode", "classic"))
 	serveCtx, serveCancel := context.WithCancel(context.Background())
 	defer serveCancel()
+	if clusterGates != nil {
+		targets := make([]runtimeCluster.Target, 0, len(clusterApps))
+		for _, app := range clusterApps {
+			targets = append(targets, runtimeCluster.Target{AppID: app.id, Registrar: app.client, Gate: app.gate})
+		}
+		controller := runtimeCluster.NewController(targets, cfg.Cluster.HeartbeatInterval, cfg.Cluster.ProfileInterval, cfg.Cluster.StaleTimeout)
+		controller.Observe = func(appID string, response runtimeCluster.RegistrationResponse, err error) {
+			if err != nil {
+				logger.Warn("runtime profile registration failed", slog.String("app", appID), slog.Any("error", err))
+				return
+			}
+			logger.Info(
+				"runtime profile registration",
+				slog.String("app", appID),
+				slog.String("status", response.Status),
+				slog.Uint64("generation", response.ProfileGeneration),
+				slog.Any("mismatchDomains", response.MismatchDomains),
+			)
+		}
+		go controller.Run(serveCtx, func() runtimeCluster.Profile {
+			return runtimeCluster.BuildProfile(cfg, nodeID, instanceID(), instanceID(), runtimeVersion, clusterStorage)
+		})
+	}
 	go runLogPruneLoop(serveCtx, logger)
 	phpErrorRotator := logging.NewExternalRotator(filepath.Join(installRootPath, "logs", "php-error.log"), cfg.Runtime.PHPErrorLogMaxBytes, cfg.Runtime.PHPErrorLogMaxBackups, cfg.Observability.JSONLKeepDays)
 	go runExternalLogLoop(serveCtx, logger, phpErrorRotator)
 	if obsPublisher != nil {
-		clusterID := cfg.Runtime.ClusterID
-		if clusterID == "" {
-			clusterID = "standalone"
-		}
 		_ = obsPublisher.Add(serveCtx, observability.Event{
-			ClusterID: clusterID,
 			NodeID:    nodeID,
 			BootID:    instanceID(),
 			Source:    "runtime",
@@ -529,13 +554,16 @@ func serve(args []string) error {
 			EventTime: time.Now().UTC(),
 		})
 	}
-	for _, entry := range queueEngines {
-		if err := entry.engine.Start(serveCtx); err != nil {
-			logger.Warn("queue engine failed to start", slog.String("app", entry.name), slog.Any("error", err))
-		} else {
-			logger.Info("queue engine started", slog.String("app", entry.name))
+	startQueueEngines := func() {
+		for _, entry := range queueEngines {
+			if err := entry.engine.Start(serveCtx); err != nil {
+				logger.Warn("queue engine failed to start", slog.String("app", entry.name), slog.Any("error", err))
+			} else {
+				logger.Info("queue engine started", slog.String("app", entry.name))
+			}
 		}
 	}
+	startQueueEngines()
 	if obsPublisher != nil {
 		go func() { _ = obsPublisher.Recover(serveCtx) }()
 		go obsPublisher.Run(serveCtx)
@@ -550,9 +578,9 @@ func serve(args []string) error {
 		go jsonlConverter.Run(serveCtx)
 		logger.Info("observability publisher started", slog.Int("applications", len(obsApps)))
 	}
-	if len(biApps) > 0 {
-		go runBICleanupLoop(serveCtx, logger, biApps)
-		logger.Info("BI cleanup loop started", slog.Int("applications", len(biApps)))
+	if len(olapApps) > 0 {
+		go runOLAPCleanupLoop(serveCtx, logger, olapApps)
+		logger.Info("OLAP cleanup loop started", slog.Int("applications", len(olapApps)))
 	}
 
 	signals := make(chan os.Signal, 1)
@@ -566,6 +594,7 @@ func serve(args []string) error {
 	if err := host.machine.Transition(lifecycle.Draining, "graceful stop"); err != nil && host.machine.Snapshot().State != lifecycle.Draining {
 		return err
 	}
+	serveCancel()
 	for _, entry := range queueEngines {
 		if err := entry.engine.Stop(); err != nil {
 			logger.Warn("queue engine drain failed", slog.String("app", entry.name), slog.Any("error", err))
@@ -578,7 +607,6 @@ func serve(args []string) error {
 		}
 		flushCancel()
 	}
-	serveCancel()
 	if err := stopCaddyBounded(cfg.Runtime.DrainTimeout); err != nil {
 		host.machine.Fail("Caddy shutdown timed out")
 		return err
@@ -797,15 +825,10 @@ func newObservabilityPublisher(cfg config.Config, datasetRoot, spoolPath, nodeID
 		return nil, fmt.Errorf("initialize DuckDB writer: %w", err)
 	}
 	instance := instanceID()
-	clusterID := cfg.Runtime.ClusterID
-	if clusterID == "" {
-		clusterID = "standalone"
-	}
 	return observability.NewPublisher(observability.Config{
 		DatasetRoot:      datasetRoot,
 		SpoolPath:        spoolPath,
 		NodeID:           nodeID,
-		ClusterID:        clusterID,
 		BootID:           instance,
 		MaxSpoolBytes:    cfg.Observability.MaxSpoolBytes,
 		MaxBatchRows:     cfg.Observability.MaxBatchRows,
@@ -827,23 +850,121 @@ type observabilityApp struct {
 	publisher *observability.Publisher
 }
 
-// biApp binds one application to its private BI Bridge token and dataset.
-type biApp struct {
+// olapApp binds one application to its private OLAP Bridge token and dataset.
+type olapApp struct {
 	id          string
 	datasetRoot string
 	stagingRoot string
 	token       string
-	publisher   *runtimeBI.Publisher
+	publisher   *runtimeOLAP.Publisher
 }
 
-// prepareBIApps creates one BI dataset and private bridge handler per enabled
+type clusterApp struct {
+	id       string
+	token    string
+	endpoint string
+	gate     *runtimeCluster.Gate
+	client   *runtimeCluster.ProfileClient
+}
+
+// prepareClusterApps injects profile-bridge credentials and prepares storage
+// identities. It must run before the Caddy application routes are rendered.
+func prepareClusterApps(cfg *config.Config, gates *runtimeCluster.Gates) ([]clusterApp, map[string]runtimeCluster.StorageIdentity, error) {
+	apps := make([]clusterApp, 0, len(cfg.Apps))
+	storage := make(map[string]runtimeCluster.StorageIdentity)
+	if cfg.Observability.Enabled {
+		identity := runtimeCluster.StorageIdentity{
+			SchemaVersion: 1,
+			Purpose:       "observability",
+			StorageID:     "local",
+			Generation:    1,
+		}
+		if cfg.Cluster.RequireSharedData {
+			storageCtx, cancel := context.WithTimeout(context.Background(), cfg.Cluster.RegistrationTimeout)
+			resolved, resolveErr := runtimeCluster.EnsureStorageIdentity(storageCtx, cfg.Observability.DatasetRoot, "observability")
+			cancel()
+			if resolveErr != nil {
+				identity.StorageID = "unavailable"
+			} else {
+				identity = resolved
+			}
+		}
+		storage[runtimeCluster.ObservabilityStorageKey] = identity
+	}
+	for index := range cfg.Apps {
+		app := &cfg.Apps[index]
+		if !app.Enabled {
+			continue
+		}
+		if app.Env == nil {
+			app.Env = make(map[string]string)
+		}
+		token := app.Env["ZENTAO_RUNTIME_PROFILE_TOKEN"]
+		if token == "" {
+			tokenBytes := make([]byte, 32)
+			if _, err := rand.Read(tokenBytes); err != nil {
+				return nil, nil, fmt.Errorf("generate runtime profile token for %s: %w", app.ID, err)
+			}
+			token = hex.EncodeToString(tokenBytes)
+		}
+		endpoint, err := runtimeCluster.ProfileEndpoint(cfg.Web.Listen, app.Path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("build runtime profile endpoint for %s: %w", app.ID, err)
+		}
+
+		identity := runtimeCluster.StorageIdentity{
+			SchemaVersion: 1,
+			Purpose:       "app-data",
+			StorageID:     "local",
+			Generation:    1,
+		}
+		if cfg.Cluster.RequireSharedData {
+			storageCtx, cancel := context.WithTimeout(context.Background(), cfg.Cluster.RegistrationTimeout)
+			identity, err = runtimeCluster.EnsureStorageIdentity(storageCtx, app.DataDir, "app-data")
+			cancel()
+			if err != nil {
+				identity = runtimeCluster.StorageIdentity{
+					SchemaVersion: 1,
+					Purpose:       "app-data",
+					StorageID:     "unavailable",
+					Generation:    1,
+				}
+			}
+		}
+		storage[app.ID] = identity
+
+		setEnvDefault(app.Env, "ZENTAO_RUNTIME_PROFILE_TOKEN", token)
+		app.Env["ZENTAO_RUNTIME_PROFILE_SCHEMA"] = strconv.Itoa(runtimeCluster.ProfileSchemaVersion)
+		app.Env["ZENTAO_CLUSTER_RELEASE_ID"] = cfg.Cluster.ReleaseID
+		app.Env["ZENTAO_CLUSTER_STORAGE_ID"] = identity.StorageID
+		app.Env["ZENTAO_CLUSTER_PROFILE_KEY"] = cfg.Cluster.SecretKey
+		app.Env["ZENTAO_CLUSTER_STALE_TIMEOUT"] = strconv.Itoa(int(cfg.Cluster.StaleTimeout / time.Second))
+		takeoverTimeout := cfg.Cluster.RegistrationTimeout
+		if heartbeatWindow := 2 * cfg.Cluster.HeartbeatInterval; heartbeatWindow > takeoverTimeout {
+			takeoverTimeout = heartbeatWindow
+		}
+		app.Env["ZENTAO_CLUSTER_TAKEOVER_TIMEOUT"] = strconv.Itoa(max(1, int((takeoverTimeout+time.Second-1)/time.Second)))
+
+		gate := gates.For(app.ID)
+		apps = append(apps, clusterApp{
+			id:       app.ID,
+			token:    token,
+			endpoint: endpoint,
+			gate:     gate,
+			client:   runtimeCluster.NewProfileClient(endpoint, token, cfg.Cluster.RegistrationTimeout),
+		})
+	}
+	return apps, storage, nil
+}
+
+// prepareOLAPApps creates one OLAP dataset and private bridge handler per enabled
 // application. Each application gets a separate token, dataset and staging root.
-func prepareBIApps(cfg *config.Config, writer runtimeBI.ParquetWriter, queryEngine runtimeBI.QueryEngine) ([]biApp, error) {
-	if !cfg.BI.Enabled {
+func prepareOLAPApps(cfg *config.Config, writer runtimeOLAP.ParquetWriter, queryEngine runtimeOLAP.QueryEngine) ([]olapApp, error) {
+	if !cfg.OLAP.Enabled {
 		return nil, nil
 	}
-	bridgeAddress := config.LoopbackBridgeAddress(cfg.BI.BridgePort)
-	apps := make([]biApp, 0, len(cfg.Apps))
+	bridgeAddress := config.LoopbackBridgeAddress(cfg.OLAP.BridgePort)
+	apps := make([]olapApp, 0, len(cfg.Apps))
 	seenTokens := make(map[string]struct{})
 	for index := range cfg.Apps {
 		app := &cfg.Apps[index]
@@ -853,50 +974,50 @@ func prepareBIApps(cfg *config.Config, writer runtimeBI.ParquetWriter, queryEngi
 		if app.Env == nil {
 			app.Env = make(map[string]string)
 		}
-		token := app.Env["ZENTAO_BI_TOKEN"]
+		token := app.Env["ZENTAO_OLAP_TOKEN"]
 		if token == "" {
 			tokenBytes := make([]byte, 32)
 			if _, err := rand.Read(tokenBytes); err != nil {
-				return nil, fmt.Errorf("generate BI bridge token for %s: %w", app.ID, err)
+				return nil, fmt.Errorf("generate OLAP bridge token for %s: %w", app.ID, err)
 			}
 			token = hex.EncodeToString(tokenBytes)
 		}
 		if _, exists := seenTokens[token]; exists {
-			return nil, fmt.Errorf("BI bridge token is reused by application %s", app.ID)
+			return nil, fmt.Errorf("OLAP bridge token is reused by application %s", app.ID)
 		}
 		seenTokens[token] = struct{}{}
 
-		datasetRoot := filepath.Join(app.DataDir, "bi")
-		stagingRoot := filepath.Join(app.DataDir, "bi-staging")
+		datasetRoot := filepath.Join(app.DataDir, "olap")
+		stagingRoot := filepath.Join(app.DataDir, "olap-staging")
 		for _, dir := range []string{filepath.Join(datasetRoot, "manifests"), filepath.Join(datasetRoot, "tables"), stagingRoot} {
 			if err := os.MkdirAll(dir, 0o770); err != nil {
-				return nil, fmt.Errorf("create BI directory for %s: %w", app.ID, err)
+				return nil, fmt.Errorf("create OLAP directory for %s: %w", app.ID, err)
 			}
 		}
-		publisher, err := runtimeBI.NewPublisher(runtimeBI.PublisherConfig{
+		publisher, err := runtimeOLAP.NewPublisher(runtimeOLAP.PublisherConfig{
 			DatasetRoot: datasetRoot,
 			StagingRoot: stagingRoot,
 		}, writer)
 		if err != nil {
-			return nil, fmt.Errorf("initialize BI publisher for %s: %w", app.ID, err)
+			return nil, fmt.Errorf("initialize OLAP publisher for %s: %w", app.ID, err)
 		}
 
-		setEnvDefault(app.Env, "ZENTAO_BI_TOKEN", token)
-		setEnvDefault(app.Env, "ZENTAO_BI_STAGING_DIR", stagingRoot)
-		setEnvDefault(app.Env, "ZENTAO_BI_PUBLISH_URL", "http://"+bridgeAddress+"/internal/runtime/bi/v1/publish")
-		setEnvDefault(app.Env, "ZENTAO_BI_QUERY_URL", "http://"+bridgeAddress+"/internal/runtime/bi/v1/query")
-		setEnvDefault(app.Env, "ZENTAO_BI_SCHEMA", strconv.Itoa(runtimeBI.QuerySchemaVersion))
-		setEnvDefault(app.Env, "ZENTAO_BI_MAX_ROWS", strconv.Itoa(cfg.BI.MaxRows))
+		setEnvDefault(app.Env, "ZENTAO_OLAP_TOKEN", token)
+		setEnvDefault(app.Env, "ZENTAO_OLAP_STAGING_DIR", stagingRoot)
+		setEnvDefault(app.Env, "ZENTAO_OLAP_PUBLISH_URL", "http://"+bridgeAddress+"/internal/runtime/olap/v1/publish")
+		setEnvDefault(app.Env, "ZENTAO_OLAP_QUERY_URL", "http://"+bridgeAddress+"/internal/runtime/olap/v1/query")
+		setEnvDefault(app.Env, "ZENTAO_OLAP_SCHEMA", strconv.Itoa(runtimeOLAP.QuerySchemaVersion))
+		setEnvDefault(app.Env, "ZENTAO_OLAP_MAX_ROWS", strconv.Itoa(cfg.OLAP.MaxRows))
 
 		dataset := datasetRoot
-		web.SetBIHandlersFor(
+		web.SetOLAPHandlersFor(
 			token,
 			publisher.Publish,
-			func(ctx context.Context, request runtimeBI.QueryRequest) (runtimeBI.QueryResult, error) {
+			func(ctx context.Context, request runtimeOLAP.QueryRequest) (runtimeOLAP.QueryResult, error) {
 				return queryEngine.Query(ctx, dataset, request)
 			},
 		)
-		apps = append(apps, biApp{id: app.ID, datasetRoot: datasetRoot, stagingRoot: stagingRoot, token: token, publisher: publisher})
+		apps = append(apps, olapApp{id: app.ID, datasetRoot: datasetRoot, stagingRoot: stagingRoot, token: token, publisher: publisher})
 	}
 	return apps, nil
 }
@@ -968,19 +1089,43 @@ func registerObservabilityHealth(registry *health.Registry, name string, publish
 	})
 }
 
-func registerBIHealth(registry *health.Registry, name, datasetRoot, stagingRoot string) {
+func registerOLAPHealth(registry *health.Registry, name, datasetRoot, stagingRoot string) {
 	registry.Register(name, health.KindShared, false, true, func(context.Context) health.Result {
 		for _, dir := range []string{filepath.Join(datasetRoot, "manifests"), filepath.Join(datasetRoot, "tables"), stagingRoot} {
 			info, err := os.Stat(dir)
 			if err != nil || !info.IsDir() {
-				return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusFailed, Message: "BI data directory is unavailable"}
+				return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusFailed, Message: "OLAP data directory is unavailable"}
 			}
 		}
 		return health.Result{Name: name, Kind: health.KindShared, Status: health.StatusOK}
 	})
 }
 
-func runBICleanupLoop(ctx context.Context, logger *logging.Logger, apps []biApp) {
+func registerClusterHealth(registry *health.Registry, gates *runtimeCluster.Gates) {
+	if gates == nil {
+		return
+	}
+	for appID := range gates.Statuses() {
+		appID := appID
+		registry.Register("cluster:"+appID, health.KindApp, false, false, func(context.Context) health.Result {
+			gate := gates.For(appID)
+			if gate != nil && gate.Allows() {
+				return health.Result{Name: "cluster:" + appID, Kind: health.KindApp, Status: health.StatusOK}
+			}
+			if gate == nil {
+				return health.Result{Name: "cluster:" + appID, Kind: health.KindApp, Status: health.StatusFailed, Message: "cluster diagnostics are unavailable"}
+			}
+			status := gate.Status()
+			message := string(status.State)
+			if status.Reason != "" {
+				message += ": " + status.Reason
+			}
+			return health.Result{Name: "cluster:" + appID, Kind: health.KindApp, Status: health.StatusFailed, Message: message}
+		})
+	}
+}
+
+func runOLAPCleanupLoop(ctx context.Context, logger *logging.Logger, apps []olapApp) {
 	const (
 		cleanupInterval = time.Hour
 		partGracePeriod = time.Hour
@@ -996,12 +1141,12 @@ func runBICleanupLoop(ctx context.Context, logger *logging.Logger, apps []biApp)
 			for _, app := range apps {
 				result, err := app.publisher.Cleanup(now.UTC(), partGracePeriod)
 				if err != nil {
-					logger.Warn("BI cleanup failed", slog.String("app", app.id), slog.Any("error", err))
+					logger.Warn("OLAP cleanup failed", slog.String("app", app.id), slog.Any("error", err))
 					continue
 				}
 				if result.RemovedParts > 0 || result.RemovedTemp > 0 || result.RemovedStaging > 0 {
 					logger.Info(
-						"BI cleanup completed",
+						"OLAP cleanup completed",
 						slog.String("app", app.id),
 						slog.Int("parts", result.RemovedParts),
 						slog.Int("tempFiles", result.RemovedTemp),
@@ -1203,7 +1348,8 @@ type host struct {
 	queryEngine       query.Engine
 	obsPublisher      *observability.Publisher
 	obsApps           []observabilityApp
-	biApps            []biApp
+	olapApps          []olapApp
+	clusterGates      *runtimeCluster.Gates
 	jsonlConverter    *jsonl.Converter
 	accessLogPath     string
 	accessLogKeepDays int
@@ -1212,7 +1358,7 @@ type host struct {
 	collector         *diagnostics.Collector
 }
 
-func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, obsApps []observabilityApp, biApps []biApp, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
+func newHost(configPath string, cfg config.Config, logger *logging.Logger, registry *health.Registry, auditor control.Auditor, queryEngine query.Engine, obsPublisher *observability.Publisher, obsApps []observabilityApp, olapApps []olapApp, clusterGates *runtimeCluster.Gates, jsonlConverter *jsonl.Converter, accessLogPath string, accessLogKeepDays int) *host {
 	return &host{
 		configPath:        configPath,
 		config:            cfg,
@@ -1224,7 +1370,8 @@ func newHost(configPath string, cfg config.Config, logger *logging.Logger, regis
 		queryEngine:       queryEngine,
 		obsPublisher:      obsPublisher,
 		obsApps:           obsApps,
-		biApps:            biApps,
+		olapApps:          olapApps,
+		clusterGates:      clusterGates,
 		jsonlConverter:    jsonlConverter,
 		accessLogPath:     accessLogPath,
 		accessLogKeepDays: accessLogKeepDays,
@@ -1260,8 +1407,8 @@ func (h *host) HandleControl(ctx context.Context, request control.Request) contr
 		if stats := h.observabilityStats(); stats != nil {
 			diagnose["observability"] = stats
 		}
-		if stats := h.biStats(); len(stats) > 0 {
-			diagnose["bi"] = stats
+		if stats := h.olapStats(); len(stats) > 0 {
+			diagnose["olap"] = stats
 		}
 		return control.Success(diagnose)
 	case "logs", "metrics":
@@ -1448,16 +1595,11 @@ func (h *host) observabilityQuery(ctx context.Context, request control.Request) 
 }
 
 func (h *host) mergeRecentJSONLLogs(parquetRows []query.Row, since, until time.Time, node, level string, limit int) []query.Row {
-	clusterID := h.config.Runtime.ClusterID
-	if clusterID == "" {
-		clusterID = "standalone"
-	}
 	events, _, err := jsonl.ReadRecent(jsonl.Config{
-		LogsDir:   h.logsDir,
-		NodeID:    h.config.Runtime.NodeID,
-		ClusterID: clusterID,
-		BootID:    instanceID(),
-		Sources:   h.jsonlSources,
+		LogsDir: h.logsDir,
+		NodeID:  h.config.Runtime.NodeID,
+		BootID:  instanceID(),
+		Sources: h.jsonlSources,
 	})
 	if err != nil {
 		h.logger.Warn("read recent jsonl logs failed", slog.Any("error", err))
@@ -1514,10 +1656,8 @@ func rowEventTimeNanos(row query.Row) int64 {
 func (h *host) healthReport(ctx context.Context, deep bool) map[string]any {
 	snapshot := h.machine.Snapshot()
 	live := snapshot.State != lifecycle.Stopped && snapshot.State != lifecycle.Failed
-	ready := snapshot.State == lifecycle.Ready
 	report := map[string]any{
 		"live":      live,
-		"ready":     ready,
 		"lifecycle": snapshot,
 	}
 	var probes health.Snapshot
@@ -1526,6 +1666,8 @@ func (h *host) healthReport(ctx context.Context, deep bool) map[string]any {
 	} else {
 		probes = h.health.Probe(ctx)
 	}
+	ready := snapshot.State == lifecycle.Ready && probes.Ready()
+	report["ready"] = ready
 	report["components"] = probes.Components
 	report["deep"] = "not_requested"
 	if deep {
@@ -1550,22 +1692,26 @@ func (h *host) status() map[string]any {
 			"apps":    appSummary(cfg),
 		},
 		"identity": map[string]any{
-			"nodeID":    cfg.Runtime.NodeID,
-			"clusterID": cfg.Runtime.ClusterID,
+			"nodeID": cfg.Runtime.NodeID,
 		},
 	}
 	if stats := h.observabilityStats(); stats != nil {
 		result["observability"] = stats
 	}
-	if stats := h.biStats(); len(stats) > 0 {
-		result["bi"] = stats
+	if stats := h.olapStats(); len(stats) > 0 {
+		result["olap"] = stats
+	}
+	if h.clusterGates != nil {
+		result["cluster"] = map[string]any{
+			"applications": h.clusterGates.Statuses(),
+		}
 	}
 	return result
 }
 
-// biStats reports manifest inventory without exposing BI rows or SQL text.
-func (h *host) biStats() []map[string]any {
-	apps := append([]biApp(nil), h.biApps...)
+// olapStats reports manifest inventory without exposing OLAP rows or SQL text.
+func (h *host) olapStats() []map[string]any {
+	apps := append([]olapApp(nil), h.olapApps...)
 	if len(apps) == 0 {
 		return nil
 	}
@@ -1573,7 +1719,7 @@ func (h *host) biStats() []map[string]any {
 	stats := make([]map[string]any, 0, len(apps))
 	for _, app := range apps {
 		item := map[string]any{"app": app.id}
-		manifests, err := runtimeBI.LoadManifests(app.datasetRoot)
+		manifests, err := runtimeOLAP.LoadManifests(app.datasetRoot)
 		if err != nil {
 			item["status"] = "unavailable"
 			item["error"] = err.Error()
@@ -1605,8 +1751,7 @@ func (h *host) configSummary() map[string]any {
 	return map[string]any{
 		"schemaVersion": cfg.SchemaVersion,
 		"runtime": map[string]any{
-			"nodeID":    cfg.Runtime.NodeID,
-			"clusterID": cfg.Runtime.ClusterID,
+			"nodeID": cfg.Runtime.NodeID,
 		},
 		"web": map[string]any{
 			"listen":  cfg.Web.Listen,
@@ -1647,6 +1792,8 @@ func (h *host) reload() control.Response {
 	h.mu.RLock()
 	current := h.config
 	h.mu.RUnlock()
+	candidate = config.PreserveManagedAppState(current, candidate)
+	candidate = config.PreserveRuntimeIdentity(current, candidate)
 	if config.RestartRequired(current, candidate) {
 		_ = h.machine.Transition(lifecycle.Ready, "restart-required configuration change not applied")
 		return control.Success(map[string]any{"reloaded": false, "restartRequired": true})
@@ -1663,7 +1810,7 @@ func (h *host) reload() control.Response {
 			Tokens:  tokens,
 		}
 	}
-	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge, h.biApps))
+	rendered, err := json.Marshal(webConfig(candidate, h.accessLogPath, h.accessLogKeepDays, observabilityBridge, h.olapApps))
 	if err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy configuration rendering failed")
 		return control.Failure("reload_failed", "render Caddy configuration")
@@ -1671,9 +1818,6 @@ func (h *host) reload() control.Response {
 	if err := caddy.Load(rendered, true); err != nil {
 		_ = h.machine.Transition(lifecycle.Degraded, "Caddy reload failed")
 		return control.Failure("reload_failed", "Caddy rejected configuration")
-	}
-	if candidate.Runtime.NodeID == "" {
-		candidate.Runtime.NodeID = current.Runtime.NodeID
 	}
 	h.mu.Lock()
 	h.config = candidate
@@ -1684,7 +1828,7 @@ func (h *host) reload() control.Response {
 	return control.Success(map[string]any{"reloaded": true, "restartRequired": false})
 }
 
-func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions, biApps []biApp) *caddy.Config {
+func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, observabilityBridge web.ObservabilityBridgeOptions, olapApps []olapApp) *caddy.Config {
 	queueBridge := web.QueueBridgeOptions{}
 	if cfg.Queue.Enabled {
 		bridgeListen := queueBridgeListen(cfg)
@@ -1703,15 +1847,15 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 			queueBridge = web.QueueBridgeOptions{Enabled: true, Listen: bridgeListen, Apps: queueApps}
 		}
 	}
-	biBridge := web.BIBridgeOptions{}
-	if cfg.BI.Enabled && len(biApps) > 0 {
-		tokens := make([]string, 0, len(biApps))
-		for _, app := range biApps {
+	olapBridge := web.OLAPBridgeOptions{}
+	if cfg.OLAP.Enabled && len(olapApps) > 0 {
+		tokens := make([]string, 0, len(olapApps))
+		for _, app := range olapApps {
 			tokens = append(tokens, app.token)
 		}
-		biBridge = web.BIBridgeOptions{
+		olapBridge = web.OLAPBridgeOptions{
 			Enabled: true,
-			Listen:  config.LoopbackBridgeAddress(cfg.BI.BridgePort),
+			Listen:  config.LoopbackBridgeAddress(cfg.OLAP.BridgePort),
 			Tokens:  tokens,
 		}
 	}
@@ -1726,7 +1870,7 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 		AccessLogKeepDays:   accessLogKeepDays,
 		QueueBridge:         queueBridge,
 		ObservabilityBridge: observabilityBridge,
-		BIBridge:            biBridge,
+		OLAPBridge:          olapBridge,
 	})
 }
 
@@ -1959,78 +2103,20 @@ func printRawJSON(value json.RawMessage) error {
 }
 
 func instanceID() string {
-	hostname, err := os.Hostname()
-	if err != nil {
-		return strconv.Itoa(os.Getpid())
-	}
-	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
-}
-
-// resolveNodeID returns the configured node ID, or a stable per-installation
-// ID persisted in <installRoot>/run/node-id so that log file names and
-// Parquet partitions stay stable across restarts.
-func resolveNodeID(cfg config.Config, installRoot string) (string, error) {
-	if cfg.Runtime.NodeID != "" {
-		return cfg.Runtime.NodeID, nil
-	}
-	runDir := filepath.Join(installRoot, "run")
-	if err := os.MkdirAll(runDir, 0o700); err != nil {
-		return "", fmt.Errorf("create run directory: %w", err)
-	}
-	nodeFile := filepath.Join(runDir, "node-id")
-	if data, err := os.ReadFile(nodeFile); err == nil {
-		if id := strings.TrimSpace(string(data)); id != "" {
-			if !validNodeID(id) {
-				return "", fmt.Errorf("node id file contains unsupported characters: %q", id)
-			}
-			return id, nil
+	processInstanceOnce.Do(func() {
+		hostname, err := os.Hostname()
+		if err != nil || hostname == "" {
+			hostname = "node"
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("read node id: %w", err)
-	}
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "unknown"
-	}
-	var random [4]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return "", fmt.Errorf("generate node id: %w", err)
-	}
-	host := safeHostname(hostname)
-	if len(host) > 48 {
-		host = host[:48]
-	}
-	id := fmt.Sprintf("node-%s-%x", host, random)
-	if err := os.WriteFile(nodeFile, []byte(id+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("write node id: %w", err)
-	}
-	return id, nil
-}
-
-func validNodeID(id string) bool {
-	if id == "" || len(id) > 128 {
-		return false
-	}
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == ':' {
-			continue
+		if len(hostname) > 32 {
+			hostname = hostname[:32]
 		}
-		return false
-	}
-	return true
-}
-
-func safeHostname(hostname string) string {
-	var builder strings.Builder
-	for _, r := range hostname {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
-			builder.WriteRune(r)
-		} else {
-			builder.WriteRune('-')
+		random := make([]byte, 12)
+		if _, err := rand.Read(random); err == nil {
+			processInstanceID = hostname + "-" + hex.EncodeToString(random)
+			return
 		}
-	}
-	if value := strings.Trim(builder.String(), "-"); value != "" {
-		return value
-	}
-	return "host"
+		processInstanceID = fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), time.Now().UTC().UnixNano())
+	})
+	return processInstanceID
 }

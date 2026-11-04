@@ -26,7 +26,7 @@ func (w *recordingWriter) WriteParquet(_ context.Context, _ observability.Kind, 
 
 func TestParseAccessLine(t *testing.T) {
 	line := `{"level":"info","ts":1787190000.5,"logger":"http.log.access.access","msg":"handled request","request":{"method":"GET","uri":"/index.php?x=1","host":"127.0.0.1:8080","remote_ip":"127.0.0.1"},"duration":0.25,"size":42,"status":200}`
-	event, ok, err := parseLine(line, "caddy.access", "cluster-a", "node-a", "boot-a")
+	event, ok, err := parseLine(line, "caddy.access", "node-a", "boot-a")
 	if err != nil || !ok {
 		t.Fatalf("parse error: %v ok=%v", err, ok)
 	}
@@ -47,7 +47,7 @@ func TestParseAccessLine(t *testing.T) {
 
 func TestParseRuntimeLineWithTimeKey(t *testing.T) {
 	line := `{"time":"2026-08-20T01:00:00.123Z","level":"error","msg":"queue bridge failed","node_id":"node-a","component":"queue","error":"unavailable: broker down"}`
-	event, ok, err := parseLine(line, "runtime", "cluster-a", "node-a", "boot-a")
+	event, ok, err := parseLine(line, "runtime", "node-a", "boot-a")
 	if err != nil || !ok {
 		t.Fatalf("parse error: %v ok=%v", err, ok)
 	}
@@ -59,12 +59,55 @@ func TestParseRuntimeLineWithTimeKey(t *testing.T) {
 	}
 }
 
+func TestSingleNodeSegmentUsesNoNodeSuffix(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "dataset"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	logsDir := filepath.Join(root, "logs")
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	segment := filepath.Join(logsDir, "runtime.jsonl-20260820T010000.000000000Z.log")
+	if err := os.WriteFile(segment, []byte(`{"ts":2,"level":"info","msg":"runtime started"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	writer := &recordingWriter{}
+	publisher, err := observability.NewPublisher(observability.Config{
+		DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"),
+		BootID: "boot-a", MaxBatchRows: 100, MaxBatchBytes: 1 << 20,
+	}, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	converter, err := New(Config{
+		LogsDir: logsDir, BootID: "boot-a", Sources: []string{"runtime"}, Publisher: publisher,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := converter.ConvertOnce(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Segments != 1 || result.Events != 1 {
+		t.Fatalf("unexpected conversion result: %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(logsDir, ".jsonl-state.json")); err != nil {
+		t.Fatalf("single-node converter state missing: %v", err)
+	}
+	if len(writer.events) != 1 || writer.events[0].NodeID != "" {
+		t.Fatalf("single-node event = %#v", writer.events)
+	}
+}
+
 func TestParseMalformedAndUnrelatedLines(t *testing.T) {
-	if _, _, err := parseLine("not-json", "caddy.access", "c", "n", "b"); err == nil {
+	if _, _, err := parseLine("not-json", "caddy.access", "n", "b"); err == nil {
 		t.Fatal("malformed line must be rejected")
 	}
 	line := `{"ts":1,"logger":"admin","msg":"admin endpoint disabled"}`
-	if _, ok, err := parseLine(line, "caddy.access", "c", "n", "b"); err != nil || ok {
+	if _, ok, err := parseLine(line, "caddy.access", "n", "b"); err != nil || ok {
 		t.Fatalf("non-access logger must be skipped: ok=%v err=%v", ok, err)
 	}
 }
@@ -102,14 +145,14 @@ func TestConvertOnceProcessesOwnNodeSegmentsIdempotently(t *testing.T) {
 	writer := &recordingWriter{}
 	publisher, err := observability.NewPublisher(observability.Config{
 		DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"),
-		NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		NodeID: "node-a", BootID: "boot-a",
 		MaxBatchRows: 100, MaxBatchBytes: 1 << 20,
 	}, writer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	converter, err := New(Config{
-		LogsDir: logsDir, NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		LogsDir: logsDir, NodeID: "node-a", BootID: "boot-a",
 		Sources: []string{"access", "runtime"}, Publisher: publisher,
 	})
 	if err != nil {
@@ -153,14 +196,14 @@ func TestConvertOnceDeletesSegmentsAfterSuccessfulConversion(t *testing.T) {
 	writer := &recordingWriter{}
 	publisher, err := observability.NewPublisher(observability.Config{
 		DatasetRoot: filepath.Join(root, "dataset"), SpoolPath: filepath.Join(root, "spool"),
-		NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		NodeID: "node-a", BootID: "boot-a",
 		MaxBatchRows: 100, MaxBatchBytes: 1 << 20,
 	}, writer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	converter, err := New(Config{
-		LogsDir: logsDir, NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		LogsDir: logsDir, NodeID: "node-a", BootID: "boot-a",
 		Sources: []string{"access"}, Publisher: publisher, DeleteAfterConvert: true,
 	})
 	if err != nil {
@@ -201,7 +244,7 @@ func TestReadRecentReturnsActiveAndUnconvertedSegments(t *testing.T) {
 		t.Fatal(err)
 	}
 	events, malformed, err := ReadRecent(Config{
-		LogsDir: logsDir, NodeID: "node-a", ClusterID: "cluster-a", BootID: "boot-a",
+		LogsDir: logsDir, NodeID: "node-a", BootID: "boot-a",
 		Sources: []string{"access", "runtime"},
 	})
 	if err != nil {

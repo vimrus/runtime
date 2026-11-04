@@ -66,6 +66,9 @@ jobs:
           scripts/ci/make-synthetic-app-package.sh "${appdir}"
           tests/e2e/access-log-smoke.sh "${appdir}"
 
+      - name: Cluster admission smoke
+        run: tests/e2e/cluster-admission-smoke.sh
+
       - name: Observability bridge smoke
         run: tests/e2e/observability-bridge-smoke.sh
 

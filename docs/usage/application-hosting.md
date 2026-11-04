@@ -102,7 +102,6 @@ Runtime 进程还提供节点身份：
 | 环境变量 | 含义 |
 | --- | --- |
 | `ZENTAO_NODE_ID` | 节点 ID |
-| `ZENTAO_CLUSTER_ID` | 集群 ID；未配置时为 `standalone` |
 | `ZENTAO_BOOT_ID` | 当前 Runtime 启动实例 ID |
 
 应用显式配置的环境变量优先于 Runtime 生成值。数据库凭据、数据库地址等业务环境必须由应用或部署配置显式提供，Runtime 不生成或保存这些信息。
@@ -208,6 +207,10 @@ GET <app-prefix>/health.php
 4. 执行 `./bin/zentao reload`。
 
 如果返回 `restartRequired: true`，说明 `[[apps]]` 变化不能热加载，需要重启 Runtime。
+
+如果直接在原目录替换 PHP 文件，即使 `runtime.toml` 没有变化，也必须完整重启
+Runtime。内置 PHP 使用 `opcache.validate_timestamps=0`，`reload` 只重载 Caddy
+配置，不会清除已加载的 PHP 字节码。
 
 应用替换失败时，将 `dir` 指回原版本并重启。数据库迁移和业务回滚不属于 Runtime 能力，由应用发布流程负责。
 

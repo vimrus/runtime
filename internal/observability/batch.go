@@ -37,7 +37,11 @@ func (p Partition) TempPath(datasetRoot string, kind Kind, batchID string) strin
 
 // BatchID is the idempotent commit key: nodeID + bootID + monotonic sequence.
 func BatchID(nodeID, bootID string, sequence uint64) string {
-	return fmt.Sprintf("%s-%s-%020d", nodeID, bootID, sequence)
+	prefix := ""
+	if nodeID != "" {
+		prefix = nodeID + "-"
+	}
+	return fmt.Sprintf("%s%s-%020d", prefix, bootID, sequence)
 }
 
 // BatchRecord is the persisted spool manifest used for crash recovery.

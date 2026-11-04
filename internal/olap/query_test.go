@@ -1,4 +1,4 @@
-package bi
+package olap
 
 import (
 	"os"
@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestValidateBIQuery(t *testing.T) {
+func TestValidateOLAPQuery(t *testing.T) {
 	valid := []string{
 		`SELECT "id" FROM "zt_bug"`,
 		`WITH bugs AS (SELECT * FROM "zt_bug") SELECT COUNT(*) FROM bugs`,
@@ -16,7 +16,7 @@ func TestValidateBIQuery(t *testing.T) {
 		`SELECT 1 AS create, truncate(1.234, 2) AS value`,
 	}
 	for _, sql := range valid {
-		if err := ValidateBIQuery(sql, 0); err != nil {
+		if err := ValidateOLAPQuery(sql, 0); err != nil {
 			t.Fatalf("valid query rejected: %s: %v", sql, err)
 		}
 	}
@@ -33,7 +33,7 @@ func TestValidateBIQuery(t *testing.T) {
 		`SELECT 'unterminated`,
 	}
 	for _, sql := range invalid {
-		if err := ValidateBIQuery(sql, 0); err == nil {
+		if err := ValidateOLAPQuery(sql, 0); err == nil {
 			t.Fatalf("invalid query accepted: %s", sql)
 		}
 	}

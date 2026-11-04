@@ -28,7 +28,6 @@ type Event struct {
 	SchemaVersion int               `json:"schemaVersion"`
 	EventTime     time.Time         `json:"eventTime"`
 	IngestTime    time.Time         `json:"ingestTime"`
-	ClusterID     string            `json:"clusterID"`
 	NodeID        string            `json:"nodeID"`
 	BootID        string            `json:"bootID"`
 	EventID       string            `json:"eventID"`
@@ -63,8 +62,8 @@ func Normalize(event Event) (Event, error) {
 	if event.SchemaVersion != SchemaVersion {
 		return Event{}, fmt.Errorf("unsupported observability schema %d", event.SchemaVersion)
 	}
-	if event.ClusterID == "" || event.NodeID == "" || event.BootID == "" || event.Source == "" {
-		return Event{}, errors.New("clusterID, nodeID, bootID and source are required")
+	if event.BootID == "" || event.Source == "" {
+		return Event{}, errors.New("bootID and source are required")
 	}
 	if event.Kind != KindMetrics && event.Kind != KindLogs {
 		return Event{}, errors.New("event kind must be metrics or logs")

@@ -40,6 +40,9 @@ func TestDefaultWebListenBindsAllIPv4Interfaces(t *testing.T) {
 	if got := Default().Web.Listen; got != "0.0.0.0:8080" {
 		t.Fatalf("default web listen = %q, want 0.0.0.0:8080", got)
 	}
+	if got, err := LoopbackWebAddress(Default().Web.Listen); err != nil || got != "127.0.0.1:8080" {
+		t.Fatalf("loopback web address = %q, err %v", got, err)
+	}
 }
 
 func TestLoadExampleTOML(t *testing.T) {
@@ -171,8 +174,15 @@ func TestRestartRequired(t *testing.T) {
 	}
 	unset := candidate
 	unset.Runtime.NodeID = ""
-	if RestartRequired(current, unset) {
-		t.Fatal("missing generated nodeID in candidate must not force restart")
+	if !RestartRequired(current, unset) {
+		t.Fatal("removing a configured nodeID must force restart")
+	}
+	current.Cluster.ReleaseID = "release-generated"
+	candidate.Cluster.ReleaseID = current.Cluster.ReleaseID
+	unsetRelease := candidate
+	unsetRelease.Cluster.ReleaseID = ""
+	if RestartRequired(current, unsetRelease) {
+		t.Fatal("missing generated releaseID in candidate must not force restart")
 	}
 	threads := current
 	threads.Web.Threads++
@@ -202,7 +212,6 @@ auditLogMaxBytes = 2097152
 auditLogMaxBackups = 4
 auditLogKeepDays = 14
 nodeID = "node-a"
-clusterID = "cluster-prod-1"
 
 [web]
 listen = "127.0.0.1:8080"`
@@ -218,7 +227,7 @@ listen = "127.0.0.1:8080"`
 		config.Runtime.AuditLogMaxBytes != 2097152 || config.Runtime.AuditLogMaxBackups != 4 || config.Runtime.AuditLogKeepDays != 14 {
 		t.Fatalf("log settings not loaded: %#v", config.Runtime)
 	}
-	if config.Runtime.NodeID != "node-b" || config.Runtime.ClusterID != "cluster-prod-1" {
+	if config.Runtime.NodeID != "node-b" {
 		t.Fatalf("identity settings not applied: %#v", config.Runtime)
 	}
 }
@@ -281,29 +290,129 @@ func TestBridgePortsMustDiffer(t *testing.T) {
 	}
 }
 
-func TestBIValidationAndEnvironment(t *testing.T) {
+func TestOLAPValidationAndEnvironment(t *testing.T) {
 	config := DefaultForRoot("/opt/zentao")
-	config.BI.Enabled = true
-	config.BI.BridgePort = 8083
+	config.OLAP.Enabled = true
+	config.OLAP.BridgePort = 8083
 	if err := config.Validate(); err != nil {
-		t.Fatalf("valid BI config must be accepted: %v", err)
+		t.Fatalf("valid OLAP config must be accepted: %v", err)
 	}
 
-	config.BI.BridgePort = config.Queue.BridgePort
+	config.OLAP.BridgePort = config.Queue.BridgePort
 	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "queue.bridgePort") {
-		t.Fatalf("BI/queue bridge port collision must be rejected, got %v", err)
+		t.Fatalf("OLAP/queue bridge port collision must be rejected, got %v", err)
 	}
 
 	loaded, err := Load(pathWithContent(t, "schemaVersion = 1\n"), []string{
-		"ZENTAO_BI_ENABLED=true",
-		"ZENTAO_BI_BRIDGE_PORT=9083",
-		"ZENTAO_BI_MAX_ROWS=2000",
+		"ZENTAO_OLAP_ENABLED=true",
+		"ZENTAO_OLAP_BRIDGE_PORT=9083",
+		"ZENTAO_OLAP_MAX_ROWS=2000",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.BI.Enabled || loaded.BI.BridgePort != 9083 || loaded.BI.MaxRows != 2000 {
-		t.Fatalf("BI environment overrides not applied: %#v", loaded.BI)
+	if !loaded.OLAP.Enabled || loaded.OLAP.BridgePort != 9083 || loaded.OLAP.MaxRows != 2000 {
+		t.Fatalf("OLAP environment overrides not applied: %#v", loaded.OLAP)
+	}
+}
+
+func TestClusterValidationAndEnvironment(t *testing.T) {
+	config := DefaultForRoot("/opt/zentao")
+	config.Cluster.ReleaseID = "release-1"
+	config.Cluster.SecretKey = "0123456789abcdef"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("valid cluster config must be accepted: %v", err)
+	}
+
+	config.Cluster.StaleTimeout = 2 * config.Cluster.HeartbeatInterval
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "staleTimeout") {
+		t.Fatalf("short cluster stale timeout must be rejected, got %v", err)
+	}
+
+	config.Cluster.StaleTimeout = 10 * time.Minute
+	config.Runtime.NodeID = strings.Repeat("a", 65)
+	if err := config.Validate(); err == nil || !strings.Contains(err.Error(), "runtime.nodeID") {
+		t.Fatalf("oversized nodeID must be rejected, got %v", err)
+	}
+
+	loaded, err := Load(pathWithContent(t, "schemaVersion = 1\n"), []string{
+		"ZENTAO_CLUSTER_RELEASE_ID=release-2",
+		"ZENTAO_CLUSTER_SECRET_KEY=abcdef0123456789",
+		"ZENTAO_CLUSTER_PROFILE_INTERVAL=7m",
+		"ZENTAO_CLUSTER_STALE_TIMEOUT=12m",
+		"ZENTAO_CLUSTER_REQUIRE_SHARED_DATA=false",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Cluster.ReleaseID != "release-2" ||
+		loaded.Cluster.SecretKey != "abcdef0123456789" ||
+		loaded.Cluster.ProfileInterval != 7*time.Minute ||
+		loaded.Cluster.StaleTimeout != 12*time.Minute || loaded.Cluster.RequireSharedData {
+		t.Fatalf("cluster environment overrides not applied: %#v", loaded.Cluster)
+	}
+
+	if _, err := Load(pathWithContent(t, "schemaVersion = 1\n[cluster]\nenabled = true\n"), nil); err == nil {
+		t.Fatal("removed cluster.enabled field must be rejected as unknown")
+	}
+	if _, err := Load(pathWithContent(t, "schemaVersion = 1\n[cluster]\nbootstrap = true\n"), nil); err == nil {
+		t.Fatal("removed cluster.bootstrap field must be rejected as unknown")
+	}
+	if _, err := Load(pathWithContent(t, "schemaVersion = 1\n[runtime]\nclusterID = \"legacy\"\n"), nil); err == nil {
+		t.Fatal("removed runtime.clusterID field must be rejected as unknown")
+	}
+}
+
+func TestRestartRequiredAllowsIdleTimeoutChange(t *testing.T) {
+	current, err := Load(filepath.Join("..", "..", "tests", "fixtures", "runtime", "runtime.toml"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := current
+	candidate.Web.IdleTimeout = current.Web.IdleTimeout + time.Second
+	if RestartRequired(current, candidate) {
+		t.Fatal("idleTimeout must be reloadable")
+	}
+}
+
+func TestDefaultEnablesOLAP(t *testing.T) {
+	if !Default().OLAP.Enabled {
+		t.Fatal("OLAP capability must be enabled by default")
+	}
+}
+
+func TestPreserveManagedAppStateKeepsRuntimeTokens(t *testing.T) {
+	current := Config{Apps: []App{{
+		ID: "zentao",
+		Env: map[string]string{
+			"EXPLICIT_VALUE":            "kept-in-candidate",
+			"ZENTAO_QUEUE_TOKEN":        "allowed-token",
+			"ZENTAO_OBSERVABILITY_URL":  "http://127.0.0.1:8082",
+			"ZENTAO_OLAP_TOKEN":         "olap-token",
+			"ZENTAO_UNRELATED_INTERNAL": "not-managed",
+		},
+		Queue: AppQueue{Token: "queue-token"},
+	}}}
+	candidate := Config{Apps: []App{{
+		ID:  "zentao",
+		Env: map[string]string{"EXPLICIT_VALUE": "kept-in-candidate"},
+	}}}
+
+	merged := PreserveManagedAppState(current, candidate)
+	app := merged.Apps[0]
+	if app.Queue.Token != "queue-token" {
+		t.Fatalf("queue token = %q", app.Queue.Token)
+	}
+	if app.Env["ZENTAO_QUEUE_TOKEN"] != "allowed-token" ||
+		app.Env["ZENTAO_OBSERVABILITY_URL"] != "http://127.0.0.1:8082" ||
+		app.Env["ZENTAO_OLAP_TOKEN"] != "olap-token" {
+		t.Fatalf("managed env was not preserved: %#v", app.Env)
+	}
+	if _, ok := app.Env["ZENTAO_UNRELATED_INTERNAL"]; ok {
+		t.Fatal("non-managed env must not be copied")
+	}
+	if app.Env["EXPLICIT_VALUE"] != "kept-in-candidate" {
+		t.Fatal("candidate explicit env was overwritten")
 	}
 }
 

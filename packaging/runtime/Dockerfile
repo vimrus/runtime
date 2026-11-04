@@ -47,6 +47,7 @@ RUN apt-get update \
 
 ARG GO_VERSION
 ARG PHP_VERSION
+ARG PHP_API
 ARG PHP_URL
 ARG PHP_SHA256
 ARG FRANKENPHP_VERSION
@@ -63,15 +64,13 @@ RUN test "$(go version | awk '{sub(/^go/, "", $3); print $3}')" = "${GO_VERSION}
 
 WORKDIR /build
 COPY patches/php/8.4/0001-ioncube-zend-signal-abi-shim.patch /build/php-ioncube.patch
-COPY packaging/runtime/expected-ioncube-symbols.txt /build/expected-ioncube-symbols.txt
-COPY packaging/runtime/expected-ioncube-symbols-${LOADER_ARCH}.txt /build/expected-ioncube-symbols-loader.txt
 COPY packaging/runtime/third-party/dm8 /build/dm8
 
 RUN curl --fail --location --retry 3 --output php.tar.xz "${PHP_URL}" \
     && echo "${PHP_SHA256}  php.tar.xz" | sha256sum --check --strict \
     && tar -xJf php.tar.xz \
     && cd "php-${PHP_VERSION}" \
-    && patch --forward --fuzz=0 -p1 < /build/php-ioncube.patch \
+    && if [ "${LOADER_ARCH}" = "amd64" ]; then patch --forward --fuzz=0 -p1 < /build/php-ioncube.patch; fi \
     && ./configure \
         --prefix=/opt/zentao/php \
         --with-config-file-path=/opt/zentao/config \
@@ -112,8 +111,12 @@ RUN mkdir -p /opt/zentao/php/lib/ioncube \
         | awk '$7 == "UND" && $8 ~ /^zend_signal/ {print $8}' \
         | sort -u \
         > /tmp/ioncube-loader-symbols.txt \
-    && sed '/^$/d' /build/expected-ioncube-symbols-loader.txt > /tmp/expected-loader-symbols.txt \
-    && diff -u /tmp/expected-loader-symbols.txt /tmp/ioncube-loader-symbols.txt
+    && if [ "${LOADER_ARCH}" = "amd64" ]; then \
+        printf '%s\n' zend_signal_globals_id zend_signal_globals_offset zend_signal_handler_unblock \
+            | diff -u - /tmp/ioncube-loader-symbols.txt; \
+    else \
+        test ! -s /tmp/ioncube-loader-symbols.txt; \
+    fi
 
 ARG PHPREDIS_COMMIT
 ARG PHPREDIS_ARCHIVE_SHA256
@@ -160,15 +163,33 @@ RUN mkdir -p /opt/zentao/config/conf.d /opt/zentao/bin \
     && export LD_LIBRARY_PATH=/opt/zentao/php/lib \
     && test "$(/opt/zentao/php/bin/php-config --vernum)" -ge 80400 \
     && sed 's#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g' /opt/zentao/config/php.ini > /tmp/php.ini \
-    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("Zend OPcache") && ini_get("opcache.enable") == "1" ? 0 : 1);' \
-    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("redis") ? 0 : 1);' \
-    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("apcu") && ini_get("apc.enabled") == "1" ? 0 : 1);' \
+    && if ! /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("Zend OPcache") && ini_get("opcache.enable") == "1" ? 0 : 1);'; then \
+        /opt/zentao/php/bin/php -c /tmp/php.ini -v; \
+        /opt/zentao/php/bin/php -c /tmp/php.ini -m; \
+        /opt/zentao/php/bin/php -c /tmp/php.ini -i | grep -E '^(opcache|Zend OPcache)'; \
+        exit 1; \
+    fi
+
+RUN export LD_LIBRARY_PATH=/opt/zentao/php/lib \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("redis") ? 0 : 1);'
+
+RUN export LD_LIBRARY_PATH=/opt/zentao/php/lib \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("apcu") && ini_get("apc.enabled") == "1" ? 0 : 1);'
+
+RUN export LD_LIBRARY_PATH=/opt/zentao/php/lib \
     && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("pdo_dm") && in_array("dm", PDO::getAvailableDrivers(), true) ? 0 : 1);' \
-    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'try { new PDO("dm:host=127.0.0.1;port=5236", "SYSDBA", "x", [PDO::ATTR_TIMEOUT=>2]); exit(2); } catch (Throwable $e) { $m = $e->getMessage(); exit((strpos($m, "-70089") !== false || stripos($m, "is missing") !== false || stripos($m, "Unable to load") !== false) ? 3 : 0); }' \
-    && nm -D /opt/zentao/php/lib/libphp.so \
+    && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'try { new PDO("dm:host=127.0.0.1;port=5236", "SYSDBA", "x", [PDO::ATTR_TIMEOUT=>2]); exit(2); } catch (Throwable $e) { $m = $e->getMessage(); exit((strpos($m, "-70089") !== false || stripos($m, "is missing") !== false || stripos($m, "Unable to load") !== false) ? 3 : 0); }'
+
+RUN nm -D /opt/zentao/php/lib/libphp.so \
         | awk '$3 ~ /^zend_signal_(globals_id|globals_offset|handler_unblock)$/ {print $3}' \
         | sort -u \
-        | diff -u /build/expected-ioncube-symbols.txt -
+        > /tmp/libphp-signal-symbols.txt \
+    && if [ "${LOADER_ARCH}" = "amd64" ]; then \
+        printf '%s\n' zend_signal_globals_id zend_signal_globals_offset zend_signal_handler_unblock \
+            | diff -u - /tmp/libphp-signal-symbols.txt; \
+    else \
+        test ! -s /tmp/libphp-signal-symbols.txt; \
+    fi
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -183,15 +204,15 @@ COPY scripts/package/bundle-runtime-libs.sh /build/bundle-runtime-libs.sh
 RUN go test ./internal/config ./internal/lifecycle ./internal/health ./internal/control \
     ./internal/logging ./internal/queue/bridge ./internal/queue/fake \
     ./internal/queue/client ./internal/queue/lease ./internal/queue/worker ./internal/queue/engine ./internal/scheduler \
-    ./internal/bi \
+    ./internal/olap \
+    ./internal/cluster \
     ./internal/observability ./internal/observability/query ./internal/observability/retention \
     ./internal/observability/jsonl \
     ./internal/observability/duckdb
 
 RUN go test -tags duckdb ./internal/observability/duckdb
-RUN go test -tags duckdb ./internal/bi
-RUN go test -tags duckdb internal/web/bi.go internal/web/bi_test.go internal/web/bi_integration_duckdb_test.go
-
+RUN go test -tags duckdb ./internal/olap
+RUN go test -tags duckdb internal/web/olap.go internal/web/olap_test.go internal/web/olap_integration_duckdb_test.go
 RUN export CGO_CFLAGS="$(/opt/zentao/php/bin/php-config --includes)" \
     && export CGO_LDFLAGS="-L/opt/zentao/php/lib -Wl,-rpath,\$ORIGIN/../php/lib,--disable-new-dtags -lphp $(/opt/zentao/php/bin/php-config --ldflags) $(/opt/zentao/php/bin/php-config --libs)" \
     && go build \
@@ -203,7 +224,7 @@ RUN export CGO_CFLAGS="$(/opt/zentao/php/bin/php-config --includes)" \
 RUN bash /build/bundle-runtime-libs.sh /opt/zentao
 RUN patchelf --force-rpath --set-rpath '$ORIGIN/../lib' /opt/zentao/php/bin/php
 
-RUN sed 's#\${ZENTAO_RUNTIME_PHP_ROOT}#/opt/zentao#g' /opt/zentao/config/php.ini > /tmp/php.ini \
+RUN export LD_LIBRARY_PATH=/opt/zentao/php/lib \
     && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'exit(extension_loaded("pdo_dm") && in_array("dm", PDO::getAvailableDrivers(), true) ? 0 : 1);' \
     && /opt/zentao/php/bin/php -c /tmp/php.ini -r 'try { new PDO("dm:host=127.0.0.1;port=5236", "SYSDBA", "x", [PDO::ATTR_TIMEOUT=>2]); exit(2); } catch (Throwable $e) { $m = $e->getMessage(); exit((strpos($m, "-70089") !== false || stripos($m, "is missing") !== false || stripos($m, "Unable to load") !== false) ? 3 : 0); }'
 

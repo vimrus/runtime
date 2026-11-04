@@ -202,8 +202,8 @@ class metricRunResult
 - MetricService：度量计算不再有 Parquet flush 环节（22.7 PHP 侧 DuckDB 已下线），
   metric cron handler（updateMetricLib / updateDashboardMetricLib）计算成功后直接返回
   `success`。
-- `service/bi`：实现业务数据导出、`zt_bisync` 租约和 `snapshot|append|rewrite`
-  运行器；BI 分析副本与实时度量链路相互独立。
+- `service/olap`：实现业务数据导出、`zt_bisync` 租约和 `snapshot|append|rewrite`
+  运行器；OLAP 分析副本与实时度量链路相互独立。
 - MetricService::run 已实现：`run(metricCode|period, options)` 按 code
   列表或 dateType（nodate/year/month/week/day）投递队列任务，
   `status(taskID)`/`retry(taskID)` 提供状态与重试；`metricRunResult` 作为

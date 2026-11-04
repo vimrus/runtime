@@ -23,8 +23,8 @@ func TestDuckDBWriterProducesReadableParquet(t *testing.T) {
 	target := filepath.Join(t.TempDir(), ".batch-1.parquet.tmp")
 	now := time.Now().UTC()
 	events := []observability.Event{
-		{SchemaVersion: 1, ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", EventID: "e1", Source: "runtime", Kind: observability.KindLogs, EventTime: now, Level: "info", Message: "hello"},
-		{SchemaVersion: 1, ClusterID: "cluster-a", NodeID: "node-a", BootID: "boot-a", EventID: "e2", Source: "runtime", Kind: observability.KindMetrics, EventTime: now, MetricName: "observability_events_received_total", MetricKind: "counter", Count: uint64Ptr(1)},
+		{SchemaVersion: 1, NodeID: "node-a", BootID: "boot-a", EventID: "e1", Source: "runtime", Kind: observability.KindLogs, EventTime: now, Level: "info", Message: "hello"},
+		{SchemaVersion: 1, NodeID: "node-a", BootID: "boot-a", EventID: "e2", Source: "runtime", Kind: observability.KindMetrics, EventTime: now, MetricName: "observability_events_received_total", MetricKind: "counter", Count: uint64Ptr(1)},
 	}
 	if _, err := writer.WriteParquet(context.Background(), observability.KindLogs, target, events); err != nil {
 		t.Fatal(err)

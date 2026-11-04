@@ -29,12 +29,17 @@ lock_value() {
 }
 
 verify_lock() {
+    local patch_path patch_sha256 actual_sha256
+
     jq --exit-status '
         .schema == 1 and
         (.go.version | type == "string" and length > 0) and
         (.images.builder | startswith("mcr.microsoft.com/")) and
         (.images.runtime | startswith("mcr.microsoft.com/")) and
         (.php.version | type == "string" and length > 0) and
+        (.php.api | test("^[0-9]{8}$")) and
+        (.php.patch.path | type == "string" and length > 0) and
+        (.php.patch.sha256 | test("^[0-9a-f]{64}$")) and
         (.php.url | startswith("https://")) and
         (.php.sha256 | test("^[0-9a-f]{64}$")) and
         (.php.windows.runtime.url | startswith("https://")) and
@@ -63,6 +68,9 @@ verify_lock() {
         (.apcu.windows_x64.archive_sha256 | test("^[0-9a-f]{64}$")) and
         (.dm8.version | type == "string" and length > 0) and
         (.dm8.php | type == "string" and length > 0) and
+        (.dm8.required_api == .php.api) and
+        (.dm8.packaging_enabled | type == "boolean") and
+        (if .dm8.packaging_enabled then .dm8.api == .php.api else true end) and
         (.dm8.linux_amd64.pdo_driver_sha256 | test("^[0-9a-f]{64}$")) and
         (.dm8.linux_amd64.dpi_sha256 | test("^[0-9a-f]{64}$")) and
         (.dm8.linux_amd64.client_components | type == "number" and . >= 18) and
@@ -79,6 +87,18 @@ verify_lock() {
         (.mysql.windows_x64.archive_sha256 | test("^[0-9a-f]{64}$")) and
         (.php.extensions | type == "array" and length > 0)
     ' "${VERSION_LOCK}" >/dev/null
+
+    patch_path="$(lock_value '.php.patch.path')"
+    patch_sha256="$(lock_value '.php.patch.sha256')"
+    if [[ ! -f "${REPO_ROOT}/${patch_path}" ]]; then
+        echo "locked PHP patch is missing: ${patch_path}" >&2
+        return 1
+    fi
+    actual_sha256="$(sha256sum "${REPO_ROOT}/${patch_path}" | awk '{print $1}')"
+    if [[ "${actual_sha256}" != "${patch_sha256}" ]]; then
+        echo "PHP patch SHA256 mismatch: expected ${patch_sha256}, got ${actual_sha256}" >&2
+        return 1
+    fi
 }
 
 docker_build_args() {
@@ -96,6 +116,7 @@ docker_build_args() {
         --build-arg "BUILDER_IMAGE=$(lock_value '.images.builder')" \
         --build-arg "RUNTIME_IMAGE=$(lock_value '.images.runtime')" \
         --build-arg "PHP_VERSION=$(lock_value '.php.version')" \
+        --build-arg "PHP_API=$(lock_value '.php.api')" \
         --build-arg "PHP_URL=$(lock_value '.php.url')" \
         --build-arg "PHP_SHA256=$(lock_value '.php.sha256')" \
         --build-arg "PHP_LIBDIR=${php_libdir}" \

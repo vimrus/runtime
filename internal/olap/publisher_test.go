@@ -1,4 +1,4 @@
-package bi
+package olap
 
 import (
 	"context"
@@ -10,11 +10,11 @@ import (
 	"github.com/gofrs/flock"
 )
 
-type recordingBIWriter struct {
+type recordingOLAPWriter struct {
 	rows uint64
 }
 
-func (w *recordingBIWriter) WriteParquet(_ context.Context, _ Schema, _ []string, targetPath string) (uint64, error) {
+func (w *recordingOLAPWriter) WriteParquet(_ context.Context, _ Schema, _ []string, targetPath string) (uint64, error) {
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
 		return 0, err
 	}
@@ -24,7 +24,7 @@ func (w *recordingBIWriter) WriteParquet(_ context.Context, _ Schema, _ []string
 	return w.rows, nil
 }
 
-func testBISchema() Schema {
+func testOLAPSchema() Schema {
 	return Schema{
 		Version:    DatasetSchemaVersion,
 		Table:      "zt_bug",
@@ -41,7 +41,7 @@ func newTestPublisher(t *testing.T, rows uint64) (*Publisher, string, string) {
 	root := t.TempDir()
 	datasetRoot := filepath.Join(root, "dataset")
 	stagingRoot := filepath.Join(root, "staging")
-	writer := &recordingBIWriter{rows: rows}
+	writer := &recordingOLAPWriter{rows: rows}
 	publisher, err := NewPublisher(PublisherConfig{DatasetRoot: datasetRoot, StagingRoot: stagingRoot}, writer)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func newTestPublisher(t *testing.T, rows uint64) (*Publisher, string, string) {
 	return publisher, datasetRoot, stagingRoot
 }
 
-func stageBIRequest(t *testing.T, stagingRoot, syncID string) {
+func stageOLAPRequest(t *testing.T, stagingRoot, syncID string) {
 	t.Helper()
 	dir := filepath.Join(stagingRoot, syncID)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -63,9 +63,9 @@ func stageBIRequest(t *testing.T, stagingRoot, syncID string) {
 
 func TestPublisherSnapshotAppendAndRewrite(t *testing.T) {
 	publisher, datasetRoot, stagingRoot := newTestPublisher(t, 1)
-	schema := testBISchema()
+	schema := testOLAPSchema()
 
-	stageBIRequest(t, stagingRoot, "snapshot-1")
+	stageOLAPRequest(t, stagingRoot, "snapshot-1")
 	result, err := publisher.Publish(context.Background(), PublishRequest{
 		SchemaVersion:      DatasetSchemaVersion,
 		Table:              "zt_bug",
@@ -81,7 +81,7 @@ func TestPublisherSnapshotAppendAndRewrite(t *testing.T) {
 		t.Fatalf("unexpected snapshot manifest: %#v", result.Manifest)
 	}
 
-	stageBIRequest(t, stagingRoot, "rewrite-2")
+	stageOLAPRequest(t, stagingRoot, "rewrite-2")
 	result, err = publisher.Publish(context.Background(), PublishRequest{
 		SchemaVersion:      DatasetSchemaVersion,
 		Table:              "zt_bug",
@@ -98,7 +98,7 @@ func TestPublisherSnapshotAppendAndRewrite(t *testing.T) {
 		t.Fatalf("unexpected rewrite manifest: %#v", result.Manifest)
 	}
 
-	stageBIRequest(t, stagingRoot, "append-3")
+	stageOLAPRequest(t, stagingRoot, "append-3")
 	result, err = publisher.Publish(context.Background(), PublishRequest{
 		SchemaVersion:      DatasetSchemaVersion,
 		Table:              "zt_bug",
@@ -120,14 +120,14 @@ func TestPublisherSnapshotAppendAndRewrite(t *testing.T) {
 
 func TestPublisherRejectsGenerationConflict(t *testing.T) {
 	publisher, _, stagingRoot := newTestPublisher(t, 1)
-	stageBIRequest(t, stagingRoot, "conflict-1")
+	stageOLAPRequest(t, stagingRoot, "conflict-1")
 	_, err := publisher.Publish(context.Background(), PublishRequest{
 		SchemaVersion:      DatasetSchemaVersion,
 		Table:              "zt_bug",
 		Mode:               ModeSnapshot,
 		SyncID:             "conflict-1",
 		ExpectedGeneration: 3,
-		Schema:             testBISchema(),
+		Schema:             testOLAPSchema(),
 	})
 	if err == nil {
 		t.Fatal("expected missing-manifest generation conflict")
@@ -136,9 +136,9 @@ func TestPublisherRejectsGenerationConflict(t *testing.T) {
 
 func TestPublisherCleanupRemovesOnlyExpiredUnreferencedFiles(t *testing.T) {
 	publisher, datasetRoot, stagingRoot := newTestPublisher(t, 1)
-	schema := testBISchema()
+	schema := testOLAPSchema()
 
-	stageBIRequest(t, stagingRoot, "cleanup-1")
+	stageOLAPRequest(t, stagingRoot, "cleanup-1")
 	first, err := publisher.Publish(context.Background(), PublishRequest{
 		SchemaVersion:      DatasetSchemaVersion,
 		Table:              "zt_bug",
@@ -150,7 +150,7 @@ func TestPublisherCleanupRemovesOnlyExpiredUnreferencedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stageBIRequest(t, stagingRoot, "cleanup-2")
+	stageOLAPRequest(t, stagingRoot, "cleanup-2")
 	second, err := publisher.Publish(context.Background(), PublishRequest{
 		SchemaVersion:      DatasetSchemaVersion,
 		Table:              "zt_bug",
@@ -236,7 +236,7 @@ func TestPublisherHonorsCrossProcessLock(t *testing.T) {
 	}
 	defer lock.Unlock()
 
-	stageBIRequest(t, stagingRoot, "locked-1")
+	stageOLAPRequest(t, stagingRoot, "locked-1")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	_, err = publisher.Publish(ctx, PublishRequest{
@@ -245,7 +245,7 @@ func TestPublisherHonorsCrossProcessLock(t *testing.T) {
 		Mode:               ModeSnapshot,
 		SyncID:             "locked-1",
 		ExpectedGeneration: 0,
-		Schema:             testBISchema(),
+		Schema:             testOLAPSchema(),
 	})
 	if err == nil {
 		t.Fatal("expected cross-process publish lock conflict")
