@@ -106,7 +106,7 @@ func ProfileEndpoint(webListen, appPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	path := "/index.php"
+	path := "/bridge.php"
 	if prefix != "/" {
 		path = strings.TrimRight(prefix, "/") + path
 	}
@@ -114,7 +114,7 @@ func ProfileEndpoint(webListen, appPath string) (string, error) {
 		Scheme:   "http",
 		Host:     address,
 		Path:     path,
-		RawQuery: "m=runtime&f=profile",
+		RawQuery: "endpoint=runtime.profile",
 	}
 	return endpoint.String(), nil
 }

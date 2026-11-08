@@ -104,10 +104,9 @@ type App struct {
 	Processes []AppProcess `json:"processes,omitempty" toml:"processes,omitempty"`
 }
 
-// DefaultAppQueueBridgeURLTemplate keeps applications that still expose the
-// bridge through their normal router (PATH_INFO request mode) working when an
-// application enables queue without an explicit template.
-const DefaultAppQueueBridgeURLTemplate = "/index.php/queue-{endpoint}"
+// DefaultAppQueueBridgeURLTemplate routes all Runtime-to-PHP Queue Bridge
+// requests through the shared private bridge entry.
+const DefaultAppQueueBridgeURLTemplate = "/bridge.php?endpoint={endpoint}"
 
 // AppQueue declares how the Runtime reaches one application's private Queue
 // Bridge. The template is an in-application URL path containing exactly one

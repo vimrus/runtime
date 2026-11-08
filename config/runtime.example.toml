@@ -76,8 +76,8 @@ enabled = true
 #
 # queue = { enabled = true, bridgeUrlTemplate = "/bridge.php?endpoint={endpoint}" }
 #
-# When omitted, bridgeUrlTemplate defaults to the PATH_INFO form
-# "/index.php/queue-{endpoint}".
+# When omitted, bridgeUrlTemplate defaults to the shared bridge entry
+# "/bridge.php?endpoint={endpoint}".
 #
 # Runtime-supervised resident PHP processes are declared per application.
 # They use the bundled PHP CLI, the same php.ini and extensions as Web PHP, and

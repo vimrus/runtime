@@ -125,7 +125,8 @@ queue = { enabled = true, bridgeUrlTemplate = "/bridge.php?endpoint={endpoint}" 
 ```
 
 模板必须是应用内路径，以 `/` 开头、恰好包含一个 `{endpoint}`，且不能包含协议、
-空白或 `..`。
+空白或 `..`。省略 `bridgeUrlTemplate` 时默认使用
+`/bridge.php?endpoint={endpoint}`。
 
 应用需要实现：
 

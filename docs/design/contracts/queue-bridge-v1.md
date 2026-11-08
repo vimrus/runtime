@@ -86,9 +86,11 @@ Fake Bridge 不执行 SQL，不模拟数据库并发，也不能替代 MySQL、P
 
 - Go 侧 DTO、Fake Bridge、HTTP 客户端、Worker/租约/Reaper 与 Host 集成
   已实现并通过单测；`internal/queue/bridge` 是本契约的唯一 Go 实现来源。
-- PHP 侧 Bridge 路由、鉴权与队列状态机 DAO 全部在
+- PHP 侧 Queue 处理逻辑、鉴权与队列状态机 DAO 在
   `zentaopms/module/queue`；Runtime 监听器把
-  `/internal/runtime/queue/v1/<endpoint>` 重写为 `/index.php/queue-<endpoint>`。
+  `/internal/runtime/queue/v1/<endpoint>` 重写为
+  `/bridge.php?endpoint=<endpoint>`。`www/bridge.php` 是 Runtime 到 PHP 的
+  统一入站桥入口。
   八端点 URL 与本契约不变，由 Runtime 的 Queue Engine 使用。唯一的跨模块
   回调是 `schedule` 端点调用 `cronModel::scheduleRuntime()`（模块依赖
   cron→queue 单向）。实现必须继续以本文件为准。PHP-FPM/Apache、

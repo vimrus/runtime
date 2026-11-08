@@ -1346,7 +1346,9 @@ PHP Handler Contract 的基础上增加 Redis、NATS 或其他传输，而不重
   （Portable CAS 领取、租约心跳、完成/重试/reap 与通道控制）全部在
   `module/queue`，capabilities/claim/execute/heartbeat/reap/stats/control/
   schedule 八端点契约不变；Runtime 监听器把
-  `/internal/runtime/queue/v1/<endpoint>` 重写为 `/index.php/queue-<endpoint>`。
+  `/internal/runtime/queue/v1/<endpoint>` 重写为
+  `/bridge.php?endpoint=<endpoint>`。Queue 与 Profile 共用 PHP 私有桥入口，
+  但各自保留独立的 Token、Schema、请求上限和响应协议。
 - cron 生产者已迁移：`cronModel::enqueueCron()` 在调度事务内持有模式租约
   围栏与 `zt_cron.lastTime` 推进，任务行的写入复用 `queueModel::insertTask()`
   通用入队原语（幂等键等 cron 语义留在 cron 模型）；`queueService` 提供业务

@@ -37,7 +37,10 @@ Runtime Node
   └─ private loopback Profile Bridge
                 |
                 v
-        PHP Runtime Profile Service
+        PHP www/bridge.php?endpoint=runtime.profile
+                |
+                v
+        runtimeClusterService
                 |
                 v
           zt_servernode
@@ -47,8 +50,10 @@ Runtime Node
 ```
 
 节点每次启动生成新的 `instanceID` 和 `bootID`，使用稳定 `nodeID` 写入
-`zt_servernode`。PHP 读取当前业务数据库、当前表前缀下 `nodeType=runtime`
-的行并比较。
+`zt_servernode`。Runtime 通过 `POST /bridge.php?endpoint=runtime.profile`
+上报 Profile；该入口与 Queue Bridge 共用传输分发，但使用独立的 Profile
+Token、Schema、请求上限和响应协议。PHP 读取当前业务数据库、当前表前缀下
+`nodeType=runtime` 的行并比较。
 
 节点归属不需要额外配置。`zt_servernode` 位于业务数据库中，当前数据库、
 Schema 和表前缀天然界定了同一次部署；不同数据库中的节点属于独立部署，
@@ -121,11 +126,15 @@ Secret 使用集群密钥 HMAC；未配置集群密钥时只标记为 `configure
 
 ## 9. 后台页面
 
+后台页面入口为 `admin/runtime`，权限项为 `admin-runtime`。Runtime 不再维护
+独立业务模块；页面只负责展示，Profile 注册和节点诊断由
+`service/runtime/cluster.service.php` 提供。
+
 - 无节点：显示“暂无运行节点”。
 - 单节点：显示当前节点和“无需进行多节点配置比较”。
 - 多节点一致：显示“所有运行节点配置一致”。
 - 多节点不一致：显示“运行节点配置存在差异”和具体配置域。
-- 页面同时展示节点状态、版本、心跳、能力、差异和容量信息。
+- 页面同时展示节点 ID、准入状态、进程状态、心跳、Web 服务器、差异域和容量信息。
 
 页面不提供基线审批、bootstrap 或强制放行操作。
 

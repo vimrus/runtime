@@ -57,8 +57,9 @@ dataDir = "data/apps/zentao"
 
 ## 4. PHP 侧
 
-1. `runtime.profile` 校验回环地址、Token 和 Schema。
-2. `runtimeModel::registerProfile()` 补充 PHP 有效配置。
+1. `www/bridge.php?endpoint=runtime.profile` 按 endpoint 注册表校验回环地址、
+   Profile Token、Schema 和请求大小。
+2. `runtimeClusterService::registerProfile()` 补充 PHP 有效配置。
 3. `runtimeClusterRegistry::register()` 保存节点并比较当前业务数据库中的全部运行节点。
 4. 单节点返回 `ready`。
 5. 多节点一致返回 `ready`。
@@ -98,11 +99,14 @@ dataDir = "data/apps/zentao"
 | 多节点不一致 | 显示配置错误与差异域 |
 | 配置修正 | 下一次上报后错误自动消失 |
 
+页面入口为 `admin/runtime`，不再保留 `module/runtime`。
+
 ## 8. 测试
 
 ```bash
 php test/runtime/cluster-profile.php
 php test/runtime/cluster-registry.php
+php test/runtime/cluster-service.php
 go test ./internal/config ./internal/cluster
 ```
 

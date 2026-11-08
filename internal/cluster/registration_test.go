@@ -14,7 +14,7 @@ func TestProfileClientRegistrationAndEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if endpoint != "http://127.0.0.1:8080/zentao/index.php?m=runtime&f=profile" {
+	if endpoint != "http://127.0.0.1:8080/zentao/bridge.php?endpoint=runtime.profile" {
 		t.Fatalf("endpoint = %q", endpoint)
 	}
 
