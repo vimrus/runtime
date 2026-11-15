@@ -104,7 +104,7 @@ logMaxBackups = 5
 
 [web]
 listen = "0.0.0.0:8080"
-threads = 8
+threads = 16
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
@@ -114,6 +114,9 @@ id = "zentao"
 path = "/"
 dir = "apps\\zentao"
 webRoot = "www"
+worker = true
+workerEntries = ["index.php", "api.php", "bridge.php"]
+workerThreads = { "index.php" = 10, "api.php" = 3, "bridge.php" = 2 }
 
 [observability]
 enabled = true
@@ -210,7 +213,7 @@ logMaxBackups = 5
 
 [web]
 listen = "0.0.0.0:8080"
-threads = 8
+threads = 16
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
@@ -220,6 +223,9 @@ id = "zentao"
 path = "/"
 dir = "apps/zentao"
 webRoot = "www"
+worker = true
+workerEntries = ["index.php", "api.php", "bridge.php"]
+workerThreads = { "index.php" = 10, "api.php" = 3, "bridge.php" = 2 }
 
 [observability]
 enabled = true

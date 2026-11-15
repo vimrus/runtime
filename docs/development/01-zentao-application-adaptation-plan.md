@@ -83,9 +83,11 @@
 实施状态（2026-09-03，Z-HEALTH-01）：应用深探针入口
 `zentaopms/www/health.php` 已落地。它只读取安装与数据库配置，ping
 主库并返回 `ok|degraded|failed` 与稳定错误码
-（`config_missing/app_not_installed/db_driver_unsupported/db_unreachable/
-db_ok`），不加载全量应用上下文、不启动 Session、不输出配置或凭据；
-MySQL 可达与不可达两种路径均验证通过。Runtime `health --deep` 对该入口
+（`config_missing/app_not_installed/db_config_incomplete/db_driver_missing/
+db_driver_unsupported/db_unreachable/db_ok`），不加载全量应用上下文、
+不启动 Session、不输出配置或凭据。数据库驱动覆盖 MySQL、OceanBase、
+PostgreSQL、HighGoDB、GaussDB、KingbaseES 和 DM8，并对加密密码执行解密。
+Runtime `health --deep` 对该入口
 的调用已实施：`health --deep` 注册 `app` 深探针并经同一 Web Listener 调用
 `/health.php`，把 `ok|degraded|failed` 映射为组件状态；
 `queue-direct-smoke.sh` 联合断言 deep health 中 app 组件为 ok。

@@ -157,11 +157,12 @@ Linux 使用 Unix Domain Socket，Windows 使用 Named Pipe。控制协议 v1：
 ./bin/zentao health --deep
 ./bin/zentao diagnose
 ./bin/zentao reload
+./bin/zentao worker-restart
 ./bin/zentao stop
 ./bin/zentao version
 ```
 
-`status`、`stop`、`reload`、`health` 和 `diagnose` 默认连接配置的控制 Socket。
+`status`、`stop`、`reload`、`worker-restart`、`health` 和 `diagnose` 默认连接配置的控制 Socket。
 
 如果 `status` 或 `stop` 无法连接 Control Plane，CLI 会尝试读取 PID 文件：
 
@@ -258,6 +259,15 @@ Runtime 会先重新读取并严格校验配置文件，再尝试加载 Caddy �
 - 日志、审计和保留期设置。
 - 应用 PHP 代码或扩展代码变更；`reload` 不会清除 Runtime 内的 OPcache。
 
+启用 worker mode 后，直接在原目录更新 PHP/扩展代码可执行：
+
+```bash
+./bin/zentao worker-restart
+```
+
+该命令让 FrankenPHP 同时重启全部 worker 线程，清空旧 worker 内存和 OPcache
+上下文，不重启 Runtime 进程。Classic mode 仍需要完整重启 Runtime。
+
 候选配置不合法或 Caddy 拒绝新配置时，Runtime 保留旧配置并进入 degraded。修复配置后可以再次执行 `reload`。
 
 ## 状态和诊断
@@ -267,6 +277,9 @@ Runtime 会先重新读取并严格校验配置文件，再尝试加载 Caddy �
 ```bash
 ./bin/zentao status
 ```
+
+`web.mode` 返回 `classic` 或 `worker`；`web.workerThreads` 返回所有启用应用的
+worker 总线程数。每个应用摘要包含实际启用的 `workerEntries` 和对应线程数。
 
 主要返回：
 

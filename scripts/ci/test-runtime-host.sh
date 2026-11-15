@@ -4,6 +4,9 @@
 set -Eeuo pipefail
 
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${repo_root}"
+go test internal/web/file_intercept.go internal/web/file_intercept_test.go
+
 php_config="${PHP_CONFIG:-}"
 if [[ -z "${php_config}" ]]; then
     if command -v php-config >/dev/null 2>&1; then
@@ -20,6 +23,5 @@ if [[ -z "${php_config}" ]]; then
 fi
 
 readonly php_cflags="$(${php_config} --includes)"
-cd "${repo_root}"
 CGO_CFLAGS="${CGO_CFLAGS:-} ${php_cflags}" \
     go test -tags nowatcher ./cmd/zentao-runtime

@@ -57,8 +57,31 @@ jobs:
           tar -czf /tmp/apppkg.tar.gz -C "${appdir}" .
           tests/e2e/zentao-app-smoke.sh /tmp/apppkg.tar.gz
 
+      - name: Worker mode application smoke
+        run: |
+          appdir="$(mktemp -d)"
+          mkdir -p "${appdir}/www"
+          cp tests/fixtures/php/worker-index.php "${appdir}/www/index.php"
+          cp tests/fixtures/php/worker-index.php "${appdir}/www/api.php"
+          cp tests/fixtures/php/worker-index.php "${appdir}/www/bridge.php"
+          printf '<?php // install\n' > "${appdir}/www/install.php"
+          printf '22.0\n' > "${appdir}/VERSION"
+          tar -czf /tmp/apppkg-worker.tar.gz -C "${appdir}" .
+          ZENTAO_WORKER_ENTRIES=index.php,api.php,bridge.php \
+          ZENTAO_WORKER_ALLOWED_STATUSES=200,301,302,405 \
+          ZENTAO_WORKER_REQUEST_ROUNDS=20 \
+          ZENTAO_WORKER_SOAK_ROUNDS=1 \
+          ZENTAO_WORKER_RSS_LIMIT_MB=32 \
+          ZENTAO_WORKER_CONCURRENCY=16 \
+          ZENTAO_WORKER_SESSION_ISOLATION=1 \
+          ZENTAO_WORKER_EXCEPTION_RECOVERY=1 \
+          ZENTAO_WORKER_REQUIRE_CLEAN_LOG=1 \
+          ZENTAO_WORKER_CODE_RELOAD=1 \
+          ZENTAO_WORKER_HEADER_ISOLATION=1 \
+          tests/e2e/zentao-worker-smoke.sh /tmp/apppkg-worker.tar.gz
+
       - name: Pluggable multi-application smoke
-        run: tests/e2e/multi-app-smoke.sh
+        run: ZENTAO_MULTI_APP_WORKER=1 tests/e2e/multi-app-smoke.sh
 
       - name: Access log smoke
         run: |

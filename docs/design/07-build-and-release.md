@@ -33,7 +33,7 @@
 
 - 不在一台 Linux Runner 上交叉编译 Windows PHP/Runtime Host。
 - 不从源码编译 MySQL。
-- 不使用 FrankenPHP worker mode。
+- 不在应用缺少声明的 worker 入口时静默降级为 Classic；构建或启动必须明确失败。
 - 不把 MySQL 放入 FrankenPHP Docker 镜像。
 - 不在 PR workflow 中执行正式发布、代码签名或付费版制品下载。
 - 不在本设计阶段创建 `.github/workflows` 或构建脚本。
@@ -955,6 +955,15 @@ PR workflow 只能读取主分支产生的安全依赖缓存，不应让不可�
 - DuckDB 生成 ZSTD Parquet、关闭校验、重新读取和临时文件原子发布。
 - 优雅停止。
 
+### 18.3.1 Worker mode 冒烟测试
+
+- 单 worker 连续请求的 config、lang、Session 和 DAO 隔离。
+- 两个客户端交错请求不串 Session。
+- 多 worker 并发请求下中英文、登录状态和响应正文隔离。
+- 连续请求复用健康 PDO；`SET`、临时表或运行时 attribute 变更后连接不回池。
+- 配置校验拒绝 worker 总数不小于 `web.threads` 的设置。
+- `helper::end()` 等结束响应异常在请求结束后仍执行统一清理。
+
 ### 18.4 L3：禅道安装测试
 
 分别连接：
@@ -983,7 +992,7 @@ PR workflow 只能读取主分支产生的安全依赖缓存，不应让不可�
 
 ### 18.7 L6：稳定性测试
 
-- Classic mode 并发压测。
+- 默认 worker mode 与 Classic mode 并发压测。
 - 24 小时稳定性测试。
 - 大附件上传下载。
 - Scheduler 长时间运行。
@@ -1273,7 +1282,7 @@ links to test reports and SBOM
 2. 相同 commit 和版本锁产生的 manifest 组件版本一致。
 3. Linux amd64/arm64 均能加载 ionCube 和运行付费版。
 4. Windows 能使用官方 ionCube Loader 运行付费版。
-5. Classic mode 不复用请求状态，Web 与 Scheduler 均正常。
+5. 默认 worker mode 与 Classic mode 均不复用请求状态，Web 与 Scheduler 均正常。
 6. Runtime 和 Full 包可以在全新环境安装、启动、停止、升级和卸载。
 7. Docker manifest 同时包含 amd64 和 arm64，两个架构均原生测试。
 8. MySQL 和 PostgreSQL 安装测试通过。

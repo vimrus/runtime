@@ -24,7 +24,8 @@ nodeID = "node-a"
 
 [web]
 listen = "0.0.0.0:8080"
-threads = 4
+threads = 16
+maxWaitTime = "10s"
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
@@ -125,7 +126,8 @@ Linux 默认 Socket 为 `/run/zentao/runtime.sock`，创建后权限为 `0600`�
 {"version":1,"ok":false,"error":{"code":"invalid_configuration","message":"..."}}
 ```
 
-当前支持 `status`、`version`、`health`、`diagnose`、`reload`、`stop`、
+当前支持 `status`、`version`、`health`、`diagnose`、`reload`、
+`worker-restart`、`stop`、
 `upgrade`、`logs`、`metrics`、`observability-flush`、
 `observability-clean`、`convert-jsonl`、`collect-logs`、`processes` 和
 `process-restart`；入口同时提供
@@ -136,10 +138,15 @@ Windows 的 `run-service` 仅作为 Service Control Manager 的进程入口。CL
 zentao-runtime status --control-socket /run/zentao/runtime.sock
 zentao-runtime health --deep --control-socket /run/zentao/runtime.sock
 zentao-runtime reload --control-socket /run/zentao/runtime.sock
+zentao-runtime worker-restart --control-socket /run/zentao/runtime.sock
 zentao-runtime stop --control-socket /run/zentao/runtime.sock
 zentao-runtime processes --control-socket /run/zentao/runtime.sock
 zentao-runtime process-restart --app zentao --process event-worker --control-socket /run/zentao/runtime.sock
 ```
+
+`worker-restart` 只在应用启用 worker mode 时可用。它同时重启全部 FrankenPHP
+worker 线程并清空 OPcache 上下文，返回实际 worker 线程数；Classic-only Runtime
+返回 `unavailable`。
 
 `processes` 返回 `[[apps.processes]]` 的状态、PID、实例 ID、重启次数和最近
 错误，不返回 Token、payload 或脚本参数。`process-restart` 只接受已配置的
@@ -247,7 +254,9 @@ Runtime 自身结构化日志写入 `runtime[-<nodeID>].jsonl`，按
 
 ## 9. Reload 边界
 
-`web.readHeaderTimeout`、`web.idleTimeout` 和 `web.maxHeaderBytes` 可以通过 Caddy Library 热加载。候选配置会先严格解析和校验，Caddy 拒绝候选配置时实例保持旧配置并进入 `degraded`。
+`web.maxWaitTime`、`web.readHeaderTimeout`、`web.idleTimeout` 和
+`web.maxHeaderBytes` 可以通过 Caddy Library 热加载。候选配置会先严格解析和校验，
+Caddy 拒绝候选配置时实例保持旧配置并进入 `degraded`。
 
 以下字段返回 `restartRequired: true`，不在运行中修改：
 

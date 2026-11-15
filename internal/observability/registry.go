@@ -22,6 +22,11 @@ var metricRegistry = map[string]struct{}{
 	"observability_parquet_files":            {},
 	"observability_query_total":              {},
 	"observability_nfs_available":            {},
+	"worker.request.leak":                    {},
+	"zentao_worker_config_catalog_hits":      {},
+	"zentao_worker_create_app_ms":            {},
+	"zentao_worker_file_list_hits":           {},
+	"zentao_worker_lang_catalog_hits":        {},
 }
 
 // AllowedMetricName reports whether name is part of the fixed registry.

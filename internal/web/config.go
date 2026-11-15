@@ -10,6 +10,9 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp/encode"
+	caddygzip "github.com/caddyserver/caddy/v2/modules/caddyhttp/encode/gzip"
+	caddyzstd "github.com/caddyserver/caddy/v2/modules/caddyhttp/encode/zstd"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/fileserver"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/rewrite"
 	"github.com/caddyserver/caddy/v2/modules/logging"
@@ -23,6 +26,7 @@ type Options struct {
 	Apps                []App
 	Listen              string
 	Threads             int
+	MaxWaitTime         time.Duration
 	ReadHeaderTimeout   time.Duration
 	IdleTimeout         time.Duration
 	MaxHeaderBytes      int
@@ -37,16 +41,28 @@ type Options struct {
 // pluggable: the Runtime only needs the document root, the URL prefix and
 // the per-application PHP environment.
 type App struct {
-	ID     string
-	Prefix string
-	Root   string
-	Env    map[string]string
+	ID            string
+	Prefix        string
+	Root          string
+	Env           map[string]string
+	Worker        bool
+	WorkerEntries []string
+	WorkerThreads map[string]int
 	// Available is false when the application document root does not exist or
 	// is not a directory. Unavailable applications are served as a 503
 	// placeholder instead of PHP/file handlers: registering a handler with a
 	// missing root would abort Caddy provisioning and with it the whole
 	// Runtime, which must stay usable while an application is detached.
 	Available bool
+}
+
+// workerThreadsFor returns the normalized worker count for one entry.
+func (a App) workerThreadsFor(entry string) int {
+	threads := a.WorkerThreads[entry]
+	if threads < 1 {
+		threads = 1
+	}
+	return threads
 }
 
 // QueueBridgeOptions configures the private loopback listener that exposes
@@ -91,6 +107,12 @@ type OLAPBridgeOptions struct {
 // Config builds the smallest useful Classic-mode Caddy configuration.
 func Config(options Options) *caddy.Config {
 	apps := options.Apps
+	bridgedApps := make(map[string]struct{}, len(options.QueueBridge.Apps))
+	if options.QueueBridge.Enabled {
+		for _, queueApp := range options.QueueBridge.Apps {
+			bridgedApps[queueApp.ID] = struct{}{}
+		}
+	}
 	healthRoute := func(kind string, paths ...string) caddyhttp.Route {
 		return caddyhttp.Route{
 			MatcherSetsRaw: []caddy.ModuleMap{{
@@ -112,7 +134,8 @@ func Config(options Options) *caddy.Config {
 			routes = append(routes, unavailableApplicationRoute(app))
 			continue
 		}
-		routes = append(routes, applicationRoute(app))
+		_, hasPrivateBridge := bridgedApps[app.ID]
+		routes = append(routes, applicationRoute(app, publicWorkerEntries(app, hasPrivateBridge)))
 	}
 	if len(apps) == 0 {
 		routes = append(routes, staticResponseRoute(503, `{"status":"unavailable","reason":"no application configured"}`))
@@ -152,7 +175,7 @@ func Config(options Options) *caddy.Config {
 				target := strings.ReplaceAll(queueApp.Template, "{endpoint}", endpoint)
 				appRoutes = append(appRoutes, bridgeRewriteRoute(bridge.AppBasePath(queueApp.ID)+"/"+endpoint, joinBridgePath(queueApp.Prefix, target)))
 			}
-			appRoutes = append(appRoutes, applicationInnerRoutes(bridgeTarget)...)
+			appRoutes = append(appRoutes, applicationInnerRoutes(bridgeTarget, bridgeWorkerEntries(bridgeTarget))...)
 			bridgeRoutes = append(bridgeRoutes, caddyhttp.Route{
 				MatcherSetsRaw: []caddy.ModuleMap{{
 					"path": caddyconfig.JSON(caddyhttp.MatchPath{bridge.AppBasePath(queueApp.ID), bridge.AppBasePath(queueApp.ID) + "/*"}, nil),
@@ -253,8 +276,9 @@ func Config(options Options) *caddy.Config {
 		AppsRaw: caddy.ModuleMap{
 			"http": caddyconfig.JSON(caddyhttp.App{Servers: servers}, nil),
 			"frankenphp": caddyconfig.JSON(frankencaddy.FrankenPHPApp{
-				NumThreads: options.Threads,
-				MaxThreads: options.Threads,
+				NumThreads:  options.Threads,
+				MaxThreads:  options.Threads,
+				MaxWaitTime: options.MaxWaitTime,
 			}, nil),
 		},
 	}
@@ -369,13 +393,62 @@ func findApp(apps []App, id string) (App, bool) {
 	return App{}, false
 }
 
-func applicationRoute(app App) caddyhttp.Route {
+func configuredWorkerEntries(app App) []string {
+	if !app.Worker {
+		return nil
+	}
+	if len(app.WorkerEntries) == 0 {
+		return []string{"index.php"}
+	}
+	return append([]string(nil), app.WorkerEntries...)
+}
+
+func publicWorkerEntries(app App, hasPrivateBridge bool) []string {
+	entries := configuredWorkerEntries(app)
+	if !hasPrivateBridge {
+		return entries
+	}
+
+	public := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry != "bridge.php" {
+			public = append(public, entry)
+		}
+	}
+	return public
+}
+
+func bridgeWorkerEntries(app App) []string {
+	for _, entry := range configuredWorkerEntries(app) {
+		if entry == "bridge.php" {
+			return []string{"bridge.php"}
+		}
+	}
+	return nil
+}
+
+func applicationRoute(app App, workerEntries []string) caddyhttp.Route {
 	prefix := app.Prefix
 	if prefix == "" {
 		prefix = "/"
 	}
-	inner := applicationInnerRoutes(app)
-	routes := caddyhttp.RouteList{}
+	inner := applicationInnerRoutes(app, workerEntries)
+	/* Compress application responses before they reach PHP or the file
+	 * server. Private Bridge routes use applicationInnerRoutes directly and
+	 * therefore stay uncompressed. */
+	routes := caddyhttp.RouteList{
+		{
+			HandlersRaw: []json.RawMessage{
+				caddyconfig.JSONModuleObject(encode.Encode{
+					EncodingsRaw: caddy.ModuleMap{
+						"zstd": caddyconfig.JSON(caddyzstd.Zstd{}, nil),
+						"gzip": caddyconfig.JSON(caddygzip.Gzip{}, nil),
+					},
+					Prefer: []string{"zstd", "gzip"},
+				}, "handler", "encode", nil),
+			},
+		},
+	}
 	if prefix != "/" {
 		// Requests for the bare prefix (no trailing slash) are served as the
 		// application root. Stripping the prefix here would leave an empty
@@ -410,9 +483,8 @@ func applicationRoute(app App) caddyhttp.Route {
 
 // applicationInnerRoutes builds the classic-mode file, PHP and static
 // handlers for one application document root.
-func applicationInnerRoutes(app App) caddyhttp.RouteList {
+func applicationInnerRoutes(app App, workerEntries []string) caddyhttp.RouteList {
 	root := app.Root
-	env := app.Env
 	rewriteRoute := caddyhttp.Route{
 		MatcherSetsRaw: []caddy.ModuleMap{{
 			"file": caddyconfig.JSON(fileserver.MatchFile{
@@ -429,11 +501,10 @@ func applicationInnerRoutes(app App) caddyhttp.RouteList {
 		MatcherSetsRaw: []caddy.ModuleMap{{
 			"path": caddyconfig.JSON(caddyhttp.MatchPath{"*.php", "*.php/*"}, nil),
 		}},
-		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(frankencaddy.FrankenPHPModule{
-			Root:      root,
-			SplitPath: []string{".php"},
-			Env:       env,
-		}, "handler", "php", nil)},
+		HandlersRaw: []json.RawMessage{
+			caddyconfig.JSONModuleObject(FileIntercept{Roots: appFileRoots(app)}, "handler", "zentao_file_intercept", nil),
+			caddyconfig.JSONModuleObject(phpHandler(app, workerEntries), "handler", "php", nil),
+		},
 	}
 	fileRoute := caddyhttp.Route{
 		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(fileserver.FileServer{
@@ -441,6 +512,38 @@ func applicationInnerRoutes(app App) caddyhttp.RouteList {
 		}, "handler", "file_server", nil)},
 	}
 	return caddyhttp.RouteList{rewriteRoute, phpRoute, fileRoute}
+}
+
+func appFileRoots(app App) []string {
+	roots := []string{app.Root}
+	for _, name := range []string{"ZT_DATA_ROOT", "ZT_TMP_ROOT"} {
+		if root := app.Env[name]; root != "" {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+// phpHandler returns the FrankenPHP handler configuration for one application.
+func phpHandler(app App, workerEntries []string) map[string]any {
+	handler := map[string]any{
+		"root":       app.Root,
+		"split_path": []string{".php"},
+	}
+	if len(app.Env) > 0 {
+		handler["env"] = app.Env
+	}
+	if app.Worker && len(workerEntries) > 0 {
+		workers := make([]map[string]any, 0, len(workerEntries))
+		for _, entry := range workerEntries {
+			workers = append(workers, map[string]any{
+				"file_name": entry,
+				"num":       app.workerThreadsFor(entry),
+			})
+		}
+		handler["workers"] = workers
+	}
+	return handler
 }
 
 func staticResponseRoute(status int, body string) caddyhttp.Route {

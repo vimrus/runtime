@@ -109,6 +109,20 @@ func TestNormalizeRejectsUnregisteredMetricName(t *testing.T) {
 	}
 }
 
+func TestNormalizeAcceptsWorkerMetrics(t *testing.T) {
+	for _, name := range []string{
+		"worker.request.leak",
+		"zentao_worker_config_catalog_hits",
+		"zentao_worker_create_app_ms",
+		"zentao_worker_file_list_hits",
+		"zentao_worker_lang_catalog_hits",
+	} {
+		if !AllowedMetricName(name) {
+			t.Fatalf("worker metric %q is not registered", name)
+		}
+	}
+}
+
 func TestNormalizeRejectsInvalidMetricKind(t *testing.T) {
 	_, err := Normalize(Event{
 		NodeID: "n", BootID: "b", Source: "php",

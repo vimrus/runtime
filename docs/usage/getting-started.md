@@ -35,7 +35,8 @@ drainTimeout = "30s"
 
 [web]
 listen = "127.0.0.1:8080"
-threads = 4
+threads = 16
+maxWaitTime = "10s"
 readHeaderTimeout = "10s"
 idleTimeout = "30s"
 maxHeaderBytes = 16384
@@ -46,6 +47,8 @@ path = "/"
 dir = "apps/demo-1.0.0"
 webRoot = "www"
 enabled = true
+worker = true
+workerThreads = { "index.php" = 2 }
 
 [queue]
 enabled = false

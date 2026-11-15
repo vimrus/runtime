@@ -39,7 +39,12 @@ nodeID = ""
 # HTTP bind address and port. 0.0.0.0 listens on all IPv4 interfaces.
 listen = "0.0.0.0:8080"
 # Number of PHP worker threads.
-threads = 4
+# The sum of enabled application workerThreads must be less than this value.
+threads = 16
+# Maximum time a request may wait for an available PHP worker thread.
+# Increase workerThreads for worker-backed applications so one slow request
+# does not starve the entrypoint; keep enough [web].threads for non-worker PHP.
+maxWaitTime = "10s"
 # Maximum time to read request headers.
 readHeaderTimeout = "10s"
 # Keep-alive idle timeout for HTTP connections.
@@ -65,7 +70,18 @@ webRoot = "www"
 dataDir = "data/apps/zentao"         # optional, default data/apps/<id>
 tmpDir = "tmp-local/zentao"          # optional, default tmp-local/<id>
 enabled = true
-# env = { ZT_DB_NAME = "zentao" }
+# FrankenPHP worker mode is enabled by default. Supported entries are index.php,
+# api.php and bridge.php. Enabled applications must contain every configured
+# entry under webRoot.
+worker = true
+workerEntries = ["index.php", "api.php", "bridge.php"]
+# workerThreads is a per-entry allocation. Entries without a value use one
+# worker. The total allocation must remain below [web].threads.
+workerThreads = { "index.php" = 10, "api.php" = 3, "bridge.php" = 2 }
+# When Queue Bridge is enabled, bridge.php workers are attached to the private
+# bridge route and are not duplicated on the public application route.
+# Set ZENTAO_WORKER_MAX_REQUESTS to recycle a worker after a fixed request count.
+# env = { ZT_DB_NAME = "zentao", ZENTAO_WORKER_MAX_REQUESTS = "1000" }
 #
 # Per-application Queue Bridge. Every queue-enabled application gets its own
 # loopback namespace (/internal/runtime/queue/v1/apps/<id>), its own token

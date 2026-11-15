@@ -106,7 +106,7 @@ func notRunningError(format string, args ...any) error {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return usageError("usage: zentao <serve|start|status|stop|reload|health|diagnose|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|processes|process-restart|php-cli|version|service|run-service>")
+		return usageError("usage: zentao <serve|start|status|stop|reload|worker-restart|health|diagnose|logs|metrics|flush-observability|clean-observability|convert-jsonl|collect-logs|processes|process-restart|php-cli|version|service|run-service>")
 	}
 	switch args[0] {
 	case "serve", "start":
@@ -115,7 +115,7 @@ func run(args []string) error {
 		return runServiceCommand(args[1:])
 	case "service":
 		return serviceCommand(args[1:])
-	case "status", "stop", "reload", "health", "diagnose":
+	case "status", "stop", "reload", "worker-restart", "health", "diagnose":
 		return controlCommand(args[0], args[1:])
 	case "logs", "metrics":
 		return observabilityCommand(args[0], args[1:])
@@ -520,7 +520,7 @@ func serve(args []string) error {
 		LogPaths:  diagnosticLogs,
 		OutputDir: logsDir,
 		Summary: func() map[string]any {
-			return map[string]any{"version": versionData(), "config": host.configSummary()}
+			return map[string]any{"version": versionDataForConfig(cfg), "config": host.configSummary()}
 		},
 	}
 	web.SetHealthProvider(hostStatusProvider{registry: registry, machine: host.machine})
@@ -603,7 +603,13 @@ func serve(args []string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stdout, "zentao: listening on %s\n", cfg.Web.Listen)
-	logger.Info("runtime ready", slog.String("listen", cfg.Web.Listen), slog.Int("applications", len(cfg.ActiveApps())), slog.String("mode", "classic"))
+	logger.Info(
+		"runtime ready",
+		slog.String("listen", cfg.Web.Listen),
+		slog.Int("applications", len(cfg.ActiveApps())),
+		slog.String("mode", cfg.RuntimeMode()),
+		slog.Int("workerThreads", cfg.WorkerThreadCount()),
+	)
 	serveCtx, serveCancel := context.WithCancel(context.Background())
 	defer serveCancel()
 	if clusterGates != nil {
@@ -1541,16 +1547,26 @@ func (h *host) HandleControl(ctx context.Context, request control.Request) contr
 	case "health":
 		return control.Success(h.healthReport(ctx, request.Deep))
 	case "version":
-		return control.Success(versionData())
+		return control.Success(versionDataForConfig(h.config))
 	case "stop":
 		h.requestStop("control plane request")
 		return control.Success(map[string]string{"result": "stopping"})
 	case "reload":
 		return h.reload()
+	case "worker-restart":
+		workerThreads := h.config.WorkerThreadCount()
+		if workerThreads == 0 {
+			return control.Failure("unavailable", "application worker mode is not enabled")
+		}
+		frankenphp.RestartWorkers()
+		if h.logger != nil {
+			h.logger.Info("workers restarted", slog.Int("workerThreads", workerThreads))
+		}
+		return control.Success(map[string]any{"restarted": true, "workerThreads": workerThreads})
 	case "diagnose":
 		diagnose := map[string]any{
 			"health":  h.healthReport(ctx, true),
-			"version": versionData(),
+			"version": versionDataForConfig(h.config),
 			"config":  h.configSummary(),
 		}
 		if stats := h.observabilityStats(); stats != nil {
@@ -1860,9 +1876,12 @@ func (h *host) status() map[string]any {
 	result := map[string]any{
 		"lifecycle": h.machine.Snapshot(),
 		"web": map[string]any{
-			"listen":  cfg.Web.Listen,
-			"threads": cfg.Web.Threads,
-			"apps":    appSummary(cfg),
+			"listen":        cfg.Web.Listen,
+			"threads":       cfg.Web.Threads,
+			"maxWaitTime":   cfg.Web.MaxWaitTime.String(),
+			"mode":          cfg.RuntimeMode(),
+			"workerThreads": cfg.WorkerThreadCount(),
+			"apps":          appSummary(cfg),
 		},
 		"identity": map[string]any{
 			"nodeID": cfg.Runtime.NodeID,
@@ -1930,9 +1949,11 @@ func (h *host) configSummary() map[string]any {
 			"nodeID": cfg.Runtime.NodeID,
 		},
 		"web": map[string]any{
-			"listen":  cfg.Web.Listen,
-			"threads": cfg.Web.Threads,
-			"apps":    appSummary(cfg),
+			"listen":        cfg.Web.Listen,
+			"threads":       cfg.Web.Threads,
+			"mode":          cfg.RuntimeMode(),
+			"workerThreads": cfg.WorkerThreadCount(),
+			"apps":          appSummary(cfg),
 		},
 	}
 }
@@ -1955,11 +1976,14 @@ func appSummary(cfg config.Config) []map[string]any {
 			})
 		}
 		apps = append(apps, map[string]any{
-			"id":        app.ID,
-			"path":      prefix,
-			"dir":       app.Dir,
-			"enabled":   app.Enabled,
-			"processes": processes,
+			"id":            app.ID,
+			"path":          prefix,
+			"dir":           app.Dir,
+			"enabled":       app.Enabled,
+			"worker":        app.Worker,
+			"workerEntries": app.EffectiveWorkerFiles(),
+			"workerThreads": app.EffectiveWorkerThreads(),
+			"processes":     processes,
 		})
 	}
 	return apps
@@ -2048,6 +2072,7 @@ func webConfig(cfg config.Config, accessLogPath string, accessLogKeepDays int, o
 		Apps:                appRoutes(cfg),
 		Listen:              cfg.Web.Listen,
 		Threads:             cfg.Web.Threads,
+		MaxWaitTime:         cfg.Web.MaxWaitTime,
 		ReadHeaderTimeout:   cfg.Web.ReadHeaderTimeout,
 		IdleTimeout:         cfg.Web.IdleTimeout,
 		MaxHeaderBytes:      cfg.Web.MaxHeaderBytes,
@@ -2068,7 +2093,7 @@ func appRoutes(cfg config.Config) []web.App {
 		if !app.Enabled {
 			continue
 		}
-		env := make(map[string]string, len(app.Env)+6)
+		env := make(map[string]string, len(app.Env)+7)
 		for name, value := range app.Env {
 			env[name] = value
 		}
@@ -2084,12 +2109,16 @@ func appRoutes(cfg config.Config) []web.App {
 		setEnvDefault(env, "ZT_APISESSION_PATH", filepath.Join(app.DataDir, "apisession"))
 		setEnvDefault(env, "ZT_BACKUP_PATH", filepath.Join(app.DataDir, "backup"))
 		setEnvDefault(env, "ZENTAO_LOG_DIR", filepath.Join(app.ObservabilityDir(), "raw-logs"))
+		setEnvDefault(env, "ZT_RUNTIME_FILE_INTERCEPT", "1")
 		apps = append(apps, web.App{
-			ID:        app.ID,
-			Prefix:    prefix,
-			Root:      app.DocumentRoot(),
-			Env:       env,
-			Available: appAvailable(app),
+			ID:            app.ID,
+			Prefix:        prefix,
+			Root:          app.DocumentRoot(),
+			Env:           env,
+			Worker:        app.Worker,
+			WorkerEntries: app.EffectiveWorkerFiles(),
+			WorkerThreads: app.WorkerThreads,
+			Available:     appAvailable(app),
 		})
 	}
 	return apps
@@ -2273,6 +2302,13 @@ func versionData() map[string]any {
 		"process_rpc":  appprocess.SchemaVersion,
 		"mode":         "classic",
 	}
+}
+
+func versionDataForConfig(cfg config.Config) map[string]any {
+	data := versionData()
+	data["mode"] = cfg.RuntimeMode()
+	data["workerThreads"] = cfg.WorkerThreadCount()
+	return data
 }
 
 func printJSON(value any) error {

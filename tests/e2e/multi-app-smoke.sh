@@ -14,7 +14,9 @@
 #
 # Environment:
 #   ZENTAO_RUNTIME_BIN  Runtime binary (default: dist/runtime-linux-amd64/bin/zentao)
+#   ZENTAO_RUNTIME_STAGE  Runtime stage containing config/php.ini (default: binary parent)
 #   ZENTAO_SMOKE_PORT   listen port (default: 18080)
+#   ZENTAO_MULTI_APP_WORKER  set to 1 to run both applications in worker mode
 
 set -Eeuo pipefail
 
@@ -23,6 +25,17 @@ readonly runtime_bin="${ZENTAO_RUNTIME_BIN:-${repo_root}/dist/runtime-linux-amd6
 readonly port="${ZENTAO_SMOKE_PORT:-18080}"
 readonly app_a_input="${1:-}"
 readonly app_b_input="${2:-}"
+readonly worker_mode="${ZENTAO_MULTI_APP_WORKER:-0}"
+readonly keep_work="${ZENTAO_SMOKE_KEEP_WORK:-0}"
+
+if [[ ! "${worker_mode}" =~ ^[01]$ ]]; then
+    echo "ZENTAO_MULTI_APP_WORKER must be 0 or 1" >&2
+    exit 2
+fi
+if [[ ! "${keep_work}" =~ ^[01]$ ]]; then
+    echo "ZENTAO_SMOKE_KEEP_WORK must be 0 or 1" >&2
+    exit 2
+fi
 
 if [[ ! -x "${runtime_bin}" ]]; then
     echo "runtime binary not found or not executable: ${runtime_bin}" >&2
@@ -30,7 +43,11 @@ if [[ ! -x "${runtime_bin}" ]]; then
     exit 1
 fi
 
-readonly stage="$(cd "$(dirname "${runtime_bin}")/.." && pwd)"
+readonly stage="${ZENTAO_RUNTIME_STAGE:-$(cd "$(dirname "${runtime_bin}")/.." && pwd)}"
+if [[ ! -f "${stage}/config/php.ini" ]]; then
+    echo "runtime stage is missing config/php.ini: ${stage}" >&2
+    exit 1
+fi
 work="$(mktemp -d)"
 pid=""
 cleanup() {
@@ -38,37 +55,86 @@ cleanup() {
         kill "${pid}" >/dev/null 2>&1 || true
         wait "${pid}" 2>/dev/null || true
     fi
-    rm -rf "${work}"
+    if [[ "${keep_work}" == "1" ]]; then
+        echo "keeping smoke work directory: ${work}" >&2
+    else
+        rm -rf "${work}"
+    fi
 }
 trap cleanup EXIT
+
+dump_logs() {
+    cat "${work}/serve.log" >&2 2>/dev/null || true
+    for log_file in "${work}"/logs/*.log; do
+        [[ -f "${log_file}" ]] || continue
+        echo "--- ${log_file} ---" >&2
+        tail -200 "${log_file}" >&2
+    done
+}
 
 mkdir -p "${work}/config" "${work}/apps"
 cp -a "${stage}/config/php.ini" "${work}/config/php.ini"
 if [[ -d "${stage}/config/conf.d" ]]; then
     cp -a "${stage}/config/conf.d" "${work}/config/conf.d"
 fi
+for asset in php lib runtime; do
+    if [[ -e "${stage}/${asset}" ]]; then
+        ln -s "${stage}/${asset}" "${work}/${asset}"
+    fi
+done
 
 make_synthetic_app() {
     local slot="$1" name="$2"
     mkdir -p "${work}/apps/${slot}/www"
     cat > "${work}/apps/${slot}/www/index.php" <<PHP
 <?php
-header('Content-Type: application/json');
-echo json_encode(array(
-    'app'             => getenv('ZT_APP_ID'),
-    'webRoot'         => getenv('ZT_WEB_ROOT'),
-    'requestUri'      => \$_SERVER['REQUEST_URI'] ?? null,
-    'scriptName'      => \$_SERVER['SCRIPT_NAME'] ?? null,
-    'pathInfo'        => \$_SERVER['PATH_INFO'] ?? null,
-    'phpSelf'         => \$_SERVER['PHP_SELF'] ?? null,
-    'documentRoot'    => \$_SERVER['DOCUMENT_ROOT'] ?? null,
-    'dataRoot'        => getenv('ZT_DATA_ROOT'),
-    'tmpRoot'         => getenv('ZT_TMP_ROOT'),
-    'sessionPath'     => getenv('ZT_SESSION_PATH'),
-    'apiSessionPath'  => getenv('ZT_APISESSION_PATH'),
-    'dbName'          => getenv('ZT_DB_NAME'),
-    'expected'        => '${name}',
-));
+\$handler = static function (): void {
+    \$sessionPath = getenv('ZT_SESSION_PATH');
+    if(is_string(\$sessionPath) && \$sessionPath !== '')
+    {
+        if(!is_dir(\$sessionPath)) mkdir(\$sessionPath, 0700, true);
+        session_save_path(\$sessionPath);
+    }
+    \$sessionProbe = null;
+    if(isset(\$_GET['sessionSet']) && is_string(\$_GET['sessionSet']))
+    {
+        session_start();
+        \$_SESSION['workerApp'] = \$_GET['sessionSet'];
+        \$sessionProbe = \$_GET['sessionSet'];
+        session_write_close();
+    }
+    elseif(isset(\$_GET['sessionGet']))
+    {
+        session_start();
+        \$sessionProbe = isset(\$_SESSION['workerApp']) ? \$_SESSION['workerApp'] : null;
+        session_write_close();
+    }
+    header('Content-Type: application/json');
+    echo json_encode(array(
+        'app'             => getenv('ZT_APP_ID'),
+        'webRoot'         => getenv('ZT_WEB_ROOT'),
+        'requestUri'      => \$_SERVER['REQUEST_URI'] ?? null,
+        'scriptName'      => \$_SERVER['SCRIPT_NAME'] ?? null,
+        'pathInfo'        => \$_SERVER['PATH_INFO'] ?? null,
+        'phpSelf'         => \$_SERVER['PHP_SELF'] ?? null,
+        'documentRoot'    => \$_SERVER['DOCUMENT_ROOT'] ?? null,
+        'dataRoot'        => getenv('ZT_DATA_ROOT'),
+        'tmpRoot'         => getenv('ZT_TMP_ROOT'),
+        'sessionPath'     => getenv('ZT_SESSION_PATH'),
+        'apiSessionPath'  => getenv('ZT_APISESSION_PATH'),
+        'dbName'          => getenv('ZT_DB_NAME'),
+        'expected'        => '${name}',
+        'session'         => \$sessionProbe,
+    ));
+};
+if(php_sapi_name() === 'frankenphp' && isset(\$_SERVER['FRANKENPHP_WORKER']))
+{
+    while(\frankenphp_handle_request(\$handler)) gc_collect_cycles();
+}
+else
+{
+    \$handler();
+}
 PHP
     cat > "${work}/apps/${slot}/www/health.php" <<'PHP'
 <?php
@@ -88,6 +154,11 @@ if [[ -n "${app_b_input}" ]]; then
     "${repo_root}/scripts/ci/patch-classic-mode.sh" "${work}/apps/b" >/dev/null 2>&1 || true
 else
     make_synthetic_app b app-b
+fi
+
+worker_config=""
+if [[ "${worker_mode}" == "1" ]]; then
+    worker_config=$'worker = true\nworkerEntries = ["index.php"]\nworkerThreads = { "index.php" = 1 }'
 fi
 
 cat > "${work}/config/runtime.toml" <<EOF
@@ -115,6 +186,7 @@ path = "/"
 dir = "apps/a"
 webRoot = "www"
 env = { ZT_DB_NAME = "smoke_a" }
+${worker_config}
 
 [[apps]]
 id = "app-b"
@@ -122,6 +194,7 @@ path = "/ipd"
 dir = "apps/b"
 webRoot = "www"
 env = { ZT_DB_NAME = "smoke_b" }
+${worker_config}
 EOF
 
 "${runtime_bin}" serve --install-root "${work}" >"${work}/serve.log" 2>&1 &
@@ -136,14 +209,16 @@ for _ in $(seq 1 60); do
     fi
     if ! kill -0 "${pid}" >/dev/null 2>&1; then
         echo "runtime exited during startup" >&2
-        cat "${work}/serve.log" >&2
+        dump_logs
         exit 1
     fi
     sleep 0.5
 done
 if [[ "${ready}" != "1" ]]; then
     echo "runtime did not become ready" >&2
-    cat "${work}/serve.log" >&2
+    readiness="$(curl --silent --show-error --max-time 2 --write-out '\nHTTP %{http_code}\n' "${base}/_runtime/readiness" 2>&1 || true)"
+    echo "readiness response: ${readiness}" >&2
+    dump_logs
     exit 1
 fi
 
@@ -213,6 +288,30 @@ check "sub-path data root injection" "${base}/ipd/" '"dataRoot"'
 check "sub-path session root injection" "${base}/ipd/" 'apisession'
 
 check "sub-path request uri keeps prefix" "${base}/ipd/" '"requestUri":"\/ipd\/"'
+
+session_a="${work}/session-a.cookies"
+session_b="${work}/session-b.cookies"
+curl --silent --show-error --cookie-jar "${session_a}" "${base}/?sessionSet=app-a" >/dev/null
+curl --silent --show-error --cookie-jar "${session_b}" "${base}/ipd/?sessionSet=app-b" >/dev/null
+body_a="$(curl --silent --show-error --cookie "${session_a}" "${base}/?sessionGet=1")"
+body_b="$(curl --silent --show-error --cookie "${session_b}" "${base}/ipd/?sessionGet=1")"
+cross_a="$(curl --silent --show-error --cookie "${session_a}" "${base}/ipd/?sessionGet=1")"
+cross_b="$(curl --silent --show-error --cookie "${session_b}" "${base}/?sessionGet=1")"
+requestScopeCheckSessionIsolation() {
+    local body="$1" expected="$2" message="$3"
+    if [[ "${body}" != *"${expected}"* ]]; then
+        echo "FAIL: ${message}" >&2
+        echo "  expected: ${expected}" >&2
+        echo "  body:     ${body}" >&2
+        fail=1
+    else
+        echo "ok: ${message}"
+    fi
+}
+requestScopeCheckSessionIsolation "${body_a}" '"session":"app-a"' "root session keeps its own data"
+requestScopeCheckSessionIsolation "${body_b}" '"session":"app-b"' "sub-path session keeps its own data"
+requestScopeCheckSessionIsolation "${cross_a}" '"session":null' "root session is not visible to sub-path application"
+requestScopeCheckSessionIsolation "${cross_b}" '"session":null' "sub-path session is not visible to root application"
 
 if [[ "${fail}" == "1" ]]; then
     echo "multi-app smoke failed" >&2

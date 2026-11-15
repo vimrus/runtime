@@ -15,6 +15,7 @@ func testOptions() Options {
 		},
 		Listen:            "127.0.0.1:8080",
 		Threads:           4,
+		MaxWaitTime:       10 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    16384,
@@ -38,6 +39,7 @@ func TestConfigRoutesSubPathApplication(t *testing.T) {
 		`"ZT_WEB_ROOT":"ipd"`,
 		`"root":"/srv/app-b/www"`,
 		`"listen":["127.0.0.1:8080"]`,
+		`"max_wait_time":10000000000`,
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered configuration is missing %s\n%s", want, rendered)
@@ -45,11 +47,113 @@ func TestConfigRoutesSubPathApplication(t *testing.T) {
 	}
 }
 
+func TestConfigCompressesApplicationResponses(t *testing.T) {
+	rendered := renderConfig(t, testOptions())
+	for _, want := range []string{
+		`"handler":"encode"`,
+		`"zstd":`,
+		`"gzip":`,
+		`"prefer":["zstd","gzip"]`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered configuration is missing %s\n%s", want, rendered)
+		}
+	}
+}
+
+func TestConfigEnablesApplicationWorker(t *testing.T) {
+	options := testOptions()
+	options.Apps[0].Worker = true
+	options.Apps[0].WorkerThreads = map[string]int{"index.php": 3}
+	rendered := renderConfig(t, options)
+	for _, want := range []string{
+		`"workers":[{"file_name":"index.php","num":3}]`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered configuration is missing %s\n%s", want, rendered)
+		}
+	}
+}
+
+func TestConfigEnablesRuntimeFileIntercept(t *testing.T) {
+	options := testOptions()
+	options.Apps[0].Env["ZT_DATA_ROOT"] = "/srv/app-a/data"
+	options.Apps[0].Env["ZT_TMP_ROOT"] = "/srv/app-a/tmp"
+	rendered := renderConfig(t, options)
+	for _, want := range []string{
+		`"handler":"zentao_file_intercept"`,
+		`"roots":["/srv/app-a/www","/srv/app-a/data","/srv/app-a/tmp"]`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered configuration is missing %s\n%s", want, rendered)
+		}
+	}
+}
+
+func TestConfigEnablesMultipleApplicationWorkers(t *testing.T) {
+	options := testOptions()
+	options.Apps[0].Worker = true
+	options.Apps[0].WorkerEntries = []string{"index.php", "api.php", "bridge.php"}
+	options.Apps[0].WorkerThreads = map[string]int{"index.php": 10, "api.php": 3, "bridge.php": 2}
+	rendered := renderConfig(t, options)
+	for _, want := range []string{
+		`{"file_name":"index.php","num":10}`,
+		`{"file_name":"api.php","num":3}`,
+		`{"file_name":"bridge.php","num":2}`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered configuration is missing %s\n%s", want, rendered)
+		}
+	}
+}
+
+func TestConfigPartitionsWorkerEntriesBetweenPublicAppAndQueueBridge(t *testing.T) {
+	options := testOptions()
+	options.Apps[0].Worker = true
+	options.Apps[0].WorkerEntries = []string{"index.php", "api.php", "bridge.php"}
+	options.Apps[0].WorkerThreads = map[string]int{"index.php": 10, "api.php": 3, "bridge.php": 2}
+	options.QueueBridge = QueueBridgeOptions{
+		Enabled: true,
+		Listen:  "127.0.0.1:8081",
+		Apps: []QueueBridgeApp{
+			{ID: options.Apps[0].ID, Prefix: options.Apps[0].Prefix, Token: "token-a", Template: "/bridge.php?endpoint={endpoint}"},
+		},
+	}
+	rendered := renderConfig(t, options)
+	for _, want := range []string{
+		`{"file_name":"index.php","num":10}`,
+		`{"file_name":"api.php","num":3}`,
+		`{"file_name":"bridge.php","num":2}`,
+	} {
+		if count := strings.Count(rendered, want); count != 1 {
+			t.Fatalf("worker %s rendered %d times, want exactly once\n%s", want, count, rendered)
+		}
+	}
+}
+
+func TestWorkerEntriesPartitionForPrivateBridge(t *testing.T) {
+	app := App{
+		Worker:        true,
+		WorkerEntries: []string{"index.php", "api.php", "bridge.php"},
+	}
+	public := publicWorkerEntries(app, true)
+	private := bridgeWorkerEntries(app)
+	if got, want := strings.Join(public, ","), "index.php,api.php"; got != want {
+		t.Fatalf("public worker entries = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(private, ","), "bridge.php"; got != want {
+		t.Fatalf("private bridge worker entries = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(publicWorkerEntries(app, false), ","), "index.php,api.php,bridge.php"; got != want {
+		t.Fatalf("worker entries without private bridge = %q, want %q", got, want)
+	}
+}
+
 func TestConfigWithoutApplicationsServesPlaceholder(t *testing.T) {
 	options := testOptions()
 	options.Apps = nil
 	rendered := renderConfig(t, options)
-	if !strings.Contains(rendered, `"http.handlers.static_response"`) ||
+	if !strings.Contains(rendered, `"handler":"static_response"`) ||
 		!strings.Contains(rendered, `no application configured`) {
 		t.Fatalf("expected a placeholder response without applications\n%s", rendered)
 	}

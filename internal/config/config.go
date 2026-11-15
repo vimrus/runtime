@@ -36,6 +36,44 @@ func LoopbackWebAddress(listen string) (string, error) {
 	return net.JoinHostPort(loopbackBridgeHost, port), nil
 }
 
+// decodeWorkerThreadAllocation accepts the per-entry table and the legacy
+// scalar shorthand. Numeric scalars apply the same allocation to every
+// configured worker entry.
+func decodeWorkerThreadAllocation(value any, entries []string) (map[string]int, error) {
+	if threads, ok := workerThreadValue(value); ok {
+		allocation := make(map[string]int, len(entries))
+		for _, entry := range entries {
+			allocation[entry] = threads
+		}
+		return allocation, nil
+	}
+
+	rawAllocation, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("must be an integer or a per-entry table")
+	}
+
+	allocation := make(map[string]int, len(rawAllocation))
+	for entry, rawThreads := range rawAllocation {
+		threads, ok := workerThreadValue(rawThreads)
+		if !ok {
+			return nil, fmt.Errorf("%s must be an integer", entry)
+		}
+		allocation[entry] = threads
+	}
+	return allocation, nil
+}
+
+func workerThreadValue(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int64:
+		return int(typed), true
+	case int:
+		return typed, true
+	}
+	return 0, false
+}
+
 type Config struct {
 	SchemaVersion int           `json:"schemaVersion" toml:"schemaVersion"`
 	Runtime       Runtime       `json:"runtime" toml:"runtime"`
@@ -79,6 +117,7 @@ type Runtime struct {
 type Web struct {
 	Listen            string        `json:"listen" toml:"listen"`
 	Threads           int           `json:"threads" toml:"threads"`
+	MaxWaitTime       time.Duration `json:"maxWaitTime" toml:"maxWaitTime"`
 	ReadHeaderTimeout time.Duration `json:"readHeaderTimeout" toml:"readHeaderTimeout"`
 	IdleTimeout       time.Duration `json:"idleTimeout" toml:"idleTimeout"`
 	MaxHeaderBytes    int           `json:"maxHeaderBytes" toml:"maxHeaderBytes"`
@@ -97,11 +136,57 @@ type App struct {
 	DataDir string            `json:"dataDir,omitempty" toml:"dataDir,omitempty"`
 	TmpDir  string            `json:"tmpDir,omitempty" toml:"tmpDir,omitempty"`
 	Env     map[string]string `json:"env,omitempty" toml:"env,omitempty"`
-	Enabled bool              `json:"enabled" toml:"enabled"`
-	Queue   AppQueue          `json:"queue,omitempty" toml:"queue,omitempty"`
+	// Worker enables FrankenPHP worker mode for this application. The worker
+	// entrypoints default to index.php and may include api.php or bridge.php.
+	Worker        bool           `json:"worker,omitempty" toml:"worker,omitempty"`
+	WorkerEntries []string       `json:"workerEntries,omitempty" toml:"workerEntries,omitempty"`
+	WorkerThreads map[string]int `json:"workerThreads,omitempty" toml:"workerThreads,omitempty"`
+	Enabled       bool           `json:"enabled" toml:"enabled"`
+	Queue         AppQueue       `json:"queue,omitempty" toml:"queue,omitempty"`
 	// Processes declares Runtime-supervised PHP CLI processes owned by this
 	// application. These are OS processes, not ZenTao application services.
 	Processes []AppProcess `json:"processes,omitempty" toml:"processes,omitempty"`
+}
+
+// EffectiveWorkerThreads returns the number of FrankenPHP workers created for
+// the application. Entries without an allocation use one worker by default.
+func (a App) EffectiveWorkerThreads() int {
+	total := 0
+	for _, entry := range a.EffectiveWorkerFiles() {
+		total += a.WorkerThreadsFor(entry)
+	}
+	return total
+}
+
+// WorkerThreadsFor returns the configured worker count for one entry.
+func (a App) WorkerThreadsFor(entry string) int {
+	threads := a.WorkerThreads[entry]
+	if threads < 1 {
+		threads = 1
+	}
+	return threads
+}
+
+// EffectiveWorkerThreadAllocation returns the normalized per-entry worker
+// allocation used by the web configuration generator.
+func (a App) EffectiveWorkerThreadAllocation() map[string]int {
+	allocation := make(map[string]int)
+	for _, entry := range a.EffectiveWorkerFiles() {
+		allocation[entry] = a.WorkerThreadsFor(entry)
+	}
+	return allocation
+}
+
+// EffectiveWorkerFiles returns the supported worker entrypoints for the
+// application. An empty list defaults to index.php.
+func (a App) EffectiveWorkerFiles() []string {
+	if !a.Worker {
+		return nil
+	}
+	if len(a.WorkerEntries) == 0 {
+		return []string{"index.php"}
+	}
+	return append([]string(nil), a.WorkerEntries...)
 }
 
 // DefaultAppQueueBridgeURLTemplate routes all Runtime-to-PHP Queue Bridge
@@ -303,6 +388,7 @@ func Default() Config {
 		Web: Web{
 			Listen:            "0.0.0.0:8080",
 			Threads:           4,
+			MaxWaitTime:       10 * time.Second,
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       30 * time.Second,
 			MaxHeaderBytes:    16 * 1024,
@@ -480,6 +566,7 @@ func decode(data []byte, config Config) (Config, error) {
 	type rawWeb struct {
 		Listen            *string `toml:"listen"`
 		Threads           *int    `toml:"threads"`
+		MaxWaitTime       *string `toml:"maxWaitTime"`
 		ReadHeaderTimeout *string `toml:"readHeaderTimeout"`
 		IdleTimeout       *string `toml:"idleTimeout"`
 		MaxHeaderBytes    *int    `toml:"maxHeaderBytes"`
@@ -563,16 +650,19 @@ func decode(data []byte, config Config) (Config, error) {
 		MaxBackoff     *string  `toml:"maxBackoff"`
 	}
 	type rawApp struct {
-		ID        *string           `toml:"id"`
-		Path      *string           `toml:"path"`
-		Dir       *string           `toml:"dir"`
-		WebRoot   *string           `toml:"webRoot"`
-		DataDir   *string           `toml:"dataDir"`
-		TmpDir    *string           `toml:"tmpDir"`
-		Env       map[string]string `toml:"env"`
-		Enabled   *bool             `toml:"enabled"`
-		Queue     *rawAppQueue      `toml:"queue"`
-		Processes *[]rawAppProcess  `toml:"processes"`
+		ID            *string           `toml:"id"`
+		Path          *string           `toml:"path"`
+		Dir           *string           `toml:"dir"`
+		WebRoot       *string           `toml:"webRoot"`
+		DataDir       *string           `toml:"dataDir"`
+		TmpDir        *string           `toml:"tmpDir"`
+		Env           map[string]string `toml:"env"`
+		Worker        *bool             `toml:"worker"`
+		WorkerEntries *[]string         `toml:"workerEntries"`
+		WorkerThreads any               `toml:"workerThreads"`
+		Enabled       *bool             `toml:"enabled"`
+		Queue         *rawAppQueue      `toml:"queue"`
+		Processes     *[]rawAppProcess  `toml:"processes"`
 	}
 	type rawConfig struct {
 		SchemaVersion *int              `toml:"schemaVersion"`
@@ -649,6 +739,13 @@ func decode(data []byte, config Config) (Config, error) {
 		if raw.Web.Threads != nil {
 			config.Web.Threads = *raw.Web.Threads
 		}
+		if raw.Web.MaxWaitTime != nil {
+			value, err := time.ParseDuration(*raw.Web.MaxWaitTime)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse web.maxWaitTime: %w", err)
+			}
+			config.Web.MaxWaitTime = value
+		}
 		if raw.Web.MaxHeaderBytes != nil {
 			config.Web.MaxHeaderBytes = *raw.Web.MaxHeaderBytes
 		}
@@ -694,6 +791,23 @@ func decode(data []byte, config Config) (Config, error) {
 			}
 			if item.Env != nil {
 				app.Env = item.Env
+			}
+			if item.Worker != nil {
+				app.Worker = *item.Worker
+			}
+			if item.WorkerEntries != nil {
+				app.WorkerEntries = append([]string(nil), (*item.WorkerEntries)...)
+			}
+			if item.WorkerThreads != nil {
+				entries := app.WorkerEntries
+				if len(entries) == 0 {
+					entries = []string{"index.php"}
+				}
+				allocation, err := decodeWorkerThreadAllocation(item.WorkerThreads, entries)
+				if err != nil {
+					return Config{}, fmt.Errorf("apps[%d].workerThreads: %w", index, err)
+				}
+				app.WorkerThreads = allocation
 			}
 			if item.Enabled != nil {
 				app.Enabled = *item.Enabled
@@ -1287,8 +1401,14 @@ func (c Config) Validate() error {
 	if c.Web.Threads < 2 || c.Web.Threads > 256 {
 		return fmt.Errorf("web.threads must be between 2 and 256")
 	}
+	if workerThreads := c.WorkerThreadCount(); workerThreads >= c.Web.Threads {
+		return fmt.Errorf("web.threads must be greater than the total application workerThreads (%d)", workerThreads)
+	}
 	if c.Web.ReadHeaderTimeout <= 0 || c.Web.IdleTimeout <= 0 || c.Runtime.DrainTimeout <= 0 {
 		return fmt.Errorf("timeouts must be greater than zero")
+	}
+	if c.Web.MaxWaitTime < 0 {
+		return fmt.Errorf("web.maxWaitTime must not be negative")
 	}
 	if c.Web.MaxHeaderBytes < 1024 || c.Web.MaxHeaderBytes > 1024*1024 {
 		return fmt.Errorf("web.maxHeaderBytes must be between 1024 and 1048576")
@@ -1455,6 +1575,24 @@ func (c Config) ActiveApps() []App {
 	return apps
 }
 
+// WorkerThreadCount returns the total number of FrankenPHP worker threads
+// required by enabled applications.
+func (c Config) WorkerThreadCount() int {
+	total := 0
+	for _, app := range c.ActiveApps() {
+		total += app.EffectiveWorkerThreads()
+	}
+	return total
+}
+
+// RuntimeMode returns the effective web execution mode.
+func (c Config) RuntimeMode() string {
+	if c.WorkerThreadCount() > 0 {
+		return "worker"
+	}
+	return "classic"
+}
+
 // NormalizePath returns the canonical URL prefix of an application: "/" or
 // "/segment" without a trailing slash.
 func NormalizePath(value string) (string, error) {
@@ -1486,6 +1624,11 @@ func (c Config) validateApps() error {
 	seenIDs := make(map[string]struct{}, len(c.Apps))
 	seenPaths := make(map[string]string, len(c.Apps))
 	prefixes := make([]string, 0, len(c.Apps))
+	supportedWorkerEntries := map[string]struct{}{
+		"index.php":  {},
+		"api.php":    {},
+		"bridge.php": {},
+	}
 	for index, app := range c.Apps {
 		where := fmt.Sprintf("apps[%d]", index)
 		if app.ID == "" {
@@ -1523,6 +1666,51 @@ func (c Config) validateApps() error {
 		}
 		if app.TmpDir == "" || !filepath.IsAbs(app.TmpDir) {
 			return fmt.Errorf("%s.tmpDir must be an absolute path", where)
+		}
+		if !app.Worker && len(app.WorkerThreads) != 0 {
+			return fmt.Errorf("%s.workerThreads requires worker = true", where)
+		}
+		if !app.Worker && len(app.WorkerEntries) != 0 {
+			return fmt.Errorf("%s.workerEntries requires worker = true", where)
+		}
+		seenWorkerEntries := make(map[string]struct{}, len(app.WorkerEntries))
+		for _, entry := range app.WorkerEntries {
+			if _, supported := supportedWorkerEntries[entry]; !supported {
+				return fmt.Errorf("%s.workerEntries contains unsupported entry %q", where, entry)
+			}
+			if _, duplicate := seenWorkerEntries[entry]; duplicate {
+				return fmt.Errorf("%s.workerEntries contains duplicate entry %q", where, entry)
+			}
+			seenWorkerEntries[entry] = struct{}{}
+		}
+		if app.Worker {
+			effectiveEntries := make(map[string]struct{})
+			for _, entry := range app.EffectiveWorkerFiles() {
+				effectiveEntries[entry] = struct{}{}
+			}
+			for entry, threads := range app.WorkerThreads {
+				if threads < 0 {
+					return fmt.Errorf("%s.workerThreads[%s] must not be negative", where, entry)
+				}
+				if _, supported := supportedWorkerEntries[entry]; !supported {
+					return fmt.Errorf("%s.workerThreads contains unsupported entry %q", where, entry)
+				}
+				if _, configured := effectiveEntries[entry]; !configured {
+					return fmt.Errorf("%s.workerThreads entry %q is not listed in workerEntries", where, entry)
+				}
+			}
+		}
+		if app.Enabled {
+			for _, entry := range app.EffectiveWorkerFiles() {
+				path := filepath.Join(app.DocumentRoot(), entry)
+				info, err := os.Stat(path)
+				if err != nil {
+					return fmt.Errorf("%s.workerEntries entry %q does not exist at %s", where, entry, path)
+				}
+				if !info.Mode().IsRegular() {
+					return fmt.Errorf("%s.workerEntries entry %q is not a regular file at %s", where, entry, path)
+				}
+			}
 		}
 		for name := range app.Env {
 			if name == "" || strings.ContainsAny(name, "=\x00") {

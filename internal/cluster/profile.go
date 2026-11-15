@@ -124,6 +124,7 @@ func BuildProfile(cfg config.Config, nodeID, instanceID, bootID, runtimeVersion 
 			},
 			map[string]any{
 				"drainTimeout":          cfg.Runtime.DrainTimeout.String(),
+				"maxWaitTime":           cfg.Web.MaxWaitTime.String(),
 				"readHeaderTimeout":     cfg.Web.ReadHeaderTimeout.String(),
 				"idleTimeout":           cfg.Web.IdleTimeout.String(),
 				"maxHeaderBytes":        cfg.Web.MaxHeaderBytes,

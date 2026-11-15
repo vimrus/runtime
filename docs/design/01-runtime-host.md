@@ -9,7 +9,7 @@
 | Runtime Host | 自研 Go 程序 `zentao-runtime` |
 | HTTP Server | Caddy Go Library |
 | PHP Runtime | FrankenPHP Go Library / Caddy Module |
-| PHP 模式 | Classic mode |
+| PHP 模式 | 应用级 worker mode（默认配置）/ Classic mode（兼容选项） |
 | 关联文档 | [FrankenPHP 集成方案](./02-frankenphp-integration.md) |
 | 构建设计 | [构建与发布设计](./07-build-and-release.md) |
 | 可观测性设计 | [DuckDB 与共享 Parquet 可观测性设计](./05-observability.md) |
@@ -123,7 +123,22 @@ php_request_startup
 
 因此“非 worker mode”不等于每个请求启动一个新 OS 进程，也不等于 PHP Runtime 完全没有常驻线程。
 
-### 5.2 进程角色
+### 5.2 Worker mode 边界
+
+应用设置 `worker = true` 后，Runtime 为该应用注册
+声明的 worker 入口，默认是 `<webRoot>/index.php`，也支持 `api.php` 和
+`bridge.php`。框架必须在每个请求中重新绑定 app、config、lang、Session、DAO、
+服务和渲染上下文，并清理进程级静态状态。`workerThreads` 按入口单独配置，总 worker
+数必须小于 `web.threads`。未显式启用的应用继续使用 Classic mode。
+
+PDO 连接池仅在线程内复用状态干净的连接。每次取回都做健康检查并恢复字符集、
+`sql_mode`、Schema 和 attributes；事务、会话变量、临时表、锁或运行时 attribute
+变更会导致连接丢弃。worker 请求间调用 `gc_collect_cycles()`。
+
+worker 线程绑定 app ID、应用根目录、Runtime webRoot、站点代号、数据目录和数据库身份；动态切换
+这些身份会失败并要求重启 worker。应用代码或扩展更新使用 `worker-restart`。
+
+### 5.3 进程角色
 
 | 角色 | Windows/Linux Full | Windows/Linux Runtime | Docker |
 |---|---|---|---|
@@ -161,7 +176,7 @@ Caddy/FrankenPHP 线程池。
 - 不重新实现 Caddy 路由器或 TLS 协议栈。
 - 不在 Go 中实现 MySQL 数据存储。
 - 不将禅道 PHP 业务逻辑迁入 Host。
-- 不启用 FrankenPHP worker mode。
+- 不在代码中隐式覆盖应用配置；发布配置显式声明 worker 入口和线程数。
 - 不通过公共 HTTP 接口暴露高权限管理操作。
 - 不在 Runtime 制品中携带应用代码；应用是外部制品，由 Host 按配置装载。
 - 不把常驻 PHP 进程变成持久化队列，也不依赖其进程内状态实现跨节点一致性。
@@ -352,9 +367,17 @@ Host 至少生成：
 
 ## 10. FrankenPHP 配置
 
-### 10.1 Classic only
+### 10.1 Worker 默认与 Classic 兼容
 
-Host 生成的 FrankenPHP app 配置禁止 worker 定义。配置校验发现 worker script、worker 数量或 worker route 时直接拒绝启动。
+Host 的示例配置和发布配置默认设置 `worker = true`，默认注册
+`index.php/api.php/bridge.php` 三个入口。`workerEntries` 为空时默认为
+`index.php`，未配置线程数的入口默认为 1。只允许这三个入口，且启用应用
+的每个入口必须是文档根目录下实际存在的普通文件。应用显式设置
+`worker = false` 时使用 Classic mode。
+
+`workerEntries`/`workerThreads` 不能脱离 `worker = true` 单独设置；所有启用
+应用的 worker 数之和必须严格小于 `web.threads`，否则配置校验失败。配置缺失
+worker 入口时必须校验失败，不能静默降级为 Classic。
 
 ### 10.2 线程参数
 
@@ -370,6 +393,11 @@ PHP ini overrides
 ```
 
 默认值应基于 CPU 和内存预算，而不是只按 CPU 数量无限扩张。每个 PHP thread 的实际内存需要通过禅道全版本压测测量。
+
+启用 worker 时，FrankenPHP 需要额外线程接收请求，因此
+`web.threads` 必须大于 worker 总数。例如
+`workerThreads = { "index.php" = 10, "api.php" = 3, "bridge.php" = 2 }`
+时总数为 15，至少配置 `web.threads = 16`，实际生产值应结合内存和并发压测确定。
 
 ### 10.3 PHP 启动验证
 
@@ -745,13 +773,13 @@ RuntimeRevision
 2. 同一进程不能并行加载两套 PHP ABI 或两份 `php.ini` module 配置。
 3. Caddy module 负责 FrankenPHP 生命周期时，Host 不直接调用 FrankenPHP Init/Shutdown。
 4. Caddy 热加载不等价于 PHP Runtime 热替换。
-5. Classic mode 仍使用常驻 ZTS thread pool，但不复用禅道请求状态。
+5. Classic mode 仍使用常驻 ZTS thread pool；默认 worker mode 只复用可安全重置的进程级资源，不复用禅道请求状态。
 6. Web、CLI 和 Scheduler 必须使用同一 PHP 版本与 ionCube Loader。
 7. Linux ionCube ABI shim 仍是 PHP 构建的一部分，与 Host Library 架构无冲突。
 8. 不共享 `.duckdb` 文件，不允许两个节点修改同一个 Parquet 文件。
 9. 可观测性故障只能降级指标/日志能力，不能阻止 Web、Scheduler 和队列继续运行。
-10. 常驻 PHP 进程使用独立 CLI 进程和本机 RPC，不改变 Classic mode，也不提供
-    持久化任务语义。
+10. 常驻 PHP 进程使用独立 CLI 进程和本机 RPC，不改变 Web 的 Classic/worker
+    选择，也不提供持久化任务语义。
 
 ## 23. 实施阶段
 
@@ -787,7 +815,7 @@ RuntimeRevision
 1. `zentao-runtime` 同时链接 Caddy 和 FrankenPHP Library。
 2. 不依赖上游 `frankenphp` CLI 作为主进程。
 3. Caddy 提供 HTTP/HTTPS、静态资源和 PHP route。
-4. FrankenPHP 使用 Classic mode，付费版 ionCube 代码正常运行。
+4. FrankenPHP 默认配置使用应用级 worker mode，可显式切回 Classic mode；两种模式下付费版 ionCube 代码均正常运行。
 5. Caddy reload 失败时旧配置继续服务。
 6. PHP Runtime 级变更被正确标记为需要进程重启。
 7. Windows/Linux/Docker 都能优雅处理停止信号。
@@ -806,12 +834,14 @@ RuntimeRevision
 6. 是否对外提供 Prometheus metrics，以及默认监听策略。
 7. Caddy JSON 高级配置的开放范围和兼容承诺。
 
-## 26. 实施状态（2026-08-19）
+## 26. 实施状态（2026-11-12）
 
 第 23 节实施阶段一至四已全部落地：
 
 - 自研 `cmd/zentao-runtime` 链接 Caddy 与 FrankenPHP Library，Classic
   mode、PATH_INFO、上传与异常响应验证通过。
+- 应用级 worker mode 已是默认配置，并支持 `workerEntries/workerThreads`；单 worker 连续请求、
+  登录 Session、4 worker 并发语言隔离已通过真实 FrankenPHP 冒烟。
 - 配置 Schema、Control Plane（Unix Socket/Named Pipe、鉴权与审计）、
   分层健康、结构化日志、升级事务与诊断 CLI 已实现。
 - Queue Engine、Scheduler、DuckDB/Parquet 可观测性与保留清理已接入 Host。

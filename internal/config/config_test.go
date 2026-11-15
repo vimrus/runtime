@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,22 @@ idleTimeout = "45s"`
 	if config.Web.Threads != 12 || config.Web.Listen != "127.0.0.1:8090" {
 		t.Fatalf("environment overrides were not applied: %#v", config.Web)
 	}
-	if config.Web.ReadHeaderTimeout.String() != "10s" || config.Runtime.DrainTimeout.String() != "15s" {
+	if config.Web.MaxWaitTime.String() != "10s" || config.Web.ReadHeaderTimeout.String() != "10s" || config.Runtime.DrainTimeout.String() != "15s" {
 		t.Fatalf("defaults or duration parsing failed: %#v", config)
+	}
+}
+
+func TestDecodeWebMaxWaitTime(t *testing.T) {
+	content := `schemaVersion = 1
+
+[web]
+maxWaitTime = "25s"`
+	loaded, err := decode([]byte(content), Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Web.MaxWaitTime.String() != "25s" {
+		t.Fatalf("web.maxWaitTime = %s, want 25s", loaded.Web.MaxWaitTime)
 	}
 }
 
@@ -46,16 +61,244 @@ func TestDefaultWebListenBindsAllIPv4Interfaces(t *testing.T) {
 }
 
 func TestLoadExampleTOML(t *testing.T) {
-	config, err := Load(filepath.Join("..", "..", "config", "runtime.example.toml"), nil)
+	source, err := os.ReadFile(filepath.Join("..", "..", "config", "runtime.example.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.SchemaVersion != SchemaVersion || config.Web.Threads != 4 || len(config.Queue.Workers) != 1 {
+
+	appRoot := filepath.Join(t.TempDir(), "app")
+	webRoot := filepath.Join(appRoot, "www")
+	if err := os.MkdirAll(webRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []string{"index.php", "api.php", "bridge.php"} {
+		if err := os.WriteFile(filepath.Join(webRoot, entry), []byte("<?php\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	source = []byte(strings.Replace(string(source), `dir = "apps/zentao"`, "dir = "+strconv.Quote(appRoot), 1))
+	path := filepath.Join(t.TempDir(), "runtime.example.toml")
+	if err := os.WriteFile(path, source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := Load(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SchemaVersion != SchemaVersion || config.Web.Threads != 16 || len(config.Queue.Workers) != 1 {
 		t.Fatalf("example configuration was not loaded: %#v", config)
+	}
+	if config.RuntimeMode() != "worker" || config.WorkerThreadCount() != 15 ||
+		!config.Apps[0].Worker || len(config.Apps[0].WorkerEntries) != 3 ||
+		config.Apps[0].WorkerThreads["index.php"] != 10 ||
+		config.Apps[0].WorkerThreads["api.php"] != 3 ||
+		config.Apps[0].WorkerThreads["bridge.php"] != 2 {
+		t.Fatalf("example configuration does not enable the documented worker mode: %#v", config.Apps)
 	}
 	if len(config.Apps) != 1 || !filepath.IsAbs(config.Apps[0].Dir) ||
 		!filepath.IsAbs(config.Runtime.LogPath) || !filepath.IsAbs(config.Observability.DatasetRoot) {
 		t.Fatalf("relative paths were not resolved: %#v", config)
+	}
+}
+
+func TestDecodeApplicationWorkerSettings(t *testing.T) {
+	content := `schemaVersion = 1
+
+[[apps]]
+id = "zentao"
+dir = "/srv/zentao"
+dataDir = "/srv/zentao-data"
+tmpDir = "/srv/zentao-tmp"
+worker = true
+workerEntries = ["index.php", "api.php", "bridge.php"]
+workerThreads = { "index.php" = 4, "api.php" = 3, "bridge.php" = 2 }`
+	loaded, err := decode([]byte(content), Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Apps) != 1 || !loaded.Apps[0].Worker ||
+		loaded.Apps[0].WorkerThreads["index.php"] != 4 ||
+		loaded.Apps[0].WorkerThreads["api.php"] != 3 ||
+		loaded.Apps[0].WorkerThreads["bridge.php"] != 2 ||
+		len(loaded.Apps[0].WorkerEntries) != 3 || loaded.WorkerThreadCount() != 9 {
+		t.Fatalf("worker settings were not decoded: %#v", loaded.Apps)
+	}
+}
+
+func TestDecodeScalarWorkerThreads(t *testing.T) {
+	content := `schemaVersion = 1
+
+[[apps]]
+id = "zentao"
+dir = "/srv/zentao"
+dataDir = "/srv/zentao-data"
+tmpDir = "/srv/zentao-tmp"
+worker = true
+workerEntries = ["index.php", "api.php"]
+workerThreads = 3`
+	loaded, err := decode([]byte(content), Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.WorkerThreadCount() != 6 || loaded.Apps[0].WorkerThreads["index.php"] != 3 || loaded.Apps[0].WorkerThreads["api.php"] != 3 {
+		t.Fatalf("scalar worker allocation was not normalized: %#v", loaded.Apps)
+	}
+}
+
+func TestWorkerRuntimeDefaultsToOneThreadPerApplication(t *testing.T) {
+	cfg := Default()
+	cfg.Apps = []App{{
+		ID:      "zentao",
+		Dir:     "/srv/zentao",
+		DataDir: "/srv/zentao-data",
+		TmpDir:  "/srv/zentao-tmp",
+		Worker:  true,
+		Enabled: true,
+	}}
+	if got := cfg.WorkerThreadCount(); got != 1 {
+		t.Fatalf("worker thread count = %d, want 1", got)
+	}
+	if got := cfg.RuntimeMode(); got != "worker" {
+		t.Fatalf("runtime mode = %q, want worker", got)
+	}
+}
+
+func TestWorkerThreadsRequireEnoughWebThreads(t *testing.T) {
+	cfg := Default()
+	cfg.Web.Threads = 4
+	appDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(appDir, "www"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "www", "index.php"), []byte("<?php\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Apps = []App{{
+		ID:            "zentao",
+		Path:          "/",
+		Dir:           appDir,
+		WebRoot:       "www",
+		DataDir:       "/srv/zentao-data",
+		TmpDir:        "/srv/zentao-tmp",
+		Worker:        true,
+		WorkerThreads: map[string]int{"index.php": 4},
+		Enabled:       true,
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "web.threads must be greater") {
+		t.Fatalf("expected worker capacity validation error, got %v", err)
+	}
+}
+
+func TestWorkerThreadsRequireWorkerMode(t *testing.T) {
+	cfg := Default()
+	appDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(appDir, "www"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "www", "index.php"), []byte("<?php\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Apps = []App{{
+		ID:            "zentao",
+		Path:          "/",
+		Dir:           appDir,
+		WebRoot:       "www",
+		DataDir:       "/srv/zentao-data",
+		TmpDir:        "/srv/zentao-tmp",
+		WorkerThreads: map[string]int{"index.php": 2},
+		Enabled:       true,
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "workerThreads requires worker = true") {
+		t.Fatalf("expected worker mode validation error, got %v", err)
+	}
+}
+
+func TestWorkerThreadsRequireListedEntry(t *testing.T) {
+	cfg := Default()
+	cfg.Apps = []App{{
+		ID:            "zentao",
+		Path:          "/",
+		Dir:           t.TempDir(),
+		WebRoot:       "www",
+		DataDir:       "/srv/zentao-data",
+		TmpDir:        "/srv/zentao-tmp",
+		Worker:        true,
+		WorkerEntries: []string{"index.php"},
+		WorkerThreads: map[string]int{"api.php": 3},
+		Enabled:       true,
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "is not listed in workerEntries") {
+		t.Fatalf("expected unlisted worker allocation error, got %v", err)
+	}
+}
+
+func TestWorkerEntriesRejectUnsupportedFiles(t *testing.T) {
+	cfg := Default()
+	cfg.Apps = []App{{
+		ID:            "zentao",
+		Path:          "/",
+		Dir:           "/srv/zentao",
+		WebRoot:       "www",
+		DataDir:       "/srv/zentao-data",
+		TmpDir:        "/srv/zentao-tmp",
+		Worker:        true,
+		WorkerEntries: []string{"worker.php"},
+		Enabled:       true,
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported entry") {
+		t.Fatalf("expected unsupported worker entry error, got %v", err)
+	}
+}
+
+func TestWorkerEntriesMustExist(t *testing.T) {
+	cfg := DefaultForRoot(t.TempDir())
+	appDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(appDir, "www"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Apps = []App{{
+		ID:            "zentao",
+		Path:          "/",
+		Dir:           appDir,
+		WebRoot:       "www",
+		DataDir:       "/srv/zentao-data",
+		TmpDir:        "/srv/zentao-tmp",
+		Worker:        true,
+		WorkerEntries: []string{"index.php", "bridge.php"},
+		Enabled:       true,
+	}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), `entry "index.php" does not exist`) {
+		t.Fatalf("expected missing worker entry error, got %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(appDir, "www", "index.php"), []byte("<?php\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "www", "bridge.php"), []byte("<?php\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("existing worker entries must be accepted: %v", err)
+	}
+}
+
+func TestDisabledWorkerEntriesMayBeAbsent(t *testing.T) {
+	cfg := DefaultForRoot(t.TempDir())
+	cfg.Apps = []App{{
+		ID:            "zentao",
+		Path:          "/",
+		Dir:           filepath.Join(t.TempDir(), "not-staged"),
+		WebRoot:       "www",
+		DataDir:       "/srv/zentao-data",
+		TmpDir:        "/srv/zentao-tmp",
+		Worker:        true,
+		WorkerEntries: []string{"index.php"},
+		Enabled:       false,
+	}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("disabled application must not require staged worker entries: %v", err)
 	}
 }
 

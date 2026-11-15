@@ -16,7 +16,7 @@
 
 - [系统总设计](./design/00-system-overview.md)：产品目标、边界、组件、数据流和部署模型。
 - [Runtime Host](./design/01-runtime-host.md)：Go Host、Caddy、FrankenPHP、生命周期和控制面。
-- [FrankenPHP 集成](./design/02-frankenphp-integration.md)：PHP 8.4 ZTS、Classic mode、ionCube 和平台构建基础。
+- [FrankenPHP 集成](./design/02-frankenphp-integration.md)：PHP 8.4 ZTS、应用级 worker 默认配置、Classic 兼容、ionCube 和平台构建基础。
 - [消息队列](./design/03-message-queue.md)：PHP DAO 持久化、Queue Bridge、Worker 和 At-least-once 语义。
 - [可观测性](./design/05-observability.md)：DuckDB、Parquet、日志、指标和降级策略。
 - [部署与高可用](./design/06-deployment-and-ha.md)：单机、Docker、双节点和外部负载均衡。

@@ -20,6 +20,22 @@ source "${repo_root}/scripts/build/common.sh"
 readonly app_input="$1"
 readonly work="$(mktemp -d)"
 readonly container="zentao-app-${RANDOM}-$$"
+readonly entries_raw="${ZENTAO_APP_ENTRIES:-index.php}"
+readonly allowed_statuses_raw="${ZENTAO_APP_ALLOWED_STATUSES:-200,301,302,405}"
+IFS=',' read -r -a entries <<<"${entries_raw}"
+IFS=',' read -r -a allowed_statuses <<<"${allowed_statuses_raw}"
+for entry in "${entries[@]}"; do
+    if [[ ! "${entry}" =~ ^(index|api|bridge)\.php$ ]]; then
+        echo "unsupported application entry: ${entry}" >&2
+        exit 2
+    fi
+done
+for status_code in "${allowed_statuses[@]}"; do
+    if [[ ! "${status_code}" =~ ^[1-5][0-9][0-9]$ ]]; then
+        echo "application allowed status is invalid: ${status_code}" >&2
+        exit 2
+    fi
+done
 cleanup() {
     docker rm --force "${container}" >/dev/null 2>&1 || true
     find "${work}" -mindepth 1 -delete 2>/dev/null || true
@@ -81,12 +97,23 @@ done
 docker exec "${container}" curl --fail --silent http://127.0.0.1:8080/_runtime/readiness \
     | jq --exit-status '.status == "ready"' >/dev/null
 docker exec "${container}" sh -c 'test -f /shared/app/zentaopms/www/install.php'
-# PHP executes through FrankenPHP Classic: index.php must return a PHP
-# response (ZenTao typically redirects to install/login before DB setup).
-code="$(docker exec "${container}" curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8080/)"
-if [[ "${code}" != "200" && "${code}" != "301" && "${code}" != "302" ]]; then
-    echo "unexpected index.php status code: ${code}" >&2
-    exit 1
-fi
+status_allowed() {
+    local candidate="$1" allowed
+    for allowed in "${allowed_statuses[@]}"; do
+        [[ "${candidate}" == "${allowed}" ]] && return 0
+    done
+    return 1
+}
+
+# PHP executes through FrankenPHP Classic for every configured application entry.
+for entry in "${entries[@]}"; do
+    path="/"
+    [[ "${entry}" != "index.php" ]] && path="/${entry}"
+    code="$(docker exec "${container}" curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8080${path}")"
+    if ! status_allowed "${code}"; then
+        echo "unexpected ${entry} status code at ${path}: ${code}" >&2
+        exit 1
+    fi
+done
 
 echo "ZenTao application smoke passed: ${web_root}"

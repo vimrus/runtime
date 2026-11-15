@@ -17,6 +17,9 @@ webRoot = "www"
 dataDir = "data/apps/zentao-ipd"
 tmpDir = "tmp-local/zentao-ipd"
 enabled = true
+worker = true
+workerEntries = ["index.php", "api.php", "bridge.php"]
+workerThreads = { "index.php" = 10, "api.php" = 3, "bridge.php" = 2 }
 env = { ZT_DB_NAME = "zentao_ipd" }
 ```
 
@@ -28,6 +31,9 @@ env = { ZT_DB_NAME = "zentao_ipd" }
 | `webRoot` | 相对 `dir` 的文档根，默认 `www` |
 | `dataDir` | 持久数据根，默认 `data/apps/<id>` |
 | `tmpDir` | 节点本地临时目录，默认 `tmp-local/<id>` |
+| `worker` | 是否启用 FrankenPHP worker mode；发布默认配置使用 `true`，`false` 表示 Classic mode |
+| `workerEntries` | worker 入口，支持 `index.php/api.php/bridge.php`；为空时默认 `index.php` |
+| `workerThreads` | 按入口配置线程数的表；未配置的入口按 1 处理，也兼容旧的整数写法作为所有入口的统一值 |
 | `env` | 应用显式环境变量 |
 | `queue` | 应用 Queue Bridge 配置，详见 [Queue Bridge 接入](queue-bridge.md) |
 
@@ -153,11 +159,23 @@ ZT_WEB_ROOT：ipd
 - 该应用前缀返回 503 占位响应。
 - `health --deep` 报告 `app-root:<id>` 失败。
 
-应用重新放回原目录后，仍需重启 Runtime。当前版本不实现应用热加载。
+应用重新放回原目录后，执行 `worker-restart`；Classic mode 或目录配置发生变化时
+按 `reload` 返回的 `restartRequired` 重启 Runtime。
 
 ## PHP 运行模式
 
-Runtime 固定使用 FrankenPHP Classic mode：
+Runtime 发布配置默认使用 FrankenPHP worker mode：
+
+```text
+worker 启动
+  -> 请求：创建/恢复请求上下文
+  -> 执行 PHP 入口
+  -> closeRequest()
+```
+
+应用可通过 `workerEntries` 启用 `index.php`、`api.php` 和 `bridge.php`
+worker，发布默认配置三个入口全部启用。声明入口必须存在于应用文档根目录，
+否则配置校验失败。应用设置 `worker = false` 时切回 Classic mode：
 
 ```text
 php_request_startup
@@ -165,7 +183,11 @@ php_request_startup
   -> php_request_shutdown
 ```
 
-PHP 主线程、ZTS 线程池、OPcache 和扩展会在 Runtime 进程内常驻，但业务对象和全局变量不能跨请求依赖。Session 数据应通过配置的 Session 后端持久化，而不是依赖 PHP 进程内留存。
+worker mode 复用清理后的进程级资源和干净 PDO 连接，
+但 app、config、lang、Session、DAO 和业务对象仍按请求重建。
+
+PHP 主线程、ZTS 线程池、OPcache 和扩展会在 Runtime 进程内常驻。Session 数据
+应通过配置的 Session 后端持久化，而不是依赖 PHP 进程内留存。
 
 应用必须兼容普通 PHP 请求模型。需要跨请求共享的数据应写入数据库、缓存或显式的共享存储。
 
@@ -179,7 +201,7 @@ CLI 任务使用：
 
 需要跨调用保留 PHP 进程内状态时，使用 Runtime 监管的
 [常驻 PHP 进程](resident-php-processes.md)。它使用独立 PHP CLI，不改变 Web
-的 FrankenPHP Classic mode。
+的 Web 执行模式。
 
 ## 应用深探针
 
@@ -212,9 +234,9 @@ GET <app-prefix>/health.php
 
 如果返回 `restartRequired: true`，说明 `[[apps]]` 变化不能热加载，需要重启 Runtime。
 
-如果直接在原目录替换 PHP 文件，即使 `runtime.toml` 没有变化，也必须完整重启
-Runtime。内置 PHP 使用 `opcache.validate_timestamps=0`，`reload` 只重载 Caddy
-配置，不会清除已加载的 PHP 字节码。
+如果直接在原目录替换 PHP 文件，即使 `runtime.toml` 没有变化，也必须执行
+`worker-restart`；Classic mode 必须完整重启 Runtime。内置 PHP 使用
+`opcache.validate_timestamps=0`，`reload` 本身不会清除已加载的 PHP 字节码。
 
 应用替换失败时，将 `dir` 指回原版本并重启。数据库迁移和业务回滚不属于 Runtime 能力，由应用发布流程负责。
 

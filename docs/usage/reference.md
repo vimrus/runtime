@@ -65,6 +65,7 @@ Process Bridge 不占用固定配置端口，Runtime 每次启动在 `127.0.0.1`
 | `ZT_APISESSION_PATH` | 所有应用 | API Session 目录 |
 | `ZT_BACKUP_PATH` | 所有应用 | 备份目录 |
 | `ZENTAO_LOG_DIR` | 所有应用 | 本地日志目录 |
+| `ZENTAO_WORKER_MAX_REQUESTS` | Worker 模式 | 每个 worker 处理多少个请求后退出并由 Runtime 重启；0 表示不限制 |
 | `ZENTAO_QUEUE_TOKEN` | 应用 Queue 启用 | Queue Bridge Token |
 | `ZENTAO_OBSERVABILITY_URL` | 可观测性启用 | 事件写入地址 |
 | `ZENTAO_OBSERVABILITY_TOKEN` | 可观测性启用 | 事件和查询 Token |
@@ -250,6 +251,7 @@ zentao start
 zentao status
 zentao stop
 zentao reload
+zentao worker-restart
 zentao health [--deep]
 zentao diagnose [--deep]
 zentao logs [query flags]
